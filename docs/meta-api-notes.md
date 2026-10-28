@@ -6,7 +6,7 @@ established.
 ## SAM 3.1 (`POST /responses`, model `sam-3.1`)
 
 - One noun phrase per request. Comma lists return zero matches (docs, `sam/segmenting`), so Lusong
-  sends `flood water`, `person` and `car` as three parallel requests. 3–4 s each from the
+  sends `flood water`, `person`, `car` and `tire` as four parallel requests (`tire` since slice 3b). 3–4 s each from the
   Philippines (measured, 2 photos).
 - Non-streaming works and returns the same text grammar as streaming (docs). `@meta-sam/parser`
   only advertises stream parsers, but `formats.segmentation.image().createParser()` takes

@@ -1,14 +1,49 @@
 # Lusong
 
-Send a photo of a flooded street and find out how deep the water is and whether a car can get through,
+Send a photo of a flooded street and find out how deep the water is and whether it is too deep for cars,
 on the MMDA flood gauge, with the waterline drawn on the photo as the evidence.
 
-Built with Meta's SAM 3.1 and Muse Spark through the Meta Model API.
+**Try it:** https://lusong-mocha.vercel.app (10 checks per address per day; when the day's budget runs out it
+shows sample results).
+
+Built with Meta's SAM 3.1 and Muse Spark 1.3 through the Meta Model API.
+
+## Why
+
+In Metro Manila the MMDA reports flood depth on a gauge people can picture: gutter, half-knee, half tire,
+knee, tire, waist and chest deep, each with whether light vehicles or any vehicle can pass. Drivers at the
+edge of a flooded street still have to guess which one they are looking at. Someone on the street can take a photo;
+Lusong reads the depth from the people and cars already standing in the water, and says whether that is too
+deep for cars on the same gauge.
 
 ## Built during the hackathon
 
 Lusong is an entry to the Meta Global AI Developer Hackathon (Oct 27 – Nov 4, 2026, Indie Developer
 track). Everything in this repository was written during the event; the commit history is the record.
+
+<!-- commits:start -->
+- 2026-10-28 09:12 PHT `aa3fcb8` chore: start Lusong for the Meta Global AI Developer Hackathon
+- 2026-10-28 10:19 PHT `4948dc5` wip(slice-1): photo in, MMDA passability and waterline overlay out
+- 2026-10-28 10:31 PHT `a415284` wip(slice-1): address review: reading integrity, full-file JPEG strip, deadline
+- 2026-10-28 10:36 PHT `581ce9e` wip(slice-1): address re-review: field-typed readings, JPEG structure, retry dates
+- 2026-10-28 11:19 PHT `ebf09c3` wip(slice-2): daily dollar budget, sample results, zoomed crops, acceptance gate
+- 2026-10-28 11:34 PHT `98ee4a4` wip(slice-2): address diff review: day-bound Upstash settle, billing-case tests, unique manifest, sample load outside the upload lock
+- 2026-10-28 11:48 PHT `f0db601` wip(slice-2): acceptance set (15 Commons photos) and gate run 1: FAILED, 5 false PATV draws on 3 knee-deep photos
+- 2026-10-28 11:56 PHT `0d4312b` wip(slice-2): never answer PATV, raise the Muse output cap to 8,000
+- 2026-10-28 11:59 PHT `50f774c` wip(slice-2): acceptance gate run 2 passed (no PATV possible, 6 of 16 deep draws under-read)
+- 2026-10-28 23:37 PHT `db60cca` chore: link to the personal Vercel project; never upload .env files
+- 2026-10-29 00:00 PHT `4d2ce2b` fix(budget): read the KV_REST_API_* names Vercel's Upstash integration sets
+- 2026-10-29 02:33 PHT `4e95d5a` fix: address the overnight diff review of 0d4312b^..4d2ce2b
+- 2026-10-29 02:37 PHT `90dd53e` fix: crowded photos that hit Muse Spark's output cap say they can't measure
+- 2026-10-29 02:42 PHT `079d166` fix: a missing only reading is "cannot measure", never "no flood found"
+- 2026-10-29 02:59 PHT `06e8e8a` wip(slice-3): a 45-photo labelled depth set and a paid runner with an error report
+- 2026-10-29 03:03 PHT `3e160c6` wip(slice-3): address the harness review; record SAM tyre masks for slice 3b
+- 2026-10-29 03:10 PHT `1d33d26` wip(slice-3): baseline error report on the depth set, 45 photos × 2 draws at 3e160c6
+- 2026-10-29 03:12 PHT `01443fa` wip(slice-3b): a depth estimate from each car's tyre, which can only deepen the verdict
+- 2026-10-29 03:16 PHT `6fa88e6` wip(slice-3b): address the tyre review: no estimate when nothing is hidden, limits on the page
+- 2026-10-29 03:23 PHT `ed206ea` wip(slice-3b): after-run on the depth set with the tyre estimate, 45 photos × 2 draws at 6fa88e6
+- 2026-10-29 03:26 PHT `6ac9f55` wip(slice-3b): acceptance gate passes with the tyre estimate, 15 photos × 2 draws at 6fa88e6
+<!-- commits:end -->
 
 ## How it works
 
@@ -33,6 +68,54 @@ track). Everything in this repository was written during the event; the commit h
    verdict.
 5. The page draws the water mask, boxes each person and car it measured, and marks the waterline
    where SAM's mask of that person or car meets the water.
+
+## Why SAM 3.1 and Muse Spark
+
+- **SAM 3.1 finds and outlines.** One text prompt per request (`flood water`, `person`, `car`, `tire`) gives
+  pixel masks with no training data of our own. The masks are the evidence: the waterline on the page is where a
+  person's or car's mask meets the water's.
+- **Muse Spark 1.3 reads.** Where the water sits on a body or a tyre is a visual judgement. A JSON schema holds it
+  to a fixed list of landmarks, so it never writes centimetres, a verdict or any text that reaches the page.
+- **Plain code decides.** Landmarks become depth intervals and the deepest reading sets the MMDA class, by
+  rules with unit tests (`lib/verdict.test.ts`, `lib/tyre.test.ts`). `docs/meta-api-notes.md` records what we measured about both models' API behaviour.
+
+## How accurate it is
+
+Two sets of openly licensed Wikimedia Commons photos run through the real pipeline. Their labels are the depth
+words in each photo's caption (knee-deep, waist-deep…), not measured depths, so they test whether Lusong picks
+the right landmark rather than whether its centimetres are right.
+
+**Depth set** (`test/fixtures/depth-set/`, 45 photos, 2 draws each = 90 draws). It measures and was never tuned on:
+nothing in the prompt or rules changed after seeing it. A draw is "too shallow" when the whole interval of the
+reading that decided the verdict sits below the caption's; touching or overlapping counts as a match.
+
+| Run (2026-10-29) | Draws | too shallow | matched | too deep | can't measure | errors |
+|---|---|---|---|---|---|---|
+| baseline, `3e160c6` | 90 | 33 | 40 | 4 | 13 | 0 |
+| with the tyre estimate, `6fa88e6` | 90 | 33 | 39 | 4 | 14 | 0 |
+
+Too shallow is the error that matters, and it is high: 33 of 90 draws in both runs. Most of those still came
+with a cautious answer: on photos whose caption says knee-deep or deeper (82 draws), Lusong answered "shallow"
+on 10 in each run, and even then the page says "not a go-ahead". The tyre estimate appeared on 2 of 90 draws
+and decided none, so it changed nothing here; 6 of the 45 photos changed outcome between the two runs from
+draw-to-draw variation alone. Reports: `test/depth-runs/`.
+
+**Acceptance gate** (`test/fixtures/acceptance/`, 15 photos × 2 draws = 30). It fails on "no flood found" for a
+knee-deep-or-deeper photo and on any measurement of a photo with no person or car in the water. On `6fa88e6`
+it passed with 0 failures; it listed 5 under-reads ("shallow" or "unsure" on a knee-deep photo, on 3 photos),
+against 6 on the previous run. The tyre estimate appeared on 4 of the 30 draws and decided none.
+
+
+## Limits
+
+- It measures only where a person or car stands in the water. The deepest part of the street may be
+  elsewhere, which is why it never says "passable to all vehicles".
+- The centimetres behind each landmark (knee 38–54 cm, and so on) are estimates for an adult, not
+  measurements; children are left out of the reading.
+- A scene with too many people and cars for Muse Spark's output cap gets "can't measure", not a guess.
+- The tyre estimate assumes a 58–70 cm car tyre, errs deep when the body hides the tyre's top, and can read
+  shallow on a wheel seen at an angle; it can only make a verdict deeper.
+- It is a guide, not a safety system. Don't drive into flood water you can't see the bottom of.
 
 ## Run it locally
 
