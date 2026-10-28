@@ -28,6 +28,8 @@ established.
   The same two calls used 4,030 and 4,843 output tokens, close to the 5,000 cap. In the first acceptance
   run an 11-object scene used all 5,000 and failed, so the cap is now 8,000 (measured, one failure in 28
   calls). Output ran at 156–264 tokens/s (median 222, 27 calls), so 8,000 tokens can take about 51 s.
+  In the second run the same scene used 6,129 and 7,999 of the 8,000 (2 draws; it finished both), so a
+  crowded scene can still run out at 8,000.
 - `response_format: { type: "json_schema" }` constrains decoding to the schema (docs), which lets the
   model choose from a fixed list of landmarks instead of inventing centimetres.
 - `web_search` exists only on the Responses and Messages APIs, not on Chat Completions (docs).
