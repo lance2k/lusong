@@ -128,6 +128,10 @@ function storeFromEnv(env: Record<string, string | undefined>): BudgetStore | nu
   if (env.UPSTASH_REDIS_REST_URL && env.UPSTASH_REDIS_REST_TOKEN) {
     return new UpstashBudgetStore(env.UPSTASH_REDIS_REST_URL, env.UPSTASH_REDIS_REST_TOKEN);
   }
+  /** The names Vercel's Upstash integration sets when a database is connected to the project. */
+  if (env.KV_REST_API_URL && env.KV_REST_API_TOKEN) {
+    return new UpstashBudgetStore(env.KV_REST_API_URL, env.KV_REST_API_TOKEN);
+  }
   return null;
 }
 

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   budgetFromEnv,
   createBudget,
@@ -172,6 +172,21 @@ describe("configuration fails closed", () => {
   it("an unreadable budget refuses checks", async () => {
     const env = { LUSONG_BUDGET_STORE: "memory", NODE_ENV: "development", DAILY_BUDGET_USD: "ten" };
     expect(await budgetFromEnv(env).admit(someone, NOON)).toEqual({ ok: false, reason: "unavailable" });
+  });
+
+  it("the KV_REST_API_* names that Vercel's Upstash integration sets configure the store", async () => {
+    const calls: { url: string; auth: string }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      calls.push({ url, auth: new Headers(init.headers).get("Authorization") ?? "" });
+      return Response.json({ result: "admitted" });
+    });
+    try {
+      const env = { NODE_ENV: "production", VERCEL: "1", KV_REST_API_URL: "https://kv.example", KV_REST_API_TOKEN: "kv-token" };
+      expect((await budgetFromEnv(env).admit(someone, NOON)).ok).toBe(true);
+      expect(calls).toEqual([{ url: "https://kv.example", auth: "Bearer kv-token" }]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("memory mode in local development admits", async () => {
