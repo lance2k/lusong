@@ -30,6 +30,10 @@ established.
   calls). Output ran at 156–264 tokens/s (median 222, 27 calls), so 8,000 tokens can take about 51 s.
   In the second run the same scene used 6,129 and 7,999 of the 8,000 (2 draws; it finished both), so a
   crowded scene can still run out at 8,000.
+- A reply cut off at the cap is HTTP 200 with `finish_reason: "length"`, `content: ""` and a full `usage`
+  block: `completion_tokens` equals the cap (measured, one draw, 2026-10-29: the Shah Alam scene at a
+  1,500 cap, 1,498 of them reasoning; recorded in `test/fixtures/muse/shah-alam-capped-1500.json`). Lusong
+  treats it as "too crowded to read" (`cannot_measure`), charges the reported usage and does not retry.
 - `response_format: { type: "json_schema" }` constrains decoding to the schema (docs), which lets the
   model choose from a fixed list of landmarks instead of inventing centimetres.
 - `web_search` exists only on the Responses and Messages APIs, not on Chat Completions (docs).

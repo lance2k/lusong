@@ -6,7 +6,7 @@ export default function Home() {
       <header className="space-y-2">
         <h1 className="text-3xl font-bold tracking-tight">Lusong</h1>
         <p className="text-lg leading-snug text-zinc-700 dark:text-zinc-300">
-          How deep is the flood, and can a car get through? Send a photo of the street. Lusong reads the water
+          How deep is the flood, and is it too deep for cars? Send a photo of the street. Lusong reads the water
           against the people and cars in it and answers on the MMDA flood gauge.
         </p>
       </header>

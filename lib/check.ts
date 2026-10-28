@@ -1,4 +1,4 @@
-import { segment, type Meter } from "./meta";
+import { OutputCapError, segment, type Meter } from "./meta";
 import { maskToPlacedPath, waterlineY, type PlacedPath } from "./overlay";
 import { readWaterlines, type LabelledObject } from "./readings";
 import { parseSamText, placeRaster, type Box, type SamObject } from "./sam";
@@ -102,15 +102,25 @@ export async function checkPhoto(
     ],
     image,
   );
-  const model = objects.length > 0 ? await readWaterlines(imageDataUrl, objects, image, deadline, meter) : null;
+  let tooCrowded = false;
+  const model =
+    objects.length > 0
+      ? await readWaterlines(imageDataUrl, objects, image, deadline, meter).catch((err: unknown) => {
+          if (!(err instanceof OutputCapError)) throw err;
+          tooCrowded = true;
+          return null;
+        })
+      : null;
   const read = Date.now();
 
-  const verdict = decideVerdict({
-    readings: model?.readings ?? [],
-    readingsComplete: (model?.problems.length ?? 0) === 0,
-    waterFound: water.length > 0,
-    modelSaysFlooded: model?.modelSaysFlooded ?? false,
-  });
+  const verdict: Verdict = tooCrowded
+    ? { kind: "cannot_measure", reason: "too_crowded" }
+    : decideVerdict({
+        readings: model?.readings ?? [],
+        readingsComplete: (model?.problems.length ?? 0) === 0,
+        waterFound: water.length > 0,
+        modelSaysFlooded: model?.modelSaysFlooded ?? false,
+      });
   const placedWater = water.map((w) => placeRaster(w.mask));
 
   return {

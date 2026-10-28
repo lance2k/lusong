@@ -218,6 +218,24 @@ describe("the check handler", () => {
     }
   });
 
+  it("a photo too crowded for Muse's output cap says it can't measure, and is charged what it cost", async () => {
+    const recorded = JSON.parse(readFileSync("test/fixtures/muse/shah-alam-capped-1500.json", "utf8"));
+    const capped = () => new Response(recorded.replies[0].body, { status: 200 });
+    const cost = 17_568; // 3 × 2,500 + 2,954 × 1.25 + 1,500 × 4.25 = 17,567.5 µ$, rounded up to a whole µ$
+    for (const [budget, secondStatus] of [
+      [R + cost, 200],
+      [R + cost - 1, 503],
+    ] as const) {
+      const calls = stubMeta({ sam: { person: [samFixture()] }, muse: [capped] });
+      const handler = handlerWith(budget);
+      const res = await handler(post("192.0.2.1"));
+      expect(res.status).toBe(200);
+      expect((await res.json()).verdict).toEqual({ kind: "cannot_measure", reason: "too_crowded" });
+      expect(calls.filter((url) => url.endsWith("/chat/completions"))).toHaveLength(1);
+      expect((await handler(post("192.0.2.2"))).status).toBe(secondStatus);
+    }
+  });
+
   it("a failed check keeps its reservation", async () => {
     stubMeta({ sam: { person: [serverError()] } });
     const handler = handlerWith(R + 7_500);

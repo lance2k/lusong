@@ -93,7 +93,8 @@ export type Verdict =
       decidedBy: { label: string; landmark: PersonLandmark | TyreLandmark; interval: Interval };
       readingsUsed: string[];
     }
-  | { kind: "cannot_measure" }
+  /** "too_crowded": Muse Spark ran out of output tokens reading every person and car in the photo. */
+  | { kind: "cannot_measure"; reason?: "too_crowded" }
   | { kind: "no_flood" };
 
 export function passabilityFor(upperCm: number): Passability {

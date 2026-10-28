@@ -1,0 +1,17 @@
+{
+ "recordedAt": "2026-10-28T18:35:23.815Z",
+ "cap": 1500,
+ "outcome": "threw Error: Meta API /chat/completions failed",
+ "usage": {
+  "samImages": 0,
+  "museInputTokens": 2954,
+  "museOutputTokens": 1500,
+  "complete": true
+ },
+ "replies": [
+  {
+   "status": 200,
+   "body": "{\"id\":\"chatcmpl-01a183cb-a4bc-77f9-9440-011348c78738\",\"choices\":[{\"finish_reason\":\"length\",\"index\":0,\"message\":{\"content\":null,\"refusal\":null,\"role\":\"assistant\"},\"logprobs\":null}],\"created\":1793212523,\"model\":\"muse-spark-1.3\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":1500,\"prompt_tokens\":2954,\"total_tokens\":4454,\"completion_tokens_details\":{\"reasoning_tokens\":1498},\"prompt_tokens_details\":{\"cached_tokens\":0}}}"
+  }
+ ]
+}

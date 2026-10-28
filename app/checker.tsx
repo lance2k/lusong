@@ -149,12 +149,17 @@ function VerdictCard({ result }: { result: PageResult }) {
             <p className="text-zinc-600 dark:text-zinc-400">Confidence: {CONFIDENCE_WORDS[v.confidence]}</p>
           </>
         )}
-        {v.kind === "cannot_measure" && (
-          <p>
-            Lusong measures against people and cars standing in the water, and it couldn&apos;t see a waterline on any
-            here. Try a photo with a person or car in the water.
-          </p>
-        )}
+        {v.kind === "cannot_measure" &&
+          (v.reason === "too_crowded" ? (
+            <p>
+              There are too many people and cars in this photo to read in one go. Try a photo with fewer of them.
+            </p>
+          ) : (
+            <p>
+              Lusong measures against people and cars standing in the water, and it couldn&apos;t see a waterline on
+              any here. Try a photo with a person or car in the water.
+            </p>
+          ))}
       </div>
     </section>
   );

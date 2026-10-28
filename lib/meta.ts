@@ -16,6 +16,17 @@ export class MetaApiError extends Error {
   }
 }
 
+/**
+ * Muse Spark stopped at max_completion_tokens before writing its answer (finish_reason "length"; the
+ * reasoning counts against the cap). Measured 2026-10-29 at a 1,500 cap: HTTP 200, empty content, usage
+ * present, so the meter has already charged it. Not retried: the same photo would run out again.
+ */
+export class OutputCapError extends MetaApiError {
+  constructor() {
+    super("/chat/completions", 0);
+  }
+}
+
 function countOf(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
 }
@@ -169,8 +180,7 @@ export async function chatJson(request: {
     request.meter,
   )) as ChatCompletion;
   const choice = body.choices?.[0];
-  if (!choice?.message?.content || choice.finish_reason === "length") {
-    throw new MetaApiError("/chat/completions", 0);
-  }
+  if (choice?.finish_reason === "length") throw new OutputCapError();
+  if (!choice?.message?.content) throw new MetaApiError("/chat/completions", 0);
   return JSON.parse(choice.message.content);
 }
