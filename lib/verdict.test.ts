@@ -127,6 +127,28 @@ describe("decideVerdict", () => {
     expect(v).toEqual({ kind: "cannot_measure" });
   });
 
+  it("a tyre estimate never lowers the class, never raises confidence and never turns 'no flood' into a measurement", () => {
+    const deep = [{ label: "C1", interval: { low: 46, high: 75 } }];
+    const severity = { shallow: 0, unsure: 1, NPLV: 2, NPATV: 3 } as const;
+    const rank = { low: 0, medium: 1, high: 2 } as const;
+    const cases = [
+      { readings: [person("P1", "half_knee"), person("P2", "half_knee"), person("P3", "ankle")], ...flooded },
+      { readings: [person("P1", "knee"), car("C1", "tyre_quarter")], ...flooded },
+      { readings: [person("P1", "knee")], ...flooded, readingsComplete: false },
+      { readings: [person("P1", "waist")], ...flooded, readingsComplete: false },
+      { readings: [car("C1", "not_visible")], waterFound: false, modelSaysFlooded: false, readingsComplete: true },
+    ];
+    for (const input of cases) {
+      const without = decideVerdict(input);
+      const withTyre = decideVerdict({ ...input, tyreEstimates: deep });
+      expect(withTyre.kind).toBe(without.kind);
+      if (without.kind !== "measured" || withTyre.kind !== "measured") continue;
+      expect(severity[withTyre.passability]).toBeGreaterThanOrEqual(severity[without.passability]);
+      expect(rank[withTyre.confidence]).toBeLessThanOrEqual(rank[without.confidence]);
+      expect(withTyre.rangeCm.low).toBe(without.rangeCm.low);
+    }
+  });
+
   it("says no flood only when SAM found no water and the model agrees", () => {
     expect(decideVerdict({ readings: [], readingsComplete: true, waterFound: false, modelSaysFlooded: false })).toEqual({ kind: "no_flood" });
     expect(decideVerdict({ readings: [], readingsComplete: true, waterFound: false, modelSaysFlooded: true })).toEqual({ kind: "cannot_measure" });

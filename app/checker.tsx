@@ -127,7 +127,7 @@ function VerdictCard({ result }: { result: PageResult }) {
             <p>
               Deepest reading: <b>{v.decidedBy.label}</b>,{" "}
               {v.decidedBy.landmark === "tyre_geometry"
-                ? "from the part of its tyre under water"
+                ? "estimated from the part of its tyre under water"
                 : `water ${LANDMARK_WORDS[v.decidedBy.landmark]}`}
               , about{" "}
               <b>{cm(v.decidedBy.interval)}</b>, {gaugeWords(v.decidedBy.interval)}.
@@ -325,7 +325,7 @@ function ReadingList({ objects }: { objects: PageObject[] }) {
               {o.kind === "person" ? "Person" : "Vehicle"}, {o.landmark ? LANDMARK_WORDS[o.landmark] : "no reading"}
               {o.interval && <b> · {cm(o.interval)}</b>}
               {!o.usable && o.landmark && o.landmark !== "not_visible" && " · not used"}
-              {o.tyreCm && <> · by its tyre&apos;s hidden part, {cm(o.tyreCm)}</>}
+              {o.tyreCm && <> · tyre estimate {cm(o.tyreCm)}</>}
             </span>
           </li>
         ))}
@@ -334,6 +334,13 @@ function ReadingList({ objects }: { objects: PageObject[] }) {
         Cyan lines mark where the segmentation found the water meeting a person or car. Readings with no line still
         count; the line is drawn only where the mask clearly meets the water.
       </p>
+      {objects.some((o) => o.tyreCm) && (
+        <p className="mt-2 text-sm text-zinc-500">
+          A tyre estimate assumes a car tyre 58–70 cm across and counts all of the tyre it can&apos;t see as under
+          water, so it reads deeper when the car&apos;s body hides the top of the tyre. It can make the verdict deeper,
+          never shallower.
+        </p>
+      )}
     </section>
   );
 }

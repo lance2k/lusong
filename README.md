@@ -26,8 +26,11 @@ track). Everything in this repository was written during the event; the commit h
    or car in the water, it says it can't measure.
    A second estimate comes from geometry: a wheel is round, so a tyre seen side-on at the
    waterline gives its diameter from its width, and the part hidden below the water gives the
-   depth, taking a car tyre as 58–70 cm across. It can only make the verdict deeper, never
-   shallower, and it never measures a photo on its own.
+   depth, taking a car tyre as 58–70 cm across (an assumption, not measured). It can only make
+   the verdict deeper, never shallower, and it never measures a photo on its own. It counts a
+   tyre top hidden by the wheel arch as water, so it errs deep, and a box shape cannot prove a
+   wheel is side-on, so on an angled wheel it can read shallow; that is why it never lowers a
+   verdict.
 5. The page draws the water mask, boxes each person and car it measured, and marks the waterline
    where SAM's mask of that person or car meets the water.
 

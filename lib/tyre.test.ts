@@ -4,8 +4,17 @@ import { outputTextOf, parseSamText, placeRaster } from "./sam";
 import { tyreDepthCm, tyreEstimates } from "./tyre";
 
 describe("tyreDepthCm: a round tyre, cut by the waterline", () => {
-  it("a whole tyre above the water is 0 cm deep", () => {
-    expect(tyreDepthCm({ width: 60, height: 60 })).toEqual({ low: 0, high: 0 });
+  it("a tyre with nothing hidden gives no estimate, since a wheel seen at an angle and half under water looks the same", () => {
+    // A 40 × 80 px ellipse, half under water, leaves a 40 × 40 box: as round as a dry side-on tyre.
+    expect(tyreDepthCm({ width: 40, height: 40 })).toBeNull();
+    expect(tyreDepthCm({ width: 60, height: 60 })).toBeNull();
+  });
+
+  it("a tyre whose top the car body hides reads deeper than the water, never shallower", () => {
+    // A 60 px tyre: 15 px under the wheel arch, 15 px under water, so the water covers 15 / 60 of it (14.5–17.5 cm).
+    const estimate = tyreDepthCm({ width: 60, height: 30 })!;
+    expect(estimate.low).toBeGreaterThanOrEqual(Math.floor((15 / 60) * 58));
+    expect(estimate).toEqual({ low: 29, high: 35 });
   });
 
   it("with more than half showing, the width is the diameter and the hidden part is the depth", () => {
