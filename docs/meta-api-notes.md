@@ -23,6 +23,10 @@ established.
 - It always reasons: 1,956 and 2,452 output tokens on the two probe photos, of which 1,740 and
   2,200 were reasoning; about $0.01 and 10 s each (measured, 2 calls). Reasoning counts against `max_completion_tokens`, so cap
   it with room to spare and treat `finish_reason: "length"` as a failure.
+- `usage.prompt_tokens` and `usage.completion_tokens` carry the counts (measured). A 1600×1600 photo with
+  12 listed objects took 3,881 input tokens; 1600×1200 took 2,968 (measured, one draw each, 2026-10-28).
+  The same two calls used 4,030 and 4,843 output tokens, close to the 5,000 cap, so a scene with many
+  objects may run out of room (inferred from those two draws).
 - `response_format: { type: "json_schema" }` constrains decoding to the schema (docs), which lets the
   model choose from a fixed list of landmarks instead of inventing centimetres.
 - `web_search` exists only on the Responses and Messages APIs, not on Chat Completions (docs).

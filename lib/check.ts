@@ -1,4 +1,4 @@
-import { segment } from "./meta";
+import { segment, type Meter } from "./meta";
 import { maskToPlacedPath, waterlineY, type PlacedPath } from "./overlay";
 import { readWaterlines, type LabelledObject } from "./readings";
 import { parseSamText, placeRaster, type Box, type SamObject } from "./sam";
@@ -63,11 +63,12 @@ function pickObjects(
 export async function checkPhoto(
   imageDataUrl: string,
   image: { width: number; height: number },
+  meter: Meter,
 ): Promise<CheckResult> {
   const started = Date.now();
   const deadline = started + PIPELINE_BUDGET_MS;
   const [waterText, personText, carText] = await Promise.all(
-    ["flood water", "person", "car"].map((phrase) => segment(imageDataUrl, phrase, deadline)),
+    ["flood water", "person", "car"].map((phrase) => segment(imageDataUrl, phrase, deadline, meter)),
   );
   const segmented = Date.now();
 
@@ -79,7 +80,7 @@ export async function checkPhoto(
     ],
     image,
   );
-  const model = objects.length > 0 ? await readWaterlines(imageDataUrl, objects, image, deadline) : null;
+  const model = objects.length > 0 ? await readWaterlines(imageDataUrl, objects, image, deadline, meter) : null;
   const read = Date.now();
 
   const verdict = decideVerdict({

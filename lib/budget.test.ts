@@ -1,0 +1,179 @@
+import { randomUUID } from "node:crypto";
+import { describe, expect, it } from "vitest";
+import {
+  budgetFromEnv,
+  createBudget,
+  MemoryBudgetStore,
+  MUSE_INPUT_TOKEN_BOUND,
+  UpstashBudgetStore,
+  RESERVE_MICROS,
+  type Admitted,
+  type BudgetStore,
+  type MeteredUsage,
+} from "./budget";
+
+const NOON = new Date("2026-11-05T04:00:00Z");
+const R = RESERVE_MICROS;
+/** Three SAM images and no Muse call: $0.0075. */
+const THREE_SAM_IMAGES: MeteredUsage = { samImages: 3, museInputTokens: 0, museOutputTokens: 0, complete: true };
+/** A settle that refunds the whole reservation, so a second refund shows up as room for one more check. */
+const NOTHING_SPENT: MeteredUsage = { samImages: 0, museInputTokens: 0, museOutputTokens: 0, complete: true };
+
+function admitted(a: Awaited<ReturnType<ReturnType<typeof createBudget>["admit"]>>): Admitted {
+  if (!a.ok) throw new Error(`expected an admission, got ${a.reason}`);
+  return a;
+}
+
+/** The real store runs against Redis behind serverless-redis-http (Upstash's REST API), when one is up. */
+const upstashUrl = process.env.LUSONG_TEST_UPSTASH_URL;
+const upstashToken = process.env.LUSONG_TEST_UPSTASH_TOKEN ?? "";
+const stores: [string, () => BudgetStore][] = [
+  ["memory store", () => new MemoryBudgetStore()],
+  ...(upstashUrl
+    ? [["Upstash store", () => new UpstashBudgetStore(upstashUrl, upstashToken, `lusong-test-${randomUUID()}`)] as [
+        string,
+        () => BudgetStore,
+      ]]
+    : []),
+];
+
+describe.each(stores)("%s", (_name, makeStore) => {
+  function budgetFor(reservations: number, ipLimit = 10) {
+    return budgetOfMicros(reservations * R + R - 1, ipLimit);
+  }
+
+  function budgetOfMicros(micros: number, ipLimit = 10) {
+    return createBudget({ store: makeStore(), budgetUsd: micros / 1e6, ipLimit });
+  }
+
+  it("concurrent admissions never exceed the budget", async () => {
+    const budget = budgetFor(10);
+    const admissions = await Promise.all(
+      Array.from({ length: 50 }, (_, i) => budget.admit(`203.0.113.${i}`, NOON)),
+    );
+    expect(admissions.filter((a) => a.ok)).toHaveLength(10);
+    expect(admissions.filter((a) => !a.ok).every((a) => !a.ok && a.reason === "budget")).toBe(true);
+  });
+
+  it("refuses the eleventh check from one IP without touching the budget", async () => {
+    const budget = budgetFor(12, 10);
+    for (let i = 0; i < 10; i++) expect((await budget.admit("198.51.100.7", NOON)).ok).toBe(true);
+    expect(await budget.admit("198.51.100.7", NOON)).toEqual({ ok: false, reason: "ip" });
+    expect((await budget.admit("198.51.100.8", NOON)).ok).toBe(true);
+    expect((await budget.admit("198.51.100.9", NOON)).ok).toBe(true);
+    expect(await budget.admit("198.51.100.10", NOON)).toEqual({ ok: false, reason: "budget" });
+  });
+
+  it("a budget refusal does not use up the IP's checks", async () => {
+    const budget = budgetOfMicros(R, 2);
+    const first = admitted(await budget.admit("192.0.2.1", NOON));
+    for (let i = 0; i < 3; i++) expect(await budget.admit("192.0.2.2", NOON)).toEqual({ ok: false, reason: "budget" });
+    await budget.settle(first, NOTHING_SPENT, true);
+    expect((await budget.admit("192.0.2.2", NOON)).ok).toBe(true);
+  });
+
+  it("a complete usage refunds the reservation down to the actual cost", async () => {
+    const budget = budgetOfMicros(R + 7_500);
+    await budget.settle(admitted(await budget.admit("192.0.2.1", NOON)), THREE_SAM_IMAGES, true);
+    expect((await budget.admit("192.0.2.2", NOON)).ok).toBe(true);
+    expect(await budget.admit("192.0.2.3", NOON)).toEqual({ ok: false, reason: "budget" });
+  });
+
+  it("an admitted request whose upstream fails keeps its reservation", async () => {
+    const budget = budgetOfMicros(R + 7_500);
+    await budget.settle(admitted(await budget.admit("192.0.2.1", NOON)), THREE_SAM_IMAGES, false);
+    expect(await budget.admit("192.0.2.2", NOON)).toEqual({ ok: false, reason: "budget" });
+  });
+
+  it("a usage record marked incomplete (a retried or unmetered call) refunds nothing", async () => {
+    const budget = budgetOfMicros(R + 7_500);
+    await budget.settle(admitted(await budget.admit("192.0.2.1", NOON)), { ...THREE_SAM_IMAGES, complete: false }, true);
+    expect(await budget.admit("192.0.2.2", NOON)).toEqual({ ok: false, reason: "budget" });
+  });
+
+  it("settling one reservation twice refunds once", async () => {
+    const budget = budgetOfMicros(R + 7_500);
+    const first = admitted(await budget.admit("192.0.2.1", NOON));
+    await budget.settle(first, NOTHING_SPENT, true);
+    await budget.settle(first, NOTHING_SPENT, true);
+    expect((await budget.admit("192.0.2.2", NOON)).ok).toBe(true);
+    expect(await budget.admit("192.0.2.3", NOON)).toEqual({ ok: false, reason: "budget" });
+  });
+
+  it("concurrent settles of one reservation refund once", async () => {
+    const budget = budgetOfMicros(R + 7_500);
+    const first = admitted(await budget.admit("192.0.2.1", NOON));
+    await Promise.all(Array.from({ length: 5 }, () => budget.settle(first, NOTHING_SPENT, true)));
+    expect((await budget.admit("192.0.2.2", NOON)).ok).toBe(true);
+    expect(await budget.admit("192.0.2.3", NOON)).toEqual({ ok: false, reason: "budget" });
+  });
+
+  it("an overrun is charged, not ignored", async () => {
+    const overrun: MeteredUsage = { samImages: 3, museInputTokens: 40_000, museOutputTokens: 5_000, complete: true };
+    const overrunMicros = 3 * 2_500 + 40_000 * 1.25 + 5_000 * 4.25;
+    expect(overrunMicros).toBeGreaterThan(R);
+    const budget = budgetOfMicros(overrunMicros + R - 1);
+    await budget.settle(admitted(await budget.admit("192.0.2.1", NOON)), overrun, true);
+    expect(await budget.admit("192.0.2.2", NOON)).toEqual({ ok: false, reason: "budget" });
+  });
+
+  it("a refund after midnight goes back to the day it was reserved on", async () => {
+    const budget = budgetOfMicros(R + 7_500);
+    const lateNight = new Date("2026-11-05T23:59:59Z");
+    await budget.settle(admitted(await budget.admit("192.0.2.1", lateNight)), THREE_SAM_IMAGES, true);
+    expect((await budget.admit("192.0.2.2", lateNight)).ok).toBe(true);
+    expect(await budget.admit("192.0.2.3", lateNight)).toEqual({ ok: false, reason: "budget" });
+    expect((await budget.admit("192.0.2.3", new Date("2026-11-06T00:00:01Z"))).ok).toBe(true);
+  });
+});
+
+describe("the reservation", () => {
+  it("covers every attempt at the input bound", async () => {
+    const everyAttempt: MeteredUsage = {
+      samImages: 6,
+      museInputTokens: 2 * MUSE_INPUT_TOKEN_BOUND,
+      museOutputTokens: 2 * 5_000,
+      complete: true,
+    };
+    const budget = createBudget({ store: new MemoryBudgetStore(), budgetUsd: (2 * R) / 1e6, ipLimit: 10 });
+    await budget.settle(admitted(await budget.admit("192.0.2.1", NOON)), everyAttempt, true);
+    expect((await budget.admit("192.0.2.2", NOON)).ok).toBe(true);
+  });
+});
+
+describe("configuration fails closed", () => {
+  const someone = "192.0.2.1";
+
+  it("memory mode in a deployment refuses checks", async () => {
+    for (const env of [
+      { LUSONG_BUDGET_STORE: "memory", VERCEL: "1" },
+      { LUSONG_BUDGET_STORE: "memory", NODE_ENV: "production" },
+    ]) {
+      expect(await budgetFromEnv(env).admit(someone, NOON)).toEqual({ ok: false, reason: "unavailable" });
+    }
+  });
+
+  it("no store configured refuses checks", async () => {
+    expect(await budgetFromEnv({ NODE_ENV: "test" }).admit(someone, NOON)).toEqual({ ok: false, reason: "unavailable" });
+  });
+
+  it("an unreadable budget refuses checks", async () => {
+    const env = { LUSONG_BUDGET_STORE: "memory", NODE_ENV: "development", DAILY_BUDGET_USD: "ten" };
+    expect(await budgetFromEnv(env).admit(someone, NOON)).toEqual({ ok: false, reason: "unavailable" });
+  });
+
+  it("memory mode in local development admits", async () => {
+    const env = { LUSONG_BUDGET_STORE: "memory", NODE_ENV: "development" };
+    expect((await budgetFromEnv(env).admit(someone, NOON)).ok).toBe(true);
+  });
+
+  it("a store that throws on admit refuses the check", async () => {
+    const broken: BudgetStore = {
+      admit: () => Promise.reject(new Error("ECONNREFUSED")),
+      settle: () => Promise.reject(new Error("ECONNREFUSED")),
+    };
+    const budget = createBudget({ store: broken, budgetUsd: 10, ipLimit: 10 });
+    expect(await budget.admit(someone, NOON)).toEqual({ ok: false, reason: "unavailable" });
+  });
+});
+

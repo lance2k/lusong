@@ -1,0 +1,18 @@
+[
+  {
+    "id": "quiapo-1",
+    "title": "Quiapo, people wading",
+    "photo": "/samples/quiapo-1.jpg",
+    "result": "/samples/quiapo-1.json",
+    "measuredOn": "28 October 2026",
+    "credit": "Michael Peronce, CC BY-SA 4.0, via Wikimedia Commons"
+  },
+  {
+    "id": "quiapo-2",
+    "title": "Quiapo, empty street",
+    "photo": "/samples/quiapo-2.jpg",
+    "result": "/samples/quiapo-2.json",
+    "measuredOn": "28 October 2026",
+    "credit": "Michael Peronce, CC BY-SA 4.0, via Wikimedia Commons"
+  }
+]

@@ -1,3 +1,4 @@
+import type { MeteredUsage } from "./budget";
 import { outputTextOf } from "./sam";
 
 const BASE_URL = "https://api.meta.ai/v1";
@@ -12,6 +13,43 @@ export class MetaApiError extends Error {
     readonly status: number,
   ) {
     super(`Meta API ${endpoint} failed${status ? ` with HTTP ${status}` : ""}`);
+  }
+}
+
+function countOf(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+/** Adds up what one check's Meta calls report using, attempt by attempt, for the spending budget. */
+export class Meter {
+  private samImages = 0;
+  private museInputTokens = 0;
+  private museOutputTokens = 0;
+  private complete = true;
+
+  /** A failed attempt may still have been billed, and it is the only way a call gets retried. */
+  failedAttempt(): void {
+    this.complete = false;
+  }
+
+  reply(endpoint: string, body: unknown): void {
+    const usage = (body as { usage?: Record<string, unknown> } | null)?.usage;
+    if (endpoint === "/responses") {
+      const images = countOf(usage?.images_processed);
+      if (images === null) this.complete = false;
+      else this.samImages += images;
+      return;
+    }
+    const input = countOf(usage?.prompt_tokens);
+    const output = countOf(usage?.completion_tokens);
+    if (input === null || output === null) this.complete = false;
+    this.museInputTokens += input ?? 0;
+    this.museOutputTokens += output ?? 0;
+  }
+
+  usage(): MeteredUsage {
+    const { samImages, museInputTokens, museOutputTokens, complete } = this;
+    return { samImages, museInputTokens, museOutputTokens, complete };
   }
 }
 
@@ -35,7 +73,13 @@ function retryWaitMs(res: Response): number {
  * wait must fit before `deadline` (epoch ms); a Retry-After that does not fit fails the call rather
  * than retrying early. A timeout is not retried.
  */
-async function postJson(endpoint: string, body: unknown, attemptTimeoutMs: number, deadline: number): Promise<unknown> {
+async function postJson(
+  endpoint: string,
+  body: unknown,
+  attemptTimeoutMs: number,
+  deadline: number,
+  meter: Meter,
+): Promise<unknown> {
   for (let attempt = 1; ; attempt++) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) throw new MetaApiError(endpoint, 0);
@@ -48,11 +92,20 @@ async function postJson(endpoint: string, body: unknown, attemptTimeoutMs: numbe
         signal: AbortSignal.timeout(Math.min(attemptTimeoutMs, remaining)),
       });
     } catch (err) {
+      meter.failedAttempt();
       const timedOut = err instanceof DOMException && err.name === "TimeoutError";
       if (attempt === 1 && !timedOut && deadline - Date.now() > MIN_ATTEMPT_MS) continue;
       throw new MetaApiError(endpoint, 0);
     }
-    if (res.ok) return res.json();
+    if (res.ok) {
+      const reply = await res.json().catch(() => {
+        meter.failedAttempt();
+        throw new MetaApiError(endpoint, res.status);
+      });
+      meter.reply(endpoint, reply);
+      return reply;
+    }
+    meter.failedAttempt();
     const wait = retryWaitMs(res);
     if (attempt === 1 && (res.status === 429 || res.status >= 500) && deadline - Date.now() - wait > MIN_ATTEMPT_MS) {
       await new Promise((resolve) => setTimeout(resolve, wait));
@@ -63,7 +116,7 @@ async function postJson(endpoint: string, body: unknown, attemptTimeoutMs: numbe
 }
 
 /** One SAM 3.1 concept prompt on one image; returns the raw segmentation text. */
-export async function segment(imageDataUrl: string, phrase: string, deadline: number): Promise<string> {
+export async function segment(imageDataUrl: string, phrase: string, deadline: number, meter: Meter): Promise<string> {
   const body = await postJson(
     "/responses",
     {
@@ -81,6 +134,7 @@ export async function segment(imageDataUrl: string, phrase: string, deadline: nu
     },
     20_000,
     deadline,
+    meter,
   );
   return outputTextOf(body as Parameters<typeof outputTextOf>[0]);
 }
@@ -96,6 +150,7 @@ export async function chatJson(request: {
   schema: object;
   maxCompletionTokens: number;
   deadline: number;
+  meter: Meter;
 }): Promise<unknown> {
   const body = (await postJson(
     "/chat/completions",
@@ -110,6 +165,7 @@ export async function chatJson(request: {
     },
     45_000,
     request.deadline,
+    request.meter,
   )) as ChatCompletion;
   const choice = body.choices?.[0];
   if (!choice?.message?.content || choice.finish_reason === "length") {

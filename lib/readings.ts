@@ -1,4 +1,4 @@
-import { chatJson } from "./meta";
+import { chatJson, type Meter } from "./meta";
 import type { Box } from "./sam";
 import {
   isUsable,
@@ -173,6 +173,7 @@ export async function readWaterlines(
   objects: readonly LabelledObject[],
   image: { width: number; height: number },
   deadline: number,
+  meter: Meter,
 ): Promise<ModelReadings> {
   const raw = (await chatJson({
     messages: [
@@ -188,6 +189,7 @@ export async function readWaterlines(
     schema: READINGS_SCHEMA,
     maxCompletionTokens: 5000,
     deadline,
+    meter,
   })) as Partial<RawReadings> | null;
 
   return {

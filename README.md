@@ -32,8 +32,40 @@ Needs Node 22.9+ and pnpm, and a Meta Model API key.
 
 ```sh
 pnpm install
-echo 'MODEL_API_KEY=…' > .env.local
+printf 'MODEL_API_KEY=…\nLUSONG_BUDGET_STORE=memory\n' > .env.local
 pnpm dev
 ```
 
 `pnpm test` runs the unit tests against saved SAM responses; they make no API calls.
+
+### Spending limits
+
+Every check reserves its worst-case cost ($0.072: six SAM images and two Muse Spark attempts at the
+measured input bound and the 5,000-token output cap) against a daily dollar budget before any paid
+call, then settles to what Meta's usage blocks report. A failed or retried call keeps the whole
+reservation. When the budget or an address's daily checks run out, the page shows sample results.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `DAILY_BUDGET_USD` | `10` | Spend allowed per UTC day (resets 8:00 a.m. in Manila). |
+| `PER_IP_DAILY` | `10` | Checks per client address per UTC day. |
+| `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | none | The shared ledger. Without them every check is refused. |
+| `LUSONG_BUDGET_STORE=memory` | unset | An in-process ledger for local development. Refused when `VERCEL` is set or `NODE_ENV=production`. |
+
+The ledger's Lua scripts run against real Redis behind
+[serverless-redis-http](https://github.com/hiett/serverless-redis-http), which speaks Upstash's REST API:
+
+```sh
+docker run -d --rm --name lusong-test-redis redis:7.4-alpine
+docker run -d --rm --name lusong-test-srh -p 127.0.0.1:8079:80 -e SRH_MODE=env -e SRH_TOKEN=local-test-token \
+  -e SRH_CONNECTION_STRING="redis://$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' lusong-test-redis):6379" \
+  hiett/serverless-redis-http:latest
+LUSONG_TEST_UPSTASH_URL=http://127.0.0.1:8079 LUSONG_TEST_UPSTASH_TOKEN=local-test-token pnpm test lib/budget.test.ts
+```
+
+### Acceptance set
+
+`LUSONG_LIVE=1 pnpm test test/acceptance.test.ts` runs every photo in `test/fixtures/acceptance/` twice
+through the real pipeline (about $1 a run) and writes the results to `test/acceptance-runs/`. It fails on
+any PATV for a photo whose caption says knee-deep or deeper, and on any measurement of a photo with no
+person or car in it. It screens for false PATV; it does not measure accuracy.

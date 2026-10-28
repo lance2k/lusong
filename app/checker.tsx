@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { RefusalReason } from "@/lib/budget";
 import type { CheckResult, CheckedObject } from "@/lib/check";
+import { cropBox, type ViewBox } from "@/lib/crop";
 import { gaugeRowsFor, type Interval, type Landmark, type Verdict } from "@/lib/verdict";
 
 const MAX_SIDE = 1600;
@@ -24,12 +26,34 @@ const LANDMARK_WORDS: Record<Landmark, string> = {
   not_visible: "waterline not visible",
 };
 
+/** A result measured earlier on a credited photo, shown when the page can't measure the visitor's own. */
+interface Sample {
+  id: string;
+  title: string;
+  photo: string;
+  result: string;
+  measuredOn: string;
+  credit: string;
+}
+
+type LoadedSample = { sample: Sample; result: CheckResult };
+
+const REFUSAL_REASONS: readonly RefusalReason[] = ["budget", "ip", "unavailable"];
+
 type State =
   | { step: "idle" }
   | { step: "preparing" }
   | { step: "measuring"; previewUrl: string; startedAt: number }
   | { step: "done"; previewUrl: string; result: CheckResult }
+  | { step: "refused"; message: string; samples: LoadedSample[] | null; shown: number }
   | { step: "failed"; previewUrl: string | null; message: string };
+
+async function loadSamples(): Promise<LoadedSample[]> {
+  const samples = (await (await fetch("/samples/index.json")).json()) as Sample[];
+  return Promise.all(
+    samples.map(async (sample) => ({ sample, result: (await (await fetch(sample.result)).json()) as CheckResult })),
+  );
+}
 
 /** Re-encoding through a canvas shrinks the upload and drops EXIF, GPS included. */
 async function shrinkToJpeg(file: File): Promise<Blob> {
@@ -128,45 +152,53 @@ function VerdictCard({ result }: { result: CheckResult }) {
   );
 }
 
-function Overlay({ result, previewUrl }: { result: CheckResult; previewUrl: string }) {
+/** The photo drawn inside the SVG, so a zoomed crop is the same drawing with a smaller viewBox. */
+function Scene({ result, imageUrl, viewBox, label }: { result: CheckResult; imageUrl: string; viewBox?: ViewBox; label: string }) {
+  const { width, height } = result.image;
+  const view = viewBox ?? { x: 0, y: 0, width, height };
+  return (
+    <svg viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`} role="img" aria-label={label} className="block h-auto w-full">
+      <image href={imageUrl} x={0} y={0} width={width} height={height} />
+      {result.water.map((w, i) => (
+        <path key={i} d={w.d} transform={w.transform} fill="rgb(56 189 248 / 0.35)" fillRule="evenodd" />
+      ))}
+      {result.objects.map((o) => (
+        <g key={o.label}>
+          <rect
+            x={o.box.left}
+            y={o.box.top}
+            width={o.box.right - o.box.left}
+            height={o.box.bottom - o.box.top}
+            fill="none"
+            stroke={o.usable ? "#facc15" : "#ffffff"}
+            strokeOpacity={o.usable ? 1 : 0.6}
+            strokeDasharray={o.usable ? undefined : "4 4"}
+            strokeWidth={2}
+            vectorEffect="non-scaling-stroke"
+          />
+          {o.usable && o.waterlineY !== null && (
+            <line
+              x1={o.box.left - 6}
+              x2={o.box.right + 6}
+              y1={o.waterlineY}
+              y2={o.waterlineY}
+              stroke="#22d3ee"
+              strokeWidth={3}
+              vectorEffect="non-scaling-stroke"
+            />
+          )}
+        </g>
+      ))}
+    </svg>
+  );
+}
+
+function Overlay({ result, imageUrl, label }: { result: CheckResult; imageUrl: string; label: string }) {
   const { width, height } = result.image;
   const pct = (value: number, of: number) => `${(value / of) * 100}%`;
   return (
     <div className="relative overflow-hidden rounded-2xl">
-      {/* eslint-disable-next-line @next/next/no-img-element -- a local blob URL, nothing to optimise */}
-      <img src={previewUrl} alt="Your photo with the water and the measured people and cars marked" className="block w-full" />
-      <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" className="absolute inset-0 h-full w-full">
-        {result.water.map((w, i) => (
-          <path key={i} d={w.d} transform={w.transform} fill="rgb(56 189 248 / 0.35)" fillRule="evenodd" />
-        ))}
-        {result.objects.map((o) => (
-          <g key={o.label}>
-            <rect
-              x={o.box.left}
-              y={o.box.top}
-              width={o.box.right - o.box.left}
-              height={o.box.bottom - o.box.top}
-              fill="none"
-              stroke={o.usable ? "#facc15" : "#ffffff"}
-              strokeOpacity={o.usable ? 1 : 0.6}
-              strokeDasharray={o.usable ? undefined : "4 4"}
-              strokeWidth={2}
-              vectorEffect="non-scaling-stroke"
-            />
-            {o.usable && o.waterlineY !== null && (
-              <line
-                x1={o.box.left - 6}
-                x2={o.box.right + 6}
-                y1={o.waterlineY}
-                y2={o.waterlineY}
-                stroke="#22d3ee"
-                strokeWidth={3}
-                vectorEffect="non-scaling-stroke"
-              />
-            )}
-          </g>
-        ))}
-      </svg>
+      <Scene result={result} imageUrl={imageUrl} label={label} />
       {result.objects.map((o) => (
         <span
           key={o.label}
@@ -179,6 +211,84 @@ function Overlay({ result, previewUrl }: { result: CheckResult; previewUrl: stri
         </span>
       ))}
     </div>
+  );
+}
+
+/** At phone width the people are a few pixels tall, so each reading gets a zoomed view of its own. */
+function Crops({ result, imageUrl }: { result: CheckResult; imageUrl: string }) {
+  const read = result.objects
+    .filter((o) => o.landmark && o.landmark !== "not_visible")
+    .sort((a, b) => Number(b.usable) - Number(a.usable));
+  if (read.length === 0) return null;
+  return (
+    <section>
+      <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-500">Up close</h2>
+      <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        {read.map((o) => (
+          <li key={o.label} className="overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800">
+            <Scene result={result} imageUrl={imageUrl} viewBox={cropBox(o.box, result.image)} label={`${o.label} up close`} />
+            <p className="px-2 py-1.5 text-[13px] leading-snug">
+              <b>{o.label}</b> {LANDMARK_WORDS[o.landmark!]}
+              {o.interval && <> · {cm(o.interval)}</>}
+              {!o.usable && " · not used"}
+            </p>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function ResultView({ result, imageUrl, photoLabel }: { result: CheckResult; imageUrl: string; photoLabel: string }) {
+  return (
+    <>
+      <VerdictCard result={result} />
+      <Overlay result={result} imageUrl={imageUrl} label={photoLabel} />
+      <Crops result={result} imageUrl={imageUrl} />
+      <ReadingList objects={result.objects} />
+    </>
+  );
+}
+
+function Refused({ state, onShow }: { state: Extract<State, { step: "refused" }>; onShow: (index: number) => void }) {
+  const current = state.samples?.[state.shown];
+  return (
+    <>
+      <div className="rounded-2xl border border-amber-300 bg-amber-50 px-5 py-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
+        <p className="font-semibold">{state.message}</p>
+        <p className="mt-1 text-[15px]">
+          Your photo was not measured.
+          {current && " Below is a sample photo Lusong measured earlier, so you can see what a result looks like."}
+        </p>
+      </div>
+      {state.samples && state.samples.length > 1 && (
+        <div className="flex gap-2">
+          {state.samples.map(({ sample }, i) => (
+            <button
+              key={sample.id}
+              type="button"
+              aria-pressed={i === state.shown}
+              onClick={() => onShow(i)}
+              className="rounded-full border border-zinc-300 px-3 py-1.5 text-sm aria-pressed:bg-zinc-900 aria-pressed:text-white dark:border-zinc-700 dark:aria-pressed:bg-zinc-100 dark:aria-pressed:text-zinc-900"
+            >
+              {sample.title}
+            </button>
+          ))}
+        </div>
+      )}
+      {current && (
+        <>
+          <p className="rounded-xl bg-zinc-900 px-4 py-2 text-sm text-white dark:bg-zinc-100 dark:text-zinc-900">
+            Sample photo, not yours · measured {current.sample.measuredOn} · Photo: {current.sample.credit}
+          </p>
+          <ResultView
+            result={current.result}
+            imageUrl={current.sample.photo}
+            photoLabel={`Sample photo: ${current.sample.title}, with the water and the measured people and cars marked`}
+          />
+        </>
+      )}
+    </>
   );
 }
 
@@ -263,6 +373,15 @@ export default function Checker() {
       try {
         const res = await fetch("/api/check", { method: "POST", body: form });
         const body = await res.json();
+        if (!res.ok && REFUSAL_REASONS.includes(body.reason)) {
+          const message = body.error ?? "Lusong can't take new checks right now.";
+          setState({ step: "refused", message, samples: null, shown: 0 });
+          const samples = await loadSamples().catch(() => null);
+          if (!disposed.current && samples) {
+            setState((s) => (s.step === "refused" && s.message === message ? { ...s, samples } : s));
+          }
+          return;
+        }
         if (!res.ok) throw new Error(body.error ?? "Something went wrong.");
         setState({ step: "done", previewUrl, result: body as CheckResult });
       } catch (err) {
@@ -307,11 +426,15 @@ export default function Checker() {
       )}
 
       {state.step === "done" && (
-        <>
-          <VerdictCard result={state.result} />
-          <Overlay result={state.result} previewUrl={state.previewUrl} />
-          <ReadingList objects={state.result.objects} />
-        </>
+        <ResultView
+          result={state.result}
+          imageUrl={state.previewUrl}
+          photoLabel="Your photo with the water and the measured people and cars marked"
+        />
+      )}
+
+      {state.step === "refused" && (
+        <Refused state={state} onShow={(shown) => setState((s) => (s.step === "refused" ? { ...s, shown } : s))} />
       )}
 
       {state.step === "failed" && (
