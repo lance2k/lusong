@@ -1,0 +1,19 @@
+{
+ "recordedAt": "2026-10-28T19:01:22.697Z",
+ "counts": {
+  "shah-alam-2021__flood_water": 1,
+  "shah-alam-2021__car": 12,
+  "shah-alam-2021__tire": 8,
+  "shah-alam-2021__wheel": 8,
+  "manila-2012-raincoats__flood_water": 1,
+  "manila-2012-raincoats__car": 2,
+  "manila-2012-raincoats__tire": 1,
+  "manila-2012-raincoats__wheel": 1
+ },
+ "usage": {
+  "samImages": 8,
+  "museInputTokens": 0,
+  "museOutputTokens": 0,
+  "complete": true
+ }
+}

@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Verdict } from "../lib/verdict";
-import { depthReport, judgeDepthDraw, type DepthPhoto } from "./depth-report";
+import { depthManifestProblems, depthReport, judgeDepthDraw, type DepthPhoto } from "./depth-report";
 
 const photo = (file: string, captionDepth: DepthPhoto["captionDepth"], scene: DepthPhoto["scene"] = "flood"): DepthPhoto => ({
   file,
@@ -39,6 +39,13 @@ describe("judgeDepthDraw: the deciding reading against the caption's depth", () 
     expect(judgeDepthDraw(photo("a.jpg", "knee"), deciding(84, 112, "NPATV"))).toBe("too_deep");
   });
 
+  it("a reading that only touches the caption's interval at an end still matches", () => {
+    expect(judgeDepthDraw(photo("a.jpg", "knee"), deciding(30, 38))).toBe("matched");
+    expect(judgeDepthDraw(photo("a.jpg", "knee"), deciding(54, 60))).toBe("matched");
+    expect(judgeDepthDraw(photo("a.jpg", "knee"), deciding(30, 37))).toBe("too_shallow");
+    expect(judgeDepthDraw(photo("a.jpg", "knee"), deciding(55, 60))).toBe("too_deep");
+  });
+
   it("'can't measure', including too crowded, and 'no flood' are their own outcomes", () => {
     expect(judgeDepthDraw(photo("a.jpg", "waist"), { kind: "cannot_measure" })).toBe("cannot_measure");
     expect(judgeDepthDraw(photo("a.jpg", "waist"), { kind: "cannot_measure", reason: "too_crowded" })).toBe("cannot_measure");
@@ -65,10 +72,30 @@ describe("the committed depth set", () => {
     expect(jpgs.sort()).toEqual(photos.map((p) => p.file).sort());
   });
 
+  it("passes the manifest check the paid runner makes first", () => {
+    expect(depthManifestProblems(photos)).toEqual([]);
+  });
+
   it("shares no photo with the acceptance set and lists none twice", () => {
     const sources = photos.map((p) => p.source);
     expect(new Set(sources).size).toBe(sources.length);
     for (const a of acceptance) expect(sources).not.toContain(a.source);
+  });
+});
+
+describe("depthManifestProblems", () => {
+  it("rejects a depth word or a scene the report cannot place, and a photo listed twice", () => {
+    const bad = [
+      { ...photo("a.jpg", "knee"), captionDepth: "kneee" as DepthPhoto["captionDepth"] },
+      { ...photo("b.jpg", "knee"), scene: "river" as DepthPhoto["scene"] },
+      photo("c.jpg", "waist"),
+      photo("c.jpg", "waist"),
+    ];
+    expect(depthManifestProblems(bad)).toEqual([
+      "a.jpg: caption depth kneee is not one the report knows",
+      "b.jpg: scene river is neither flood nor wading",
+      "c.jpg: listed twice",
+    ]);
   });
 });
 
@@ -87,5 +114,18 @@ describe("depthReport", () => {
     expect(report.rows).toHaveLength(4);
     expect(report.rows[0]).toMatchObject({ file: "k.jpg", captionDepth: "knee", captionCm: { low: 38, high: 54 }, outcome: "too_shallow" });
     expect(report.markdown).toContain("| k.jpg | 1 | knee (38–54 cm) | 5–10 cm, shallow | too shallow |");
+  });
+
+  it("tallies every outcome by caption depth as well", () => {
+    const photos = [photo("k.jpg", "knee"), photo("c.jpg", "chest")];
+    const report = depthReport(photos, [
+      { file: "k.jpg", draw: 1, verdict: { kind: "cannot_measure", reason: "too_crowded" } },
+      { file: "k.jpg", draw: 2, verdict: { kind: "no_flood" } },
+      { file: "c.jpg", draw: 1, verdict: deciding(84, 112, "NPATV") },
+      { file: "c.jpg", draw: 2, verdict: deciding(100, 133, "NPATV") },
+    ]);
+    expect(report.byDepth.knee).toEqual({ draws: 2, too_shallow: 0, matched: 0, too_deep: 0, cannot_measure: 1, no_flood: 1, error: 0 });
+    expect(report.byDepth.chest).toEqual({ draws: 2, too_shallow: 0, matched: 2, too_deep: 0, cannot_measure: 0, no_flood: 0, error: 0 });
+    expect(report.markdown).toContain("can't measure (too crowded)");
   });
 });

@@ -26,6 +26,19 @@ const CAPTION_LANDMARK: Record<Depth, Landmark> = {
   chest: "chest",
 };
 
+/** Checked before any paid call, so a label the report cannot place never costs a run. */
+export function depthManifestProblems(photos: readonly DepthPhoto[]): string[] {
+  const problems: string[] = [];
+  const seen = new Set<string>();
+  for (const p of photos) {
+    if (!Object.hasOwn(CAPTION_LANDMARK, p.captionDepth)) problems.push(`${p.file}: caption depth ${p.captionDepth} is not one the report knows`);
+    if (p.scene !== "flood" && p.scene !== "wading") problems.push(`${p.file}: scene ${p.scene} is neither flood nor wading`);
+    if (seen.has(p.file)) problems.push(`${p.file}: listed twice`);
+    seen.add(p.file);
+  }
+  return problems;
+}
+
 export function captionCm(depth: Depth): Interval {
   return LANDMARK_CM[CAPTION_LANDMARK[depth] as keyof typeof LANDMARK_CM];
 }

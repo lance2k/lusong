@@ -89,9 +89,13 @@ export async function checkPhoto(
 ): Promise<CheckResult> {
   const started = Date.now();
   const deadline = started + PIPELINE_BUDGET_MS;
-  const [waterText, personText, carText] = await Promise.all(
+  // Settle every call before failing, so the meter holds what the others cost.
+  const settled = await Promise.allSettled(
     ["flood water", "person", "car"].map((phrase) => segment(imageDataUrl, phrase, deadline, meter)),
   );
+  const failed = settled.find((s) => s.status === "rejected");
+  if (failed) throw failed.reason;
+  const [waterText, personText, carText] = settled.map((s) => (s as PromiseFulfilledResult<string>).value);
   const segmented = Date.now();
 
   const water = parseSamText(waterText);
