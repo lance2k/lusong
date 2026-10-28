@@ -1,0 +1,70 @@
+import { describe, expect, it } from "vitest";
+import { buildPrompt, normalizeReadings, toGrid, type LabelledObject, type RawReadings } from "./readings";
+import { decideVerdict } from "./verdict";
+
+const box = { left: 0, top: 0, right: 10, bottom: 10 };
+const objects: LabelledObject[] = [
+  { label: "P1", kind: "person", box },
+  { label: "P2", kind: "person", box },
+  { label: "P3", kind: "person", box },
+];
+
+function raw(...readings: [string, string][]): RawReadings {
+  return {
+    is_flooded_street: true,
+    caveats: "",
+    readings: readings.map(([label, waterline]) => ({ label, waterline, in_water: true, is_child: false, note: "" })),
+  };
+}
+
+/** The reply as the route would judge it: normalised, then decided. */
+function verdictFor(reply: RawReadings) {
+  const { readings, problems } = normalizeReadings(reply, objects);
+  return decideVerdict({ readings, readingsComplete: problems.length === 0, waterFound: true, modelSaysFlooded: true });
+}
+
+describe("normalizeReadings + decideVerdict: a broken reply never yields PATV", () => {
+  it("baseline: three agreeing half-knee readings are PATV", () => {
+    const v = verdictFor(raw(["P1", "half_knee"], ["P2", "half_knee"], ["P3", "half_knee"]));
+    expect(v.kind === "measured" && v.passability).toBe("PATV");
+  });
+
+  it("an omitted object", () => {
+    const reply = raw(["P1", "half_knee"], ["P2", "half_knee"]);
+    expect(normalizeReadings(reply, objects).problems).toEqual(["P3 missing"]);
+    const v = verdictFor(reply);
+    expect(v.kind === "measured" && v.passability).toBe("unsure");
+  });
+
+  it("a duplicate reading keeps the deeper landmark", () => {
+    const reply = raw(["P1", "half_knee"], ["P2", "half_knee"], ["P3", "half_knee"], ["P1", "waist"]);
+    const { readings, problems } = normalizeReadings(reply, objects);
+    expect(problems).toEqual(["P1 reported twice"]);
+    expect(readings.find((r) => r.label === "P1")?.landmark).toBe("waist");
+    const v = verdictFor(reply);
+    expect(v.kind === "measured" && v.passability).toBe("NPATV");
+  });
+
+  it("a tyre landmark on a person", () => {
+    const reply = raw(["P1", "half_knee"], ["P2", "half_knee"], ["P3", "tyre_full"]);
+    expect(normalizeReadings(reply, objects).problems).toEqual(["P3: tyre_full does not fit a person"]);
+    const v = verdictFor(reply);
+    expect(v.kind === "measured" && v.passability).toBe("unsure");
+  });
+
+  it("a label nobody asked about", () => {
+    const reply = raw(["P1", "half_knee"], ["P2", "half_knee"], ["P3", "half_knee"], ["P9", "chest"]);
+    expect(normalizeReadings(reply, objects).problems).toEqual(["unexpected label P9"]);
+    const v = verdictFor(reply);
+    expect(v.kind === "measured" && v.passability).toBe("unsure");
+  });
+});
+
+describe("prompt", () => {
+  it("lists every object with its box on the 0–1000 grid", () => {
+    const image = { width: 1280, height: 960 };
+    expect(toGrid({ left: 128, top: 96, right: 640, bottom: 480 }, image)).toEqual([100, 100, 500, 500]);
+    const prompt = buildPrompt([{ label: "C1", kind: "car", box: { left: 0, top: 480, right: 1280, bottom: 960 } }], image);
+    expect(prompt).toContain("C1 car [0, 500, 1000, 1000]");
+  });
+});

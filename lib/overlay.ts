@@ -25,16 +25,32 @@ function hasPixelIn(p: PlacedRaster, x0: number, x1: number, y0: number, y1: num
   return false;
 }
 
+/** Source-pixel x centres of the columns whose lowest filled pixel ends within `tolerance` of `y`. */
+function bottomEdgeXs(p: PlacedRaster, y: number, tolerance: number): number[] {
+  const xs: number[] = [];
+  for (let col = 0; col < p.width; col++) {
+    for (let row = p.height - 1; row >= 0; row--) {
+      if (!p.raster[row * p.width + col]) continue;
+      if (y - (p.bounds.top + (row + 1) * p.scaleY) <= tolerance) xs.push(p.bounds.left + (col + 0.5) * p.scaleX);
+      break;
+    }
+  }
+  return xs;
+}
+
 /**
- * Where the object's visible mask ends at the water, or null when its lowest edge is not next to
- * any water (legs hidden by a car or wall, a person on dry ground). Only a non-null result may be
- * drawn as a waterline; the band is 3% of the box height, at least 3 px.
+ * Where the object's visible mask ends at the water, or null when its lowest pixels are not next
+ * to any water (legs hidden by a car or wall, a person on dry ground). Only a non-null result may
+ * be drawn as a waterline. "Next to" means water within the tolerance (3 % of the box height, at
+ * least 3 px) of one of the object's own lowest pixels, not merely somewhere inside its box.
  */
 export function waterlineY(object: PlacedRaster, box: Box, water: readonly PlacedRaster[]): number | null {
   const y = lowestRowY(object);
   if (y === null) return null;
   const tolerance = Math.max(3, 0.03 * (box.bottom - box.top));
-  const touches = water.some((w) => hasPixelIn(w, box.left, box.right, y - tolerance, y + tolerance));
+  const touches = bottomEdgeXs(object, y, tolerance).some((x) =>
+    water.some((w) => hasPixelIn(w, x - tolerance, x + tolerance, y - tolerance, y + tolerance)),
+  );
   return touches ? y : null;
 }
 
@@ -44,9 +60,16 @@ export interface PlacedPath {
   transform: string;
 }
 
+/**
+ * The parser's contours put pixel centres on integers (a 21-px-wide mask spans −0.5…20.5), so the
+ * path is shifted half a raster pixel before scaling onto the mask's half-open source bounds.
+ */
 export function maskToPlacedPath(mask: SegmentationMaskRecord): PlacedPath {
   const { left, top, right, bottom } = mask.bounds;
   const sx = (right - left) / mask.mask.width;
   const sy = (bottom - top) / mask.mask.height;
-  return { d: decodeMaskToSVGPath(mask.mask), transform: `translate(${left} ${top}) scale(${sx} ${sy})` };
+  return {
+    d: decodeMaskToSVGPath(mask.mask),
+    transform: `translate(${left} ${top}) scale(${sx} ${sy}) translate(0.5 0.5)`,
+  };
 }

@@ -1,6 +1,15 @@
 import { chatJson } from "./meta";
 import type { Box } from "./sam";
-import { PERSON_LANDMARKS, TYRE_LANDMARKS, type Landmark, type ObjectKind, type Reading } from "./verdict";
+import {
+  isUsable,
+  LANDMARK_CM,
+  landmarkFitsKind,
+  PERSON_LANDMARKS,
+  TYRE_LANDMARKS,
+  type Landmark,
+  type ObjectKind,
+  type Reading,
+} from "./verdict";
 
 export interface LabelledObject {
   label: string;
@@ -12,6 +21,8 @@ export interface ModelReadings {
   modelSaysFlooded: boolean;
   readings: Reading[];
   notes: Record<string, string>;
+  /** Contract breaks in the model's reply; any one rules out a "passable" verdict. */
+  problems: string[];
   caveats: string;
 }
 
@@ -76,10 +87,69 @@ interface RawReading {
   note: string;
 }
 
+export interface RawReadings {
+  is_flooded_street: boolean;
+  readings: RawReading[];
+  caveats: string;
+}
+
+function depthRank(r: Reading): number {
+  return isUsable(r) ? LANDMARK_CM[r.landmark as keyof typeof LANDMARK_CM].high : -1;
+}
+
+/**
+ * Keeps one reading per requested object and lists every way the reply broke the contract:
+ * a missing object, a duplicate (the deeper reading wins), an unknown label or landmark, or a
+ * landmark for the other kind of object. Any problem means the set may be missing its deepest
+ * reading, which only a "passable" verdict could get wrong.
+ */
+export function normalizeReadings(
+  raw: RawReadings,
+  objects: readonly LabelledObject[],
+): { readings: Reading[]; notes: Record<string, string>; problems: string[] } {
+  const byLabel = new Map(objects.map((o) => [o.label, o]));
+  const chosen = new Map<string, { reading: Reading; note: string }>();
+  const problems: string[] = [];
+  for (const r of raw.readings) {
+    const object = byLabel.get(r.label);
+    if (!object) {
+      problems.push(`unexpected label ${r.label}`);
+      continue;
+    }
+    if (!WATERLINES.includes(r.waterline as Landmark)) {
+      problems.push(`${r.label}: unknown waterline ${r.waterline}`);
+      continue;
+    }
+    const reading: Reading = {
+      label: r.label,
+      kind: object.kind,
+      inWater: r.in_water,
+      landmark: r.waterline as Landmark,
+      isChild: r.is_child,
+    };
+    if (reading.landmark !== "not_visible" && !landmarkFitsKind(reading.landmark, object.kind)) {
+      problems.push(`${r.label}: ${r.waterline} does not fit a ${object.kind}`);
+    }
+    const previous = chosen.get(r.label);
+    if (previous) {
+      problems.push(`${r.label} reported twice`);
+      if (depthRank(reading) > depthRank(previous.reading)) chosen.set(r.label, { reading, note: r.note });
+      continue;
+    }
+    chosen.set(r.label, { reading, note: r.note });
+  }
+  for (const o of objects) if (!chosen.has(o.label)) problems.push(`${o.label} missing`);
+
+  const readings = [...chosen.values()].map((c) => c.reading);
+  const notes = Object.fromEntries([...chosen].map(([label, c]) => [label, c.note]));
+  return { readings, notes, problems };
+}
+
 export async function readWaterlines(
   imageDataUrl: string,
   objects: readonly LabelledObject[],
   image: { width: number; height: number },
+  deadline: number,
 ): Promise<ModelReadings> {
   const raw = (await chatJson({
     messages: [
@@ -94,22 +164,8 @@ export async function readWaterlines(
     schemaName: "waterline_readings",
     schema: READINGS_SCHEMA,
     maxCompletionTokens: 5000,
-  })) as { is_flooded_street: boolean; readings: RawReading[]; caveats: string };
+    deadline,
+  })) as RawReadings;
 
-  const byLabel = new Map(objects.map((o) => [o.label, o]));
-  const readings: Reading[] = [];
-  const notes: Record<string, string> = {};
-  for (const r of raw.readings) {
-    const object = byLabel.get(r.label);
-    if (!object || notes[r.label] !== undefined || !WATERLINES.includes(r.waterline as Landmark)) continue;
-    notes[r.label] = r.note;
-    readings.push({
-      label: r.label,
-      kind: object.kind,
-      inWater: r.in_water,
-      landmark: r.waterline as Landmark,
-      isChild: r.is_child,
-    });
-  }
-  return { modelSaysFlooded: raw.is_flooded_street, readings, notes, caveats: raw.caveats };
+  return { modelSaysFlooded: raw.is_flooded_street, caveats: raw.caveats, ...normalizeReadings(raw, objects) };
 }

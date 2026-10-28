@@ -15,6 +15,8 @@ import {
 /** Boxes below this share of the photo are dropped; quiapo-1's waders are 0.09–0.48 %. */
 const MIN_AREA_SHARE = 0.001;
 const MAX_OBJECTS = 12;
+/** Every Meta call and retry wait must finish inside this; the route's maxDuration is 120 s. */
+const PIPELINE_BUDGET_MS = 100_000;
 
 export interface CheckedObject {
   label: string;
@@ -33,6 +35,8 @@ export interface CheckResult {
   water: PlacedPath[];
   objects: CheckedObject[];
   verdict: Verdict;
+  /** How the model's reply broke the one-reading-per-object contract, if it did. */
+  readingProblems: string[];
   caveats: string;
   timingsMs: { segmentation: number; readings: number; total: number };
 }
@@ -61,8 +65,9 @@ export async function checkPhoto(
   image: { width: number; height: number },
 ): Promise<CheckResult> {
   const started = Date.now();
+  const deadline = started + PIPELINE_BUDGET_MS;
   const [waterText, personText, carText] = await Promise.all(
-    ["flood water", "person", "car"].map((phrase) => segment(imageDataUrl, phrase)),
+    ["flood water", "person", "car"].map((phrase) => segment(imageDataUrl, phrase, deadline)),
   );
   const segmented = Date.now();
 
@@ -74,11 +79,12 @@ export async function checkPhoto(
     ],
     image,
   );
-  const model = objects.length > 0 ? await readWaterlines(imageDataUrl, objects, image) : null;
+  const model = objects.length > 0 ? await readWaterlines(imageDataUrl, objects, image, deadline) : null;
   const read = Date.now();
 
   const verdict = decideVerdict({
     readings: model?.readings ?? [],
+    readingsComplete: (model?.problems.length ?? 0) === 0,
     waterFound: water.length > 0,
     modelSaysFlooded: model?.modelSaysFlooded ?? false,
   });
@@ -102,6 +108,7 @@ export async function checkPhoto(
       };
     }),
     verdict,
+    readingProblems: model?.problems ?? [],
     caveats: model?.caveats ?? "",
     timingsMs: { segmentation: segmented - started, readings: read - segmented, total: read - started },
   };

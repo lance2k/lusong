@@ -81,9 +81,13 @@ export type Verdict =
   | {
       kind: "measured";
       rangeCm: Interval;
-      /** "unsure" replaces PATV when confidence is low: a lone reading never says "passable". */
+      /**
+       * "unsure" replaces PATV when confidence is low or the reading set is incomplete: missing
+       * readings can only hide a deeper spot, so PATV is the one class they can make wrong.
+       */
       passability: Passability | "unsure";
       confidence: Confidence;
+      readingsComplete: boolean;
       /** The reading whose interval set the upper bound. */
       decidedBy: { label: string; landmark: PersonLandmark | TyreLandmark; interval: Interval };
       readingsUsed: string[];
@@ -97,7 +101,7 @@ export function passabilityFor(upperCm: number): Passability {
   return "NPATV";
 }
 
-function landmarkFitsKind(landmark: Landmark, kind: ObjectKind): boolean {
+export function landmarkFitsKind(landmark: Landmark, kind: ObjectKind): boolean {
   if (kind === "person") return (PERSON_LANDMARKS as readonly string[]).includes(landmark);
   return (TYRE_LANDMARKS as readonly string[]).includes(landmark);
 }
@@ -127,6 +131,8 @@ export function gaugeRowsFor(interval: Interval): { within: GaugeRow[]; below: G
 
 export function decideVerdict(input: {
   readings: readonly Reading[];
+  /** False when the model skipped, duplicated or mis-kinded any object it was asked about. */
+  readingsComplete: boolean;
   waterFound: boolean;
   modelSaysFlooded: boolean;
 }): Verdict {
@@ -144,11 +150,13 @@ export function decideVerdict(input: {
   const confidence = confidenceFor(usable.length, rangeCm.high - rangeCm.low);
   const cls = passabilityFor(rangeCm.high);
 
+  const doubtful = confidence === "low" || !input.readingsComplete;
   return {
     kind: "measured",
     rangeCm,
-    passability: cls === "PATV" && confidence === "low" ? "unsure" : cls,
+    passability: cls === "PATV" && doubtful ? "unsure" : cls,
     confidence,
+    readingsComplete: input.readingsComplete,
     decidedBy: deepest,
     readingsUsed: usable.map((r) => r.label),
   };

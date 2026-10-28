@@ -1,8 +1,8 @@
 import { checkPhoto } from "@/lib/check";
-import { JpegError, jpegSize, stripJpegMetadata } from "@/lib/jpeg";
+import { JpegError, sanitizeJpeg } from "@/lib/jpeg";
 import { MetaApiError } from "@/lib/meta";
 
-/** Segmentation (≤ 20 s, run in parallel) plus one Muse Spark call (≤ 45 s), each retried once. */
+/** The pipeline stops itself at PIPELINE_BUDGET_MS (lib/check.ts); this leaves headroom past it. */
 export const maxDuration = 120;
 
 const MAX_BYTES = 3 * 1024 * 1024;
@@ -23,19 +23,18 @@ export async function POST(request: Request): Promise<Response> {
   if (!(photo instanceof File)) return fail(400, "No photo was attached.");
   if (photo.size > MAX_BYTES) return fail(413, "That photo is too large. Try a smaller one.");
 
-  const bytes = new Uint8Array(await photo.arrayBuffer());
-  let size: { width: number; height: number };
+  let jpeg: ReturnType<typeof sanitizeJpeg>;
   try {
-    size = jpegSize(bytes);
+    jpeg = sanitizeJpeg(new Uint8Array(await photo.arrayBuffer()));
   } catch (err) {
     if (err instanceof JpegError) return fail(415, "Lusong reads JPEG photos only.");
     throw err;
   }
-  if (size.width > MAX_SIDE || size.height > MAX_SIDE) return fail(413, "That photo is too large. Try a smaller one.");
+  if (jpeg.width > MAX_SIDE || jpeg.height > MAX_SIDE) return fail(413, "That photo is too large. Try a smaller one.");
 
-  const imageDataUrl = `data:image/jpeg;base64,${Buffer.from(stripJpegMetadata(bytes)).toString("base64")}`;
+  const imageDataUrl = `data:image/jpeg;base64,${Buffer.from(jpeg.bytes).toString("base64")}`;
   try {
-    return Response.json(await checkPhoto(imageDataUrl, size));
+    return Response.json(await checkPhoto(imageDataUrl, { width: jpeg.width, height: jpeg.height }));
   } catch (err) {
     console.error("check failed:", err instanceof MetaApiError ? err.message : err);
     return fail(502, "The measuring service didn't answer. Try again in a minute.");

@@ -7,7 +7,7 @@ function person(label: string, landmark: Landmark, extra: Partial<Reading> = {})
 function car(label: string, landmark: Landmark): Reading {
   return { label, kind: "car", inWater: true, landmark, isChild: false };
 }
-const flooded = { waterFound: true, modelSaysFlooded: true };
+const flooded = { waterFound: true, modelSaysFlooded: true, readingsComplete: true };
 
 describe("passabilityFor", () => {
   it("splits on the MMDA lines at 33 and 66 cm", () => {
@@ -56,6 +56,13 @@ describe("decideVerdict", () => {
     expect(v.kind === "measured" && v.confidence).toBe("low");
   });
 
+  it("an incomplete reading set never yields PATV, but keeps a not-passable class", () => {
+    const shallow = decideVerdict({ readings: [person("P1", "half_knee"), person("P2", "half_knee")], ...flooded, readingsComplete: false });
+    expect(shallow.kind === "measured" && shallow.passability).toBe("unsure");
+    const deep = decideVerdict({ readings: [person("P1", "knee"), person("P2", "knee")], ...flooded, readingsComplete: false });
+    expect(deep.kind === "measured" && deep.passability).toBe("NPLV");
+  });
+
   it("two half-knee readings are PATV at medium confidence", () => {
     const v = decideVerdict({ readings: [person("P1", "half_knee"), person("P2", "half_knee")], ...flooded });
     expect(v.kind === "measured" && v.passability).toBe("PATV");
@@ -90,7 +97,7 @@ describe("decideVerdict", () => {
   });
 
   it("says no flood only when SAM found no water and the model agrees", () => {
-    expect(decideVerdict({ readings: [], waterFound: false, modelSaysFlooded: false })).toEqual({ kind: "no_flood" });
-    expect(decideVerdict({ readings: [], waterFound: false, modelSaysFlooded: true })).toEqual({ kind: "cannot_measure" });
+    expect(decideVerdict({ readings: [], readingsComplete: true, waterFound: false, modelSaysFlooded: false })).toEqual({ kind: "no_flood" });
+    expect(decideVerdict({ readings: [], readingsComplete: true, waterFound: false, modelSaysFlooded: true })).toEqual({ kind: "cannot_measure" });
   });
 });

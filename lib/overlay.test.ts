@@ -31,6 +31,17 @@ describe("waterlineY", () => {
     expect(waterlineY(person, box, [water])).toBe(140);
   });
 
+  it("omits the line when water is inside the box band but away from the object's own pixels", () => {
+    const leftColumnOnly: PlacedRaster = {
+      ...person,
+      raster: Uint8Array.from({ length: 20 * 60 }, (_, i) => (i % 20 === 0 && i < 40 * 20 ? 1 : 0)),
+    };
+    const waterAtRightEdge = block(118, 138, 2, 4, () => true);
+    expect(waterlineY(leftColumnOnly, box, [waterAtRightEdge])).toBeNull();
+    const waterUnderIt = block(98, 138, 4, 4, () => true);
+    expect(waterlineY(leftColumnOnly, box, [waterUnderIt])).toBe(140);
+  });
+
   it("omits the line when the lowest edge is nowhere near water", () => {
     const farWater = block(0, 200, 300, 50, () => true);
     expect(waterlineY(person, box, [farWater])).toBeNull();
@@ -50,11 +61,32 @@ describe("waterlineY", () => {
   });
 });
 
+/** Applies the transform string the way SVG does (right to left) and returns the path's extents. */
+function placedExtents(placed: { d: string; transform: string }) {
+  const [tx, ty, sx, sy, ox, oy] = placed.transform.match(/-?\d+(\.\d+)?/g)!.map(Number);
+  const nums = placed.d.match(/-?\d+(\.\d+)?/g)!.map(Number);
+  const xs = nums.filter((_, i) => i % 2 === 0).map((x) => tx + sx * (x + ox));
+  const ys = nums.filter((_, i) => i % 2 === 1).map((y) => ty + sy * (y + oy));
+  return { left: Math.min(...xs), right: Math.max(...xs), top: Math.min(...ys), bottom: Math.max(...ys) };
+}
+
 describe("maskToPlacedPath", () => {
+  it("lands a person's outline inside its source bounds, not half a pixel up and left", () => {
+    const [first] = fixture("quiapo-1__person");
+    const extents = placedExtents(maskToPlacedPath(first.mask));
+    expect(extents.left).toBeGreaterThanOrEqual(first.mask.bounds.left);
+    expect(extents.top).toBeGreaterThanOrEqual(first.mask.bounds.top);
+    expect(extents.right).toBeLessThanOrEqual(first.mask.bounds.right);
+    expect(extents.bottom).toBeLessThanOrEqual(first.mask.bounds.bottom);
+  });
+
   it("scales the 1024-wide water path back onto the photo", () => {
     const [water] = fixture("quiapo-1__flood_water");
     const placed = maskToPlacedPath(water.mask);
     expect(placed.d.length).toBeGreaterThan(100);
-    expect(placed.transform).toMatch(/^translate\(\d+ \d+\) scale\(1\.2\d* 1\.2\d*\)$/);
+    expect(placed.transform).toMatch(/^translate\(\d+ \d+\) scale\(1\.2\d* 1\.2\d*\) translate\(0\.5 0\.5\)$/);
+    const extents = placedExtents(placed);
+    expect(extents.right).toBeLessThanOrEqual(water.mask.bounds.right);
+    expect(extents.right).toBeGreaterThan(water.mask.bounds.right - 2);
   });
 });

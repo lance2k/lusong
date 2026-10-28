@@ -26,6 +26,7 @@ const LANDMARK_WORDS: Record<Landmark, string> = {
 
 type State =
   | { step: "idle" }
+  | { step: "preparing" }
   | { step: "measuring"; previewUrl: string; startedAt: number }
   | { step: "done"; previewUrl: string; result: CheckResult }
   | { step: "failed"; previewUrl: string | null; message: string };
@@ -105,7 +106,13 @@ function VerdictCard({ result }: { result: CheckResult }) {
               {v.readingsUsed.length} reading{v.readingsUsed.length === 1 ? "" : "s"} in all, {cm(v.rangeCm)}. The
               deepest one decides, because a car has to get through the deepest part.
             </p>
-            {v.passability === "unsure" && <p>Only one clear reading, so Lusong won&apos;t call this passable.</p>}
+            {v.passability === "unsure" && (
+              <p>
+                {v.readingsComplete
+                  ? "Too few clear readings, so Lusong won't call this passable."
+                  : "Some readings were missing or inconsistent, so Lusong won't call this passable."}
+              </p>
+            )}
             <p className="text-zinc-600 dark:text-zinc-400">Confidence: {CONFIDENCE_WORDS[v.confidence]}</p>
           </>
         )}
@@ -215,30 +222,53 @@ function Elapsed({ since }: { since: number }) {
 export default function Checker() {
   const [state, setState] = useState<State>({ step: "idle" });
   const input = useRef<HTMLInputElement>(null);
+  /** Set synchronously, before the async resize, so a second pick can't start a second paid check. */
+  const inFlight = useRef(false);
+  const shownUrl = useRef<string | null>(null);
+
+  useEffect(
+    () => () => {
+      if (shownUrl.current) URL.revokeObjectURL(shownUrl.current);
+    },
+    [],
+  );
+
+  function showPreview(blob: Blob): string {
+    if (shownUrl.current) URL.revokeObjectURL(shownUrl.current);
+    shownUrl.current = URL.createObjectURL(blob);
+    return shownUrl.current;
+  }
 
   async function check(file: File) {
-    let blob: Blob;
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setState({ step: "preparing" });
     try {
-      blob = await shrinkToJpeg(file);
-    } catch {
-      setState({ step: "failed", previewUrl: null, message: "This browser couldn't open that photo. Try a JPEG or PNG." });
-      return;
-    }
-    const previewUrl = URL.createObjectURL(blob);
-    setState({ step: "measuring", previewUrl, startedAt: Date.now() });
-    const form = new FormData();
-    form.append("photo", blob, "photo.jpg");
-    try {
-      const res = await fetch("/api/check", { method: "POST", body: form });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? "Something went wrong.");
-      setState({ step: "done", previewUrl, result: body as CheckResult });
-    } catch (err) {
-      setState({ step: "failed", previewUrl, message: err instanceof Error ? err.message : "Something went wrong." });
+      let blob: Blob;
+      try {
+        blob = await shrinkToJpeg(file);
+      } catch {
+        setState({ step: "failed", previewUrl: null, message: "This browser couldn't open that photo. Try a JPEG or PNG." });
+        return;
+      }
+      const previewUrl = showPreview(blob);
+      setState({ step: "measuring", previewUrl, startedAt: Date.now() });
+      const form = new FormData();
+      form.append("photo", blob, "photo.jpg");
+      try {
+        const res = await fetch("/api/check", { method: "POST", body: form });
+        const body = await res.json();
+        if (!res.ok) throw new Error(body.error ?? "Something went wrong.");
+        setState({ step: "done", previewUrl, result: body as CheckResult });
+      } catch (err) {
+        setState({ step: "failed", previewUrl, message: err instanceof Error ? err.message : "Something went wrong." });
+      }
+    } finally {
+      inFlight.current = false;
     }
   }
 
-  const busy = state.step === "measuring";
+  const busy = state.step === "preparing" || state.step === "measuring";
   return (
     <div className="space-y-5">
       <input

@@ -1,7 +1,9 @@
 import { outputTextOf } from "./sam";
 
 const BASE_URL = "https://api.meta.ai/v1";
-const MAX_RETRY_WAIT_MS = 3000;
+const DEFAULT_RETRY_WAIT_MS = 500;
+/** A retry is only worth starting if this much time is left after its wait. */
+const MIN_ATTEMPT_MS = 2000;
 
 /** Carries only the status, never the upstream body, so nothing from Meta leaks to a client. */
 export class MetaApiError extends Error {
@@ -19,33 +21,37 @@ function apiKey(): string {
   return key;
 }
 
-function retryDelayMs(res: Response): number {
+function retryWaitMs(res: Response): number {
   const seconds = Number(res.headers.get("retry-after"));
-  return Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds * 1000, MAX_RETRY_WAIT_MS) : 500;
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : DEFAULT_RETRY_WAIT_MS;
 }
 
 /**
- * POSTs JSON with at most one retry, on 429, 5xx or a dropped connection. A timeout is not
- * retried: a second wait of the same length would overrun the route's time budget.
+ * POSTs JSON with at most one retry, on 429, 5xx or a dropped connection. Every attempt and every
+ * wait must fit before `deadline` (epoch ms); a Retry-After that does not fit fails the call rather
+ * than retrying early. A timeout is not retried.
  */
-async function postJson(endpoint: string, body: unknown, timeoutMs: number): Promise<unknown> {
+async function postJson(endpoint: string, body: unknown, attemptTimeoutMs: number, deadline: number): Promise<unknown> {
   for (let attempt = 1; ; attempt++) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new MetaApiError(endpoint, 0);
     let res: Response;
     try {
       res = await fetch(`${BASE_URL}${endpoint}`, {
         method: "POST",
         headers: { Authorization: `Bearer ${apiKey()}`, "Content-Type": "application/json" },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: AbortSignal.timeout(Math.min(attemptTimeoutMs, remaining)),
       });
     } catch (err) {
       const timedOut = err instanceof DOMException && err.name === "TimeoutError";
-      if (attempt === 1 && !timedOut) continue;
+      if (attempt === 1 && !timedOut && deadline - Date.now() > MIN_ATTEMPT_MS) continue;
       throw new MetaApiError(endpoint, 0);
     }
     if (res.ok) return res.json();
-    if (attempt === 1 && (res.status === 429 || res.status >= 500)) {
-      await new Promise((resolve) => setTimeout(resolve, retryDelayMs(res)));
+    const wait = retryWaitMs(res);
+    if (attempt === 1 && (res.status === 429 || res.status >= 500) && deadline - Date.now() - wait > MIN_ATTEMPT_MS) {
+      await new Promise((resolve) => setTimeout(resolve, wait));
       continue;
     }
     throw new MetaApiError(endpoint, res.status);
@@ -53,7 +59,7 @@ async function postJson(endpoint: string, body: unknown, timeoutMs: number): Pro
 }
 
 /** One SAM 3.1 concept prompt on one image; returns the raw segmentation text. */
-export async function segment(imageDataUrl: string, phrase: string): Promise<string> {
+export async function segment(imageDataUrl: string, phrase: string, deadline: number): Promise<string> {
   const body = await postJson(
     "/responses",
     {
@@ -70,6 +76,7 @@ export async function segment(imageDataUrl: string, phrase: string): Promise<str
       metadata: { mask_encoding: "one_bit" },
     },
     20_000,
+    deadline,
   );
   return outputTextOf(body as Parameters<typeof outputTextOf>[0]);
 }
@@ -84,6 +91,7 @@ export async function chatJson(request: {
   schemaName: string;
   schema: object;
   maxCompletionTokens: number;
+  deadline: number;
 }): Promise<unknown> {
   const body = (await postJson(
     "/chat/completions",
@@ -97,6 +105,7 @@ export async function chatJson(request: {
       max_completion_tokens: request.maxCompletionTokens,
     },
     45_000,
+    request.deadline,
   )) as ChatCompletion;
   const choice = body.choices?.[0];
   if (!choice?.message?.content || choice.finish_reason === "length") {
