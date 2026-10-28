@@ -12,3 +12,4 @@ node_modules/
 *.pem
 *.tsbuildinfo
 next-env.d.ts
+.vercel
