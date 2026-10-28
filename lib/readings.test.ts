@@ -67,6 +67,21 @@ describe("normalizeReadings + decideVerdict: a broken reply is never 'shallow'",
     expect(v.kind === "measured" && v.passability).toBe("unsure");
   });
 
+  it("a missing deepest reading above 33 cm leaves 'unsure', never NPLV", () => {
+    expect(verdictFor(raw(["P1", "knee"], ["P2", "knee"], ["P3", "waist"]))).toMatchObject({ passability: "NPATV" });
+
+    const omitted = raw(["P1", "knee"], ["P2", "knee"]);
+    expect(verdictFor(omitted)).toMatchObject({ passability: "unsure", readingsComplete: false });
+
+    const mistyped = raw(["P1", "knee"], ["P2", "knee"], ["P3", "waist"]);
+    (mistyped.readings[2] as unknown as Record<string, unknown>).is_child = "false";
+    expect(verdictFor(mistyped)).toMatchObject({ passability: "unsure", readingsComplete: false });
+  });
+
+  it("an incomplete set that still reads NPATV keeps NPATV", () => {
+    expect(verdictFor(raw(["P1", "knee"], ["P2", "waist"]))).toMatchObject({ passability: "NPATV", readingsComplete: false });
+  });
+
   it("a reply with no readings array", () => {
     const { readings, problems } = normalizeReadings({ is_flooded_street: true }, objects);
     expect(readings).toEqual([]);

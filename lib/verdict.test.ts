@@ -56,11 +56,13 @@ describe("decideVerdict", () => {
     expect(v.kind === "measured" && v.confidence).toBe("low");
   });
 
-  it("an incomplete reading set never yields PATV, but keeps a not-passable class", () => {
+  it("an incomplete reading set is 'unsure' unless it already reads NPATV", () => {
     const shallow = decideVerdict({ readings: [person("P1", "half_knee"), person("P2", "half_knee")], ...flooded, readingsComplete: false });
     expect(shallow.kind === "measured" && shallow.passability).toBe("unsure");
-    const deep = decideVerdict({ readings: [person("P1", "knee"), person("P2", "knee")], ...flooded, readingsComplete: false });
-    expect(deep.kind === "measured" && deep.passability).toBe("NPLV");
+    const knee = decideVerdict({ readings: [person("P1", "knee"), person("P2", "knee")], ...flooded, readingsComplete: false });
+    expect(knee.kind === "measured" && knee.passability).toBe("unsure");
+    const waist = decideVerdict({ readings: [person("P1", "knee"), person("P2", "waist")], ...flooded, readingsComplete: false });
+    expect(waist.kind === "measured" && waist.passability).toBe("NPATV");
   });
 
   it("two half-knee readings are 'shallow', never PATV, even at medium confidence", () => {

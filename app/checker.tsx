@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { RefusalReason } from "@/lib/budget";
-import type { CheckResult, CheckedObject } from "@/lib/check";
+import type { PageObject, PageResult } from "@/lib/check";
 import { cropBox, type ViewBox } from "@/lib/crop";
 import { gaugeRowsFor, type Interval, type Landmark, type Verdict } from "@/lib/verdict";
 
@@ -36,7 +36,7 @@ interface Sample {
   credit: string;
 }
 
-type LoadedSample = { sample: Sample; result: CheckResult };
+type LoadedSample = { sample: Sample; result: PageResult };
 
 const REFUSAL_REASONS: readonly RefusalReason[] = ["budget", "ip", "unavailable"];
 
@@ -44,14 +44,14 @@ type State =
   | { step: "idle" }
   | { step: "preparing" }
   | { step: "measuring"; previewUrl: string; startedAt: number }
-  | { step: "done"; previewUrl: string; result: CheckResult }
+  | { step: "done"; previewUrl: string; result: PageResult }
   | { step: "refused"; message: string; samples: LoadedSample[] | null; shown: number }
   | { step: "failed"; previewUrl: string | null; message: string };
 
 async function loadSamples(): Promise<LoadedSample[]> {
   const samples = (await (await fetch("/samples/index.json")).json()) as Sample[];
   return Promise.all(
-    samples.map(async (sample) => ({ sample, result: (await (await fetch(sample.result)).json()) as CheckResult })),
+    samples.map(async (sample) => ({ sample, result: (await (await fetch(sample.result)).json()) as PageResult })),
   );
 }
 
@@ -96,7 +96,9 @@ function headline(v: Verdict): { title: string; code: string | null; tone: keyof
     case "shallow":
       return { title: "Shallow where measured, but not a go-ahead", code: null, tone: "amber" };
     case "unsure":
-      return { title: "Unsure: treat it as not passable to light vehicles", code: null, tone: "amber" };
+      return v.readingsComplete
+        ? { title: "Unsure: treat it as not passable to light vehicles", code: null, tone: "amber" }
+        : { title: "Unsure: it may be deeper than Lusong could read. Don't drive through", code: null, tone: "red" };
     case "NPLV":
       return { title: "Not passable to light vehicles", code: "NPLV", tone: "amber" };
     case "NPATV":
@@ -110,7 +112,7 @@ const CONFIDENCE_WORDS = {
   low: "Low: few readings, or they disagree. Depth often varies across a street.",
 };
 
-function VerdictCard({ result }: { result: CheckResult }) {
+function VerdictCard({ result }: { result: PageResult }) {
   const v = result.verdict;
   const h = headline(v);
   return (
@@ -141,7 +143,7 @@ function VerdictCard({ result }: { result: CheckResult }) {
               <p>
                 {v.readingsComplete
                   ? "Too few clear readings, so Lusong won't call this passable."
-                  : "Some readings were missing or inconsistent, so Lusong won't call this passable."}
+                  : "Some readings were missing or inconsistent, and a missing one could be the deepest, so Lusong won't give a class."}
               </p>
             )}
             <p className="text-zinc-600 dark:text-zinc-400">Confidence: {CONFIDENCE_WORDS[v.confidence]}</p>
@@ -153,14 +155,13 @@ function VerdictCard({ result }: { result: CheckResult }) {
             here. Try a photo with a person or car in the water.
           </p>
         )}
-        {result.caveats && <p className="text-zinc-600 dark:text-zinc-400">Model&apos;s note: {result.caveats}</p>}
       </div>
     </section>
   );
 }
 
 /** The photo drawn inside the SVG, so a zoomed crop is the same drawing with a smaller viewBox. */
-function Scene({ result, imageUrl, viewBox, label }: { result: CheckResult; imageUrl: string; viewBox?: ViewBox; label: string }) {
+function Scene({ result, imageUrl, viewBox, label }: { result: PageResult; imageUrl: string; viewBox?: ViewBox; label: string }) {
   const { width, height } = result.image;
   const view = viewBox ?? { x: 0, y: 0, width, height };
   return (
@@ -200,7 +201,7 @@ function Scene({ result, imageUrl, viewBox, label }: { result: CheckResult; imag
   );
 }
 
-function Overlay({ result, imageUrl, label }: { result: CheckResult; imageUrl: string; label: string }) {
+function Overlay({ result, imageUrl, label }: { result: PageResult; imageUrl: string; label: string }) {
   const { width, height } = result.image;
   const pct = (value: number, of: number) => `${(value / of) * 100}%`;
   return (
@@ -222,7 +223,7 @@ function Overlay({ result, imageUrl, label }: { result: CheckResult; imageUrl: s
 }
 
 /** At phone width the people are a few pixels tall, so each reading gets a zoomed view of its own. */
-function Crops({ result, imageUrl }: { result: CheckResult; imageUrl: string }) {
+function Crops({ result, imageUrl }: { result: PageResult; imageUrl: string }) {
   const read = result.objects
     .filter((o) => o.landmark && o.landmark !== "not_visible")
     .sort((a, b) => Number(b.usable) - Number(a.usable));
@@ -246,7 +247,7 @@ function Crops({ result, imageUrl }: { result: CheckResult; imageUrl: string }) 
   );
 }
 
-function ResultView({ result, imageUrl, photoLabel }: { result: CheckResult; imageUrl: string; photoLabel: string }) {
+function ResultView({ result, imageUrl, photoLabel }: { result: PageResult; imageUrl: string; photoLabel: string }) {
   return (
     <>
       <VerdictCard result={result} />
@@ -299,7 +300,7 @@ function Refused({ state, onShow }: { state: Extract<State, { step: "refused" }>
   );
 }
 
-function ReadingList({ objects }: { objects: CheckedObject[] }) {
+function ReadingList({ objects }: { objects: PageObject[] }) {
   if (objects.length === 0) return null;
   return (
     <section>
@@ -314,7 +315,6 @@ function ReadingList({ objects }: { objects: CheckedObject[] }) {
               {o.kind === "person" ? "Person" : "Vehicle"}, {o.landmark ? LANDMARK_WORDS[o.landmark] : "no reading"}
               {o.interval && <b> · {cm(o.interval)}</b>}
               {!o.usable && o.landmark && o.landmark !== "not_visible" && " · not used"}
-              {o.note && <span className="block text-zinc-500">{o.note}</span>}
             </span>
           </li>
         ))}
@@ -396,7 +396,7 @@ export default function Checker() {
           return;
         }
         if (!res.ok) throw new Error(body.error ?? "Something went wrong.");
-        setState({ step: "done", previewUrl, result: body as CheckResult });
+        setState({ step: "done", previewUrl, result: body as PageResult });
       } catch (err) {
         setState({ step: "failed", previewUrl, message: err instanceof Error ? err.message : "Something went wrong." });
       }

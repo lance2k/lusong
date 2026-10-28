@@ -84,7 +84,7 @@ export type Verdict =
       /**
        * Lusong never says PATV: on the acceptance set it read knee-deep water as shallower on 3 of 8
        * photos (gate run 1, 2026-10-28). Where the MMDA table would say PATV it says "shallow", or
-       * "unsure" when confidence is low or the reading set is incomplete.
+       * "unsure" when confidence is low. An incomplete reading set is "unsure" unless it already reads NPATV.
        */
       passability: Exclude<Passability, "PATV"> | "shallow" | "unsure";
       confidence: Confidence;
@@ -151,11 +151,13 @@ export function decideVerdict(input: {
   const confidence = confidenceFor(usable.length, rangeCm.high - rangeCm.low);
   const cls = passabilityFor(rangeCm.high);
 
-  const doubtful = confidence === "low" || !input.readingsComplete;
+  // A missing or broken reading can hide a deeper spot, so an incomplete set can only keep NPATV, the deepest class.
+  const passability =
+    cls === "NPATV" ? cls : !input.readingsComplete ? "unsure" : cls === "NPLV" ? cls : confidence === "low" ? "unsure" : "shallow";
   return {
     kind: "measured",
     rangeCm,
-    passability: cls !== "PATV" ? cls : doubtful ? "unsure" : "shallow",
+    passability,
     confidence,
     readingsComplete: input.readingsComplete,
     decidedBy: deepest,

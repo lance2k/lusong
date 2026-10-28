@@ -182,6 +182,42 @@ describe("the check handler", () => {
     expect((await handler(post("192.0.2.2"))).status).toBe(503);
   });
 
+  it("no text the model wrote reaches the page, so it cannot call a street passable", async () => {
+    const claim = "Passable to all vehicles";
+    const museSaysPassable = () =>
+      Response.json({
+        choices: [
+          {
+            finish_reason: "stop",
+            message: {
+              content: JSON.stringify({
+                is_flooded_street: true,
+                caveats: claim,
+                readings: [{ label: "P1", waterline: "ankle", in_water: true, is_child: false, note: claim }],
+              }),
+            },
+          },
+        ],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      });
+    stubMeta({ sam: { person: [samFixture()] }, muse: [museSaysPassable] });
+    const res = await handlerWith(R)(post("192.0.2.1"));
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain('"P1"');
+    expect(body).not.toMatch(/passable to all/i);
+  });
+
+  it("the sample results the page shows carry no text the model wrote", () => {
+    const index = JSON.parse(readFileSync("public/samples/index.json", "utf8")) as { result: string }[];
+    expect(index.length).toBeGreaterThan(0);
+    for (const { result } of index) {
+      const sample = JSON.parse(readFileSync(`public${result}`, "utf8"));
+      expect(Object.keys(sample).sort()).toEqual(["image", "objects", "timingsMs", "verdict", "water"]);
+      for (const o of sample.objects) expect(o).not.toHaveProperty("note");
+    }
+  });
+
   it("a failed check keeps its reservation", async () => {
     stubMeta({ sam: { person: [serverError()] } });
     const handler = handlerWith(R + 7_500);

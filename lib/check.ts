@@ -41,6 +41,28 @@ export interface CheckResult {
   timingsMs: { segmentation: number; readings: number; total: number };
 }
 
+/** What the page receives. Nothing the model wrote as free text, so it cannot put "passable" on the page. */
+export type PageObject = Omit<CheckedObject, "note">;
+export type PageResult = Pick<CheckResult, "image" | "water" | "verdict" | "timingsMs"> & { objects: PageObject[] };
+
+export function forPage(result: CheckResult): PageResult {
+  return {
+    image: result.image,
+    water: result.water,
+    objects: result.objects.map((o) => ({
+      label: o.label,
+      kind: o.kind,
+      box: o.box,
+      waterlineY: o.waterlineY,
+      landmark: o.landmark,
+      usable: o.usable,
+      interval: o.interval,
+    })),
+    verdict: result.verdict,
+    timingsMs: result.timingsMs,
+  };
+}
+
 function pickObjects(
   found: { kind: ObjectKind; object: SamObject }[],
   image: { width: number; height: number },

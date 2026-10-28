@@ -1,5 +1,5 @@
 import { budgetFromEnv, type Budget, type RefusalReason } from "./budget";
-import { checkPhoto } from "./check";
+import { checkPhoto, forPage } from "./check";
 import { JpegError, sanitizeJpeg } from "./jpeg";
 import { Meter, MetaApiError } from "./meta";
 
@@ -58,7 +58,7 @@ export function makeCheckHandler(deps: { budget: () => Budget; now?: () => Date 
       const imageDataUrl = `data:image/jpeg;base64,${Buffer.from(jpeg.bytes).toString("base64")}`;
       const result = await checkPhoto(imageDataUrl, { width: jpeg.width, height: jpeg.height }, meter);
       succeeded = true;
-      return Response.json(result);
+      return Response.json(forPage(result));
     } catch (err) {
       console.error("check failed:", err instanceof MetaApiError ? err.message : err);
       return fail(502, "The measuring service didn't answer. Try again in a minute.");
