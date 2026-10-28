@@ -21,9 +21,13 @@ function apiKey(): string {
   return key;
 }
 
+/** Retry-After is either delay-seconds or an HTTP-date (RFC 9110 §10.2.3). */
 function retryWaitMs(res: Response): number {
-  const seconds = Number(res.headers.get("retry-after"));
-  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : DEFAULT_RETRY_WAIT_MS;
+  const header = res.headers.get("retry-after")?.trim();
+  if (!header) return DEFAULT_RETRY_WAIT_MS;
+  if (/^\d+$/.test(header)) return Number(header) * 1000;
+  const at = Date.parse(header);
+  return Number.isFinite(at) ? Math.max(0, at - Date.now()) : DEFAULT_RETRY_WAIT_MS;
 }
 
 /**

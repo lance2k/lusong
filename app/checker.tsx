@@ -225,13 +225,17 @@ export default function Checker() {
   /** Set synchronously, before the async resize, so a second pick can't start a second paid check. */
   const inFlight = useRef(false);
   const shownUrl = useRef<string | null>(null);
+  /** Set on unmount so a resize still running then neither creates a URL nor starts a paid check. */
+  const disposed = useRef(false);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    disposed.current = false;
+    return () => {
+      disposed.current = true;
       if (shownUrl.current) URL.revokeObjectURL(shownUrl.current);
-    },
-    [],
-  );
+      shownUrl.current = null;
+    };
+  }, []);
 
   function showPreview(blob: Blob): string {
     if (shownUrl.current) URL.revokeObjectURL(shownUrl.current);
@@ -251,6 +255,7 @@ export default function Checker() {
         setState({ step: "failed", previewUrl: null, message: "This browser couldn't open that photo. Try a JPEG or PNG." });
         return;
       }
+      if (disposed.current) return;
       const previewUrl = showPreview(blob);
       setState({ step: "measuring", previewUrl, startedAt: Date.now() });
       const form = new FormData();

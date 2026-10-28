@@ -78,10 +78,14 @@ function* walkJpeg(bytes: Uint8Array): Generator<Part> {
 export function sanitizeJpeg(bytes: Uint8Array): { width: number; height: number; bytes: Uint8Array } {
   const kept: Uint8Array[] = [bytes.subarray(0, 2)];
   let size: { width: number; height: number } | null = null;
+  let scans = 0;
   for (const part of walkJpeg(bytes)) {
+    if (part.type === "scan") scans++;
     if (part.type === "marker" && isStartOfFrame(part.marker) && size === null) {
       const at = part.lengthAt;
       if (part.end - at < 8) throw new JpegError("JPEG frame header too short");
+      const components = bytes[at + 7];
+      if (components === 0 || part.end - at < 8 + 3 * components) throw new JpegError("JPEG frame header too short");
       const height = (bytes[at + 3] << 8) | bytes[at + 4];
       const width = (bytes[at + 5] << 8) | bytes[at + 6];
       if (width === 0 || height === 0) throw new JpegError("JPEG has no size");
@@ -91,6 +95,7 @@ export function sanitizeJpeg(bytes: Uint8Array): { width: number; height: number
     kept.push(bytes.subarray(part.start, part.end));
   }
   if (size === null) throw new JpegError("JPEG has no frame header");
+  if (scans === 0) throw new JpegError("JPEG has no image data");
 
   const out = new Uint8Array(kept.reduce((total, chunk) => total + chunk.length, 0));
   let offset = 0;

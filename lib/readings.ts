@@ -103,14 +103,37 @@ function depthRank(r: Reading): number {
  * landmark for the other kind of object. Any problem means the set may be missing its deepest
  * reading, which only a "passable" verdict could get wrong.
  */
+function isRawReading(value: unknown): value is RawReading {
+  if (typeof value !== "object" || value === null) return false;
+  const r = value as Record<string, unknown>;
+  return (
+    typeof r.label === "string" &&
+    typeof r.in_water === "boolean" &&
+    typeof r.waterline === "string" &&
+    typeof r.is_child === "boolean"
+  );
+}
+
+/**
+ * The reply is checked field by field here even though the request asks for strict schema
+ * decoding: a reading whose decision fields are missing or mistyped must count as a problem, not
+ * silently drop out of the set.
+ */
 export function normalizeReadings(
-  raw: RawReadings,
+  raw: unknown,
   objects: readonly LabelledObject[],
 ): { readings: Reading[]; notes: Record<string, string>; problems: string[] } {
   const byLabel = new Map(objects.map((o) => [o.label, o]));
   const chosen = new Map<string, { reading: Reading; note: string }>();
   const problems: string[] = [];
-  for (const r of raw.readings) {
+  const list = (raw as { readings?: unknown } | null)?.readings;
+  if (!Array.isArray(list)) problems.push("readings missing");
+  for (const entry of Array.isArray(list) ? list : []) {
+    if (!isRawReading(entry)) {
+      problems.push("a reading with missing or mistyped fields");
+      continue;
+    }
+    const r = { ...entry, note: typeof entry.note === "string" ? entry.note : "" };
     const object = byLabel.get(r.label);
     if (!object) {
       problems.push(`unexpected label ${r.label}`);
@@ -165,7 +188,11 @@ export async function readWaterlines(
     schema: READINGS_SCHEMA,
     maxCompletionTokens: 5000,
     deadline,
-  })) as RawReadings;
+  })) as Partial<RawReadings> | null;
 
-  return { modelSaysFlooded: raw.is_flooded_street, caveats: raw.caveats, ...normalizeReadings(raw, objects) };
+  return {
+    modelSaysFlooded: raw?.is_flooded_street === true,
+    caveats: typeof raw?.caveats === "string" ? raw.caveats : "",
+    ...normalizeReadings(raw, objects),
+  };
 }

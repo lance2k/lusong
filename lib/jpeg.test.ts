@@ -54,20 +54,25 @@ describe("sanitizeJpeg", () => {
     expect(Buffer.from(clean.subarray(-2)).toString("hex")).toBe("ffd9");
   });
 
-  it.skipIf(!hasPil)("removes metadata between scans, before EOI and after EOI in a progressive JPEG", () => {
+  function taggedProgressive(): Uint8Array {
     const secondScan = markerPositions(progressive, 0xda)[1];
     let tagged = splice(progressive, secondScan, segment(0xe1, "Exif\0\0GPSLatitude=14.5995"));
-    const eoi = tagged.length - 2;
-    tagged = splice(tagged, eoi, segment(0xfe, "taken at home"));
-    tagged = new Uint8Array([...tagged, ...new TextEncoder().encode("Exif GPSLongitude=120.9842")]);
-    expect(markerPositions(tagged, 0xda).length).toBe(10);
+    tagged = splice(tagged, tagged.length - 2, segment(0xfe, "taken at home"));
+    return new Uint8Array([...tagged, ...new TextEncoder().encode("Exif GPSLongitude=120.9842")]);
+  }
 
+  it("removes metadata between scans, before EOI and after EOI in a progressive JPEG", () => {
+    const tagged = taggedProgressive();
+    expect(markerPositions(tagged, 0xda).length).toBe(10);
     const clean = sanitizeJpeg(tagged);
     expect(contains(clean.bytes, "GPSLatitude")).toBe(false);
     expect(contains(clean.bytes, "taken at home")).toBe(false);
     expect(contains(clean.bytes, "GPSLongitude")).toBe(false);
     expect(Buffer.from(clean.bytes).equals(Buffer.from(progressive))).toBe(true);
-    expect(decodedSize(clean.bytes)).toBe("1280 960");
+  });
+
+  it.skipIf(!hasPil)("leaves the cleaned progressive JPEG decodable", () => {
+    expect(decodedSize(sanitizeJpeg(taggedProgressive()).bytes)).toBe("1280 960");
   });
 
   it.skipIf(!hasPil)("leaves a clean baseline photo decodable", () => {
@@ -86,6 +91,16 @@ describe("sanitizeJpeg", () => {
   it("rejects a frame header too short to hold a size", () => {
     const tiny = new Uint8Array([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x04, 0x08, 0x00, 0xff, 0xd9]);
     expect(() => sanitizeJpeg(tiny)).toThrow(JpegError);
+  });
+
+  it("rejects a frame header missing its component descriptors", () => {
+    const short = new Uint8Array([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x08, 0x08, 0x00, 0x10, 0x00, 0x10, 0x03, 0xff, 0xd9]);
+    expect(() => sanitizeJpeg(short)).toThrow(JpegError);
+  });
+
+  it("rejects a complete frame header with no scan", () => {
+    const noScan = new Uint8Array([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x10, 0x00, 0x10, 0x01, 0x01, 0x11, 0x00, 0xff, 0xd9]);
+    expect(() => sanitizeJpeg(noScan)).toThrow(JpegError);
   });
 
   it("rejects a zero-sized frame", () => {

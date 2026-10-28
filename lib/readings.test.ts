@@ -52,6 +52,27 @@ describe("normalizeReadings + decideVerdict: a broken reply never yields PATV", 
     expect(v.kind === "measured" && v.passability).toBe("unsure");
   });
 
+  it("the deepest reading with in_water missing", () => {
+    const reply = raw(["P1", "half_knee"], ["P2", "half_knee"], ["P3", "waist"]);
+    delete (reply.readings[2] as Partial<(typeof reply.readings)[number]>).in_water;
+    expect(normalizeReadings(reply, objects).problems).toEqual(["a reading with missing or mistyped fields", "P3 missing"]);
+    const v = verdictFor(reply);
+    expect(v.kind === "measured" && v.passability).toBe("unsure");
+  });
+
+  it("the deepest reading with is_child as a string", () => {
+    const reply = raw(["P1", "half_knee"], ["P2", "half_knee"], ["P3", "waist"]);
+    (reply.readings[2] as unknown as Record<string, unknown>).is_child = "false";
+    const v = verdictFor(reply);
+    expect(v.kind === "measured" && v.passability).toBe("unsure");
+  });
+
+  it("a reply with no readings array", () => {
+    const { readings, problems } = normalizeReadings({ is_flooded_street: true }, objects);
+    expect(readings).toEqual([]);
+    expect(problems[0]).toBe("readings missing");
+  });
+
   it("a label nobody asked about", () => {
     const reply = raw(["P1", "half_knee"], ["P2", "half_knee"], ["P3", "half_knee"], ["P9", "chest"]);
     expect(normalizeReadings(reply, objects).problems).toEqual(["unexpected label P9"]);

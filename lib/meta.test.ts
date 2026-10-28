@@ -35,6 +35,24 @@ describe("postJson retries within one deadline", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("reads an HTTP-date Retry-After: fails when it lands past the deadline", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(busy(new Date(60_000).toUTCString()));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(segment("data:image/jpeg;base64,", "person", 30_000)).rejects.toBeInstanceOf(MetaApiError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads an HTTP-date Retry-After: waits for it when it fits", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(busy(new Date(5_000).toUTCString())).mockResolvedValueOnce(ok());
+    vi.stubGlobal("fetch", fetchMock);
+    const result = segment("data:image/jpeg;base64,", "person", 30_000);
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(result).resolves.toBe("");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("gives an attempt no more time than the deadline leaves", async () => {
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok()));
