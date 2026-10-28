@@ -236,6 +236,25 @@ describe("the check handler", () => {
     }
   });
 
+  it("a capped reply without usage keeps its whole reservation", async () => {
+    const recorded = JSON.parse(JSON.parse(readFileSync("test/fixtures/muse/shah-alam-capped-1500.json", "utf8")).replies[0].body);
+    delete recorded.usage;
+    stubMeta({ sam: { person: [samFixture()] }, muse: [() => Response.json(recorded)] });
+    const handler = handlerWith(R + 7_500);
+    const res = await handler(post("192.0.2.1"));
+    expect((await res.json()).verdict).toEqual({ kind: "cannot_measure", reason: "too_crowded" });
+    expect((await handler(post("192.0.2.2"))).status).toBe(503);
+  });
+
+  it("an empty reply that did not stop at the cap is still a failed check, not 'too crowded'", async () => {
+    const empty = () =>
+      Response.json({ choices: [{ finish_reason: "stop", message: { content: "" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+    stubMeta({ sam: { person: [samFixture()] }, muse: [empty] });
+    const res = await handlerWith(R)(post("192.0.2.1"));
+    expect(res.status).toBe(502);
+    expect(await res.text()).not.toContain("too_crowded");
+  });
+
   it("a failed check keeps its reservation", async () => {
     stubMeta({ sam: { person: [serverError()] } });
     const handler = handlerWith(R + 7_500);

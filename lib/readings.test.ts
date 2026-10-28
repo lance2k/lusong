@@ -82,6 +82,23 @@ describe("normalizeReadings + decideVerdict: a broken reply is never 'shallow'",
     expect(verdictFor(raw(["P1", "knee"], ["P2", "waist"]))).toMatchObject({ passability: "NPATV", readingsComplete: false });
   });
 
+  it("a missing only reading is 'cannot measure', never 'no flood', even when nothing else saw water", () => {
+    const dry = { waterFound: false, modelSaysFlooded: false };
+    const decide = (reply: RawReadings) => {
+      const { readings, problems } = normalizeReadings(reply, objects);
+      return decideVerdict({ readings, readingsComplete: problems.length === 0, ...dry });
+    };
+    expect(decide(raw(["P1", "waist"], ["P2", "not_visible"], ["P3", "not_visible"]))).toMatchObject({ passability: "NPATV" });
+
+    expect(decide(raw(["P2", "not_visible"], ["P3", "not_visible"]))).toEqual({ kind: "cannot_measure" });
+
+    const mistyped = raw(["P1", "waist"], ["P2", "not_visible"], ["P3", "not_visible"]);
+    (mistyped.readings[0] as unknown as Record<string, unknown>).is_child = "false";
+    expect(decide(mistyped)).toEqual({ kind: "cannot_measure" });
+
+    expect(decide(raw(["P1", "not_visible"], ["P2", "not_visible"], ["P3", "not_visible"]))).toEqual({ kind: "no_flood" });
+  });
+
   it("a reply with no readings array", () => {
     const { readings, problems } = normalizeReadings({ is_flooded_street: true }, objects);
     expect(readings).toEqual([]);

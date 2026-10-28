@@ -140,7 +140,8 @@ export function decideVerdict(input: {
 }): Verdict {
   const usable = input.readings.filter(isUsable);
   if (usable.length === 0) {
-    return !input.waterFound && !input.modelSaysFlooded ? { kind: "no_flood" } : { kind: "cannot_measure" };
+    const dry = !input.waterFound && !input.modelSaysFlooded && input.readingsComplete;
+    return dry ? { kind: "no_flood" } : { kind: "cannot_measure" };
   }
 
   const measured = usable.map((r) => {
