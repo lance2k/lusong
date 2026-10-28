@@ -168,6 +168,9 @@ export function normalizeReadings(
   return { readings, notes, problems };
 }
 
+/** Reasoning counts against it. At 5,000, one 11-object scene ran out (acceptance run 1, 2026-10-28). */
+export const MUSE_MAX_COMPLETION_TOKENS = 8_000;
+
 export async function readWaterlines(
   imageDataUrl: string,
   objects: readonly LabelledObject[],
@@ -187,7 +190,7 @@ export async function readWaterlines(
     ],
     schemaName: "waterline_readings",
     schema: READINGS_SCHEMA,
-    maxCompletionTokens: 5000,
+    maxCompletionTokens: MUSE_MAX_COMPLETION_TOKENS,
     deadline,
     meter,
   })) as Partial<RawReadings> | null;

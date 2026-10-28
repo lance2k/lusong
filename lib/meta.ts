@@ -163,7 +163,8 @@ export async function chatJson(request: {
       },
       max_completion_tokens: request.maxCompletionTokens,
     },
-    45_000,
+    // 8,000 output tokens at the slowest measured rate (156 tokens/s, 27 draws) take about 51 s.
+    70_000,
     request.deadline,
     request.meter,
   )) as ChatCompletion;

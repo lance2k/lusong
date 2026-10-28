@@ -93,8 +93,8 @@ function headline(v: Verdict): { title: string; code: string | null; tone: keyof
   if (v.kind === "cannot_measure") return { title: "Can't measure this one", code: null, tone: "grey" };
   if (v.kind === "no_flood") return { title: "Lusong couldn't find flood water in this photo", code: null, tone: "grey" };
   switch (v.passability) {
-    case "PATV":
-      return { title: "Passable to all vehicles", code: "PATV", tone: "green" };
+    case "shallow":
+      return { title: "Shallow where measured, but not a go-ahead", code: null, tone: "amber" };
     case "unsure":
       return { title: "Unsure: treat it as not passable to light vehicles", code: null, tone: "amber" };
     case "NPLV":
@@ -130,6 +130,13 @@ function VerdictCard({ result }: { result: CheckResult }) {
               {v.readingsUsed.length} reading{v.readingsUsed.length === 1 ? "" : "s"} in all, {cm(v.rangeCm)}. The
               deepest one decides, because a car has to get through the deepest part.
             </p>
+            {v.passability === "shallow" && (
+              <p>
+                The readings put the water under 33 cm (MMDA half-tire deep) where these people and cars stand.
+                Lusong never calls a street passable: depth changes across a street, and in testing it sometimes
+                read knee-deep water as shallower than it was.
+              </p>
+            )}
             {v.passability === "unsure" && (
               <p>
                 {v.readingsComplete

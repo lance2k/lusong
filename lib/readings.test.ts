@@ -23,10 +23,10 @@ function verdictFor(reply: RawReadings) {
   return decideVerdict({ readings, readingsComplete: problems.length === 0, waterFound: true, modelSaysFlooded: true });
 }
 
-describe("normalizeReadings + decideVerdict: a broken reply never yields PATV", () => {
-  it("baseline: three agreeing half-knee readings are PATV", () => {
+describe("normalizeReadings + decideVerdict: a broken reply is never 'shallow'", () => {
+  it("baseline: three agreeing half-knee readings are 'shallow'", () => {
     const v = verdictFor(raw(["P1", "half_knee"], ["P2", "half_knee"], ["P3", "half_knee"]));
-    expect(v.kind === "measured" && v.passability).toBe("PATV");
+    expect(v.kind === "measured" && v.passability).toBe("shallow");
   });
 
   it("an omitted object", () => {

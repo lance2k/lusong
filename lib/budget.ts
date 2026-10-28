@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { MUSE_MAX_COMPLETION_TOKENS } from "./readings";
 
 /** Meta's list prices (docs, 2026-10): SAM $2.50 per 1,000 images; Muse Spark $1.25 / $4.25 per 1M tokens. */
 const SAM_IMAGE_MICROS = 2_500;
@@ -8,8 +9,6 @@ const MUSE_OUTPUT_MICROS_PER_TOKEN = 4.25;
 /** lib/meta.ts makes at most this many attempts per call; lib/check.ts makes 3 SAM calls and 1 Muse call. */
 const ATTEMPTS_PER_CALL = 2;
 const SAM_CALLS = 3;
-/** lib/readings.ts caps Muse output (reasoning included) at this. */
-const MUSE_MAX_OUTPUT_TOKENS = 5_000;
 /** 1.5 × the 3,881 input tokens measured on a 1600×1600 photo with 12 objects, the largest the route
  *  accepts (one draw, 2026-10-28; 1600×1200 measured 2,968). */
 export const MUSE_INPUT_TOKEN_BOUND = 5_822;
@@ -19,7 +18,7 @@ export const RESERVE_MICROS =
   SAM_CALLS * ATTEMPTS_PER_CALL * SAM_IMAGE_MICROS +
   ATTEMPTS_PER_CALL *
     Math.ceil(
-      MUSE_INPUT_TOKEN_BOUND * MUSE_INPUT_MICROS_PER_TOKEN + MUSE_MAX_OUTPUT_TOKENS * MUSE_OUTPUT_MICROS_PER_TOKEN,
+      MUSE_INPUT_TOKEN_BOUND * MUSE_INPUT_MICROS_PER_TOKEN + MUSE_MAX_COMPLETION_TOKENS * MUSE_OUTPUT_MICROS_PER_TOKEN,
     );
 
 /** What one check's Meta calls cost, as metered by lib/meta.ts. */

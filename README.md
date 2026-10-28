@@ -19,10 +19,11 @@ track). Everything in this repository was written during the event; the commit h
    grid). A JSON schema makes it report, for each one, where the waterline sits from a fixed list
    of landmarks (ankle, half-knee, knee… or a quarter, half, the top of a tyre).
 4. Lusong turns each landmark into a depth interval in centimetres, anchored on the MMDA gauge
-   where MMDA names that body part. The deepest reading decides: under 33 cm passable to all
-   vehicles (PATV), 33–66 cm not passable to light vehicles (NPLV), 66 cm and up not passable to
-   any (NPATV). One reading alone never says "passable". With no person or car in the water, it
-   says it can't measure.
+   where MMDA names that body part. The deepest reading decides: 33–66 cm not passable to light
+   vehicles (NPLV), 66 cm and up not passable to any (NPATV). Under 33 cm, where MMDA would say
+   passable to all vehicles (PATV), Lusong says "shallow where measured" and never PATV: the photo
+   shows only the spots where someone stands, not the deepest part of the street. With no person
+   or car in the water, it says it can't measure.
 5. The page draws the water mask, boxes each person and car it measured, and marks the waterline
    where SAM's mask of that person or car meets the water.
 
@@ -40,10 +41,15 @@ pnpm dev
 
 ### Spending limits
 
-Every check reserves its worst-case cost ($0.072: six SAM images and two Muse Spark attempts at the
-measured input bound and the 5,000-token output cap) against a daily dollar budget before any paid
+Every check reserves its worst-case cost ($0.098: six SAM images and two Muse Spark attempts at the
+measured input bound and the 8,000-token output cap) against a daily dollar budget before any paid
 call, then settles to what Meta's usage blocks report. A failed or retried call keeps the whole
 reservation. When the budget or an address's daily checks run out, the page shows sample results.
+
+This is an estimated guard, not a hard cap. Meta bills tokens after the call and has no per-request
+limit, so the reservation rests on a measured bound: 1.5× the input tokens of the largest photo the
+server accepts (1600×1600, 12 objects). An overrun that Meta reports is charged, which refuses later
+checks, so the daily total can pass the budget only by that overrun on the checks already in flight.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -66,6 +72,11 @@ LUSONG_TEST_UPSTASH_URL=http://127.0.0.1:8079 LUSONG_TEST_UPSTASH_TOKEN=local-te
 ### Acceptance set
 
 `LUSONG_LIVE=1 pnpm test test/acceptance.test.ts` runs every photo in `test/fixtures/acceptance/` twice
-through the real pipeline (about $1 a run) and writes the results to `test/acceptance-runs/`. It fails on
-any PATV for a photo whose caption says knee-deep or deeper, and on any measurement of a photo with no
-person or car in it. It screens for false PATV; it does not measure accuracy.
+through the real pipeline (about $0.70 a run) and writes the results to `test/acceptance-runs/`.
+
+Lusong never answers PATV (passable to all vehicles). The first run gave PATV on 3 of 8 photos whose
+captions say knee-deep or deeper, so where the MMDA table would say PATV the page now says "shallow
+where measured, but not a go-ahead". The run fails on "no flood found" for a knee-deep-or-deeper photo
+and on any measurement of a photo with no person or car standing in the water, and it lists every
+"shallow" or "unsure" answer on a deep photo as an under-read. It is a screen with two draws per photo,
+not an accuracy measure.

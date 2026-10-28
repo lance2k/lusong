@@ -63,10 +63,16 @@ describe("decideVerdict", () => {
     expect(deep.kind === "measured" && deep.passability).toBe("NPLV");
   });
 
-  it("two half-knee readings are PATV at medium confidence", () => {
+  it("two half-knee readings are 'shallow', never PATV, even at medium confidence", () => {
     const v = decideVerdict({ readings: [person("P1", "half_knee"), person("P2", "half_knee")], ...flooded });
-    expect(v.kind === "measured" && v.passability).toBe("PATV");
+    expect(v.kind === "measured" && v.passability).toBe("shallow");
     expect(v.kind === "measured" && v.confidence).toBe("medium");
+  });
+
+  it("three agreeing ankle readings at high confidence are still not PATV", () => {
+    const v = decideVerdict({ readings: ["P1", "P2", "P3"].map((l) => person(l, "ankle")), ...flooded });
+    expect(v.kind === "measured" && v.confidence).toBe("high");
+    expect(v.kind === "measured" && v.passability).toBe("shallow");
   });
 
   it("the deepest reading decides, and names itself", () => {

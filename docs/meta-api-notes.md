@@ -25,8 +25,9 @@ established.
   it with room to spare and treat `finish_reason: "length"` as a failure.
 - `usage.prompt_tokens` and `usage.completion_tokens` carry the counts (measured). A 1600×1600 photo with
   12 listed objects took 3,881 input tokens; 1600×1200 took 2,968 (measured, one draw each, 2026-10-28).
-  The same two calls used 4,030 and 4,843 output tokens, close to the 5,000 cap, so a scene with many
-  objects may run out of room (inferred from those two draws).
+  The same two calls used 4,030 and 4,843 output tokens, close to the 5,000 cap. In the first acceptance
+  run an 11-object scene used all 5,000 and failed, so the cap is now 8,000 (measured, one failure in 28
+  calls). Output ran at 156–264 tokens/s (median 222, 27 calls), so 8,000 tokens can take about 51 s.
 - `response_format: { type: "json_schema" }` constrains decoding to the schema (docs), which lets the
   model choose from a fixed list of landmarks instead of inventing centimetres.
 - `web_search` exists only on the Responses and Messages APIs, not on Chat Completions (docs).

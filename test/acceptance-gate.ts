@@ -57,26 +57,32 @@ function drawFailure(photo: AcceptancePhoto, d: AcceptanceDraw): string | null {
   if (photo.expect === "cannot_measure") {
     return v.kind === "cannot_measure" ? null : `${photo.file} draw ${d.draw}: ${v.kind}, expected cannot_measure`;
   }
-  if (photo.expect === "not_patv") {
-    if (v.kind === "no_flood") return `${photo.file} draw ${d.draw}: no_flood on a photo captioned ${photo.captionDepth} deep`;
-    if (v.kind === "measured" && v.passability === "PATV") {
-      return `${photo.file} draw ${d.draw}: PATV on a photo captioned ${photo.captionDepth} deep`;
-    }
+  if (photo.expect === "not_patv" && v.kind === "no_flood") {
+    return `${photo.file} draw ${d.draw}: no_flood on a photo captioned ${photo.captionDepth} deep`;
   }
   return null;
 }
 
+/** Not a failure since PATV was dropped (a Verdict cannot carry it), but the measured under-read rate. */
+function underRead(photo: AcceptancePhoto, d: AcceptanceDraw): string | null {
+  const v = d.verdict;
+  if (photo.expect !== "not_patv" || v.kind !== "measured") return null;
+  if (v.passability !== "shallow" && v.passability !== "unsure") return null;
+  return `${photo.file} draw ${d.draw}: ${v.passability}, ${v.rangeCm.low}-${v.rangeCm.high} cm, on a photo captioned ${photo.captionDepth} deep`;
+}
+
 /**
- * Blocker 3's release gate: a screen for false PATV and for measurements made with nothing to measure
- * against. It is not an accuracy measure. The manifest is checked first, so a set missing a required
+ * Blocker 3's release gate: a screen for false all-clears (no_flood on a deep photo; PATV can no longer
+ * be said at all) and for measurements made with nothing to measure against. It is not an accuracy measure. The manifest is checked first, so a set missing a required
  * case cannot pass by having nothing to fail on.
  */
 export function judgeAcceptance(
   photos: readonly AcceptancePhoto[],
   draws: readonly AcceptanceDraw[],
-): { pass: boolean; problems: string[]; failures: string[] } {
+): { pass: boolean; problems: string[]; failures: string[]; underReads: string[] } {
   const problems = manifestProblems(photos);
   const failures: string[] = [];
+  const underReads: string[] = [];
   for (const photo of photos) {
     const mine = draws.filter((d) => d.file === photo.file);
     const distinctDraws = new Set(mine.map((d) => d.draw)).size;
@@ -84,7 +90,9 @@ export function judgeAcceptance(
     for (const d of mine) {
       const failure = drawFailure(photo, d);
       if (failure) failures.push(failure);
+      const under = underRead(photo, d);
+      if (under) underReads.push(under);
     }
   }
-  return { pass: problems.length === 0 && failures.length === 0, problems, failures };
+  return { pass: problems.length === 0 && failures.length === 0, problems, failures, underReads };
 }

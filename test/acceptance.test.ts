@@ -10,11 +10,11 @@ const FIXTURES = "test/fixtures/acceptance";
 const CONCURRENCY = 4;
 
 /**
- * Blocker 3's live gate. Costs real money (about $0.02 a draw, $0.072 at worst), so it runs only with
+ * Blocker 3's live gate. Costs real money (about $0.02 a draw, $0.098 at worst), so it runs only with
  * LUSONG_LIVE=1 and MODEL_API_KEY set. Every result is written under test/acceptance-runs/ to be committed.
  */
 it.skipIf(process.env.LUSONG_LIVE !== "1")(
-  "acceptance set: no false PATV, no measurement without a reference",
+  "acceptance set: no missed flood, no measurement without a reference",
   async () => {
     const photos = JSON.parse(readFileSync(join(FIXTURES, "labels.json"), "utf8")) as AcceptancePhoto[];
     const manifest = judgeAcceptance(photos, []);

@@ -82,10 +82,11 @@ export type Verdict =
       kind: "measured";
       rangeCm: Interval;
       /**
-       * "unsure" replaces PATV when confidence is low or the reading set is incomplete: missing
-       * readings can only hide a deeper spot, so PATV is the one class they can make wrong.
+       * Lusong never says PATV: on the acceptance set it read knee-deep water as shallower on 3 of 8
+       * photos (gate run 1, 2026-10-28). Where the MMDA table would say PATV it says "shallow", or
+       * "unsure" when confidence is low or the reading set is incomplete.
        */
-      passability: Passability | "unsure";
+      passability: Exclude<Passability, "PATV"> | "shallow" | "unsure";
       confidence: Confidence;
       readingsComplete: boolean;
       /** The reading whose interval set the upper bound. */
@@ -154,7 +155,7 @@ export function decideVerdict(input: {
   return {
     kind: "measured",
     rangeCm,
-    passability: cls === "PATV" && doubtful ? "unsure" : cls,
+    passability: cls !== "PATV" ? cls : doubtful ? "unsure" : "shallow",
     confidence,
     readingsComplete: input.readingsComplete,
     decidedBy: deepest,

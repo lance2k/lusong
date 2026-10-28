@@ -11,6 +11,7 @@ import {
   type BudgetStore,
   type MeteredUsage,
 } from "./budget";
+import { MUSE_MAX_COMPLETION_TOKENS } from "./readings";
 
 const NOON = new Date("2026-11-05T04:00:00Z");
 const R = RESERVE_MICROS;
@@ -109,8 +110,8 @@ describe.each(stores)("%s", (_name, makeStore) => {
   });
 
   it("an overrun is charged, not ignored", async () => {
-    const overrun: MeteredUsage = { samImages: 3, museInputTokens: 40_000, museOutputTokens: 5_000, complete: true };
-    const overrunMicros = 3 * 2_500 + 40_000 * 1.25 + 5_000 * 4.25;
+    const overrun: MeteredUsage = { samImages: 3, museInputTokens: 80_000, museOutputTokens: 5_000, complete: true };
+    const overrunMicros = 3 * 2_500 + 80_000 * 1.25 + 5_000 * 4.25;
     expect(overrunMicros).toBeGreaterThan(R);
     const budget = budgetOfMicros(overrunMicros + R - 1);
     await budget.settle(admitted(await budget.admit("192.0.2.1", NOON)), overrun, true);
@@ -143,7 +144,7 @@ describe("the reservation", () => {
     const everyAttempt: MeteredUsage = {
       samImages: 6,
       museInputTokens: 2 * MUSE_INPUT_TOKEN_BOUND,
-      museOutputTokens: 2 * 5_000,
+      museOutputTokens: 2 * MUSE_MAX_COMPLETION_TOKENS,
       complete: true,
     };
     const budget = createBudget({ store: new MemoryBudgetStore(), budgetUsd: (2 * R) / 1e6, ipLimit: 10 });

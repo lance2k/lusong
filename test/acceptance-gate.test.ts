@@ -29,7 +29,7 @@ const MANIFEST: AcceptancePhoto[] = [
   photo("empty-road.jpg", null, 0),
 ];
 
-const measured = (passability: "PATV" | "NPLV" | "NPATV" | "unsure"): Verdict => ({
+const measured = (passability: "shallow" | "NPLV" | "NPATV" | "unsure"): Verdict => ({
   kind: "measured",
   rangeCm: { low: 38, high: 54 },
   passability,
@@ -50,15 +50,15 @@ function cleanRun(): { file: string; draw: number; verdict: Verdict }[] {
 }
 
 describe("the acceptance gate", () => {
-  it("passes a run with no false PATV and every no-reference photo unmeasured", () => {
-    expect(judgeAcceptance(MANIFEST, cleanRun())).toEqual({ pass: true, problems: [], failures: [] });
+  it("passes a run with every deep photo measured and every no-reference photo unmeasured", () => {
+    expect(judgeAcceptance(MANIFEST, cleanRun())).toEqual({ pass: true, problems: [], failures: [], underReads: [] });
   });
 
-  it("an injected PATV on a knee-deep photo fails the gate", () => {
-    const run = cleanRun().map((r) => (r.file === "knee-pair.jpg" && r.draw === 2 ? { ...r, verdict: measured("PATV") } : r));
+  it("'shallow' on a knee-deep photo is reported as an under-read, not a failure", () => {
+    const run = cleanRun().map((r) => (r.file === "knee-pair.jpg" && r.draw === 2 ? { ...r, verdict: measured("shallow") } : r));
     const verdict = judgeAcceptance(MANIFEST, run);
-    expect(verdict.pass).toBe(false);
-    expect(verdict.failures).toEqual(["knee-pair.jpg draw 2: PATV on a photo captioned knee deep"]);
+    expect(verdict.pass).toBe(true);
+    expect(verdict.underReads).toEqual(["knee-pair.jpg draw 2: shallow, 38-54 cm, on a photo captioned knee deep"]);
   });
 
   it("'no flood found' on a knee-deep photo fails the gate", () => {
