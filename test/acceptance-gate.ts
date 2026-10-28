@@ -40,6 +40,8 @@ function manifestProblems(photos: readonly AcceptancePhoto[]): string[] {
   if (noReference.length < MIN_NO_REFERENCE) {
     problems.push(`${MIN_NO_REFERENCE} photos with no person or car needed, ${noReference.length} found`);
   }
+  const files = photos.map((p) => p.file);
+  for (const file of new Set(files.filter((f, i) => files.indexOf(f) !== i))) problems.push(`${file}: listed twice`);
   for (const p of photos) {
     if (!OPEN_LICENCE.test(p.licence)) problems.push(`${p.file}: licence ${p.licence}`);
     if (p.refs === 0 && p.expect !== "cannot_measure") problems.push(`${p.file}: no reference but expects ${p.expect}`);
@@ -75,7 +77,8 @@ export function judgeAcceptance(
   const failures: string[] = [];
   for (const photo of photos) {
     const mine = draws.filter((d) => d.file === photo.file);
-    if (mine.length < DRAWS_PER_PHOTO) failures.push(`${photo.file}: ${mine.length} of ${DRAWS_PER_PHOTO} draws`);
+    const distinctDraws = new Set(mine.map((d) => d.draw)).size;
+    if (distinctDraws < DRAWS_PER_PHOTO) failures.push(`${photo.file}: ${distinctDraws} of ${DRAWS_PER_PHOTO} draws`);
     for (const d of mine) {
       const failure = drawFailure(photo, d);
       if (failure) failures.push(failure);

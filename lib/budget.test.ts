@@ -117,6 +117,17 @@ describe.each(stores)("%s", (_name, makeStore) => {
     expect(await budget.admit("192.0.2.2", NOON)).toEqual({ ok: false, reason: "budget" });
   });
 
+  it("a settle naming another day changes nothing", async () => {
+    const store = makeStore();
+    const admit = (id: string) =>
+      store.admit({ id, day: "2026-11-05", ipKey: id, reserveMicros: R, budgetMicros: R + 7_500, ipLimit: 10 });
+    expect(await admit("first")).toBe("admitted");
+    expect(await store.settle({ id: "first", day: "2026-11-06", chargeMicros: 0 })).toBe(false);
+    expect(await admit("second")).toBe("budget");
+    expect(await store.settle({ id: "first", day: "2026-11-05", chargeMicros: 0 })).toBe(true);
+    expect(await admit("third")).toBe("admitted");
+  });
+
   it("a refund after midnight goes back to the day it was reserved on", async () => {
     const budget = budgetOfMicros(R + 7_500);
     const lateNight = new Date("2026-11-05T23:59:59Z");

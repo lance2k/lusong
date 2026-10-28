@@ -177,14 +177,17 @@ redis.call('INCRBY', KEYS[1], reserve)
 redis.call('EXPIRE', KEYS[1], ttl)
 redis.call('INCR', KEYS[2])
 redis.call('EXPIRE', KEYS[2], ttl)
-redis.call('SET', KEYS[3], reserve, 'EX', ttl)
+redis.call('SET', KEYS[3], reserve .. ':' .. ARGV[5], 'EX', ttl)
 return 'admitted'
 `;
 
-/** The spend key may have expired by settle time; INCRBY would then recreate it with no TTL. */
+/** A reservation settles only against the day it was made on. The spend key may have expired by
+ *  settle time; INCRBY would then recreate it with no TTL. */
 const SETTLE_SCRIPT = `
-local reserved = redis.call('GET', KEYS[1])
-if not reserved then return 0 end
+local open = redis.call('GET', KEYS[1])
+if not open then return 0 end
+local reserved, day = string.match(open, '^(%d+):(.+)$')
+if day ~= ARGV[2] then return 0 end
 redis.call('DEL', KEYS[1])
 if redis.call('EXISTS', KEYS[2]) == 1 then
   redis.call('INCRBY', KEYS[2], tonumber(ARGV[1]) - tonumber(reserved))
@@ -219,7 +222,7 @@ export class UpstashBudgetStore implements BudgetStore {
     const result = await this.evalScript(
       ADMIT_SCRIPT,
       [`${this.prefix}:spent:${a.day}`, `${this.prefix}:ip:${a.day}:${a.ipKey}`, `${this.prefix}:res:${a.id}`],
-      [a.reserveMicros, a.budgetMicros, a.ipLimit, KEY_TTL_SECONDS],
+      [a.reserveMicros, a.budgetMicros, a.ipLimit, KEY_TTL_SECONDS, a.day],
     );
     if (result === "admitted" || result === "budget" || result === "ip") return result;
     throw new Error(`unexpected admit result ${JSON.stringify(result)}`);
@@ -229,7 +232,7 @@ export class UpstashBudgetStore implements BudgetStore {
     const result = await this.evalScript(
       SETTLE_SCRIPT,
       [`${this.prefix}:res:${s.id}`, `${this.prefix}:spent:${s.day}`],
-      [s.chargeMicros],
+      [s.chargeMicros, s.day],
     );
     return result === 1;
   }

@@ -19,6 +19,7 @@ it.skipIf(process.env.LUSONG_LIVE !== "1")(
     const photos = JSON.parse(readFileSync(join(FIXTURES, "labels.json"), "utf8")) as AcceptancePhoto[];
     const manifest = judgeAcceptance(photos, []);
     expect(manifest.problems, "fix the manifest before spending on it").toEqual([]);
+    const prepared = new Map(photos.map((p) => [p.file, sanitizeJpeg(new Uint8Array(readFileSync(join(FIXTURES, p.file))))]));
 
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     const outDir = join("test/acceptance-runs", stamp);
@@ -31,7 +32,7 @@ it.skipIf(process.env.LUSONG_LIVE !== "1")(
     async function worker() {
       while (nextJob < jobs.length) {
         const { photo, draw } = jobs[nextJob++];
-        const jpeg = sanitizeJpeg(new Uint8Array(readFileSync(join(FIXTURES, photo.file))));
+        const jpeg = prepared.get(photo.file)!;
         const meter = new Meter();
         try {
           const result = await checkPhoto(
@@ -46,10 +47,13 @@ it.skipIf(process.env.LUSONG_LIVE !== "1")(
         }
       }
     }
-    await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+    try {
+      await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+    } finally {
+      writeFileSync(join(outDir, "results.json"), JSON.stringify({ stamp, judged: judgeAcceptance(photos, draws), records }, null, 1));
+    }
 
     const judged = judgeAcceptance(photos, draws);
-    writeFileSync(join(outDir, "results.json"), JSON.stringify({ stamp, judged, records }, null, 1));
     expect(judged.failures).toEqual([]);
     expect(judged.pass).toBe(true);
   },

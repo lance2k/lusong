@@ -96,6 +96,16 @@ describe("the acceptance gate", () => {
     expect(judgeAcceptance(mislabelled, cleanRun()).problems).toEqual(["chest-one.jpg: captioned chest deep but expects any"]);
   });
 
+  it("a manifest listing one photo twice is rejected", () => {
+    const doubled = [...MANIFEST, MANIFEST[0]];
+    expect(judgeAcceptance(doubled, cleanRun()).problems).toEqual(["knee-crowd.jpg: listed twice"]);
+  });
+
+  it("the same draw reported twice counts once", () => {
+    const run = cleanRun().map((r) => (r.file === "waist-one.jpg" && r.draw === 2 ? { ...r, draw: 1 } : r));
+    expect(judgeAcceptance(MANIFEST, run).failures).toEqual(["waist-one.jpg: 1 of 2 draws"]);
+  });
+
   it("a photo whose licence is not on the open list is rejected", () => {
     const closed = MANIFEST.map((p) => (p.file === "thigh-one.jpg" ? { ...p, licence: "All rights reserved" } : p));
     expect(judgeAcceptance(closed, cleanRun()).problems).toEqual(["thigh-one.jpg: licence All rights reserved"]);

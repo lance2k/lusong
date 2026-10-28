@@ -143,6 +143,45 @@ describe("the check handler", () => {
     expect((await handler(post("192.0.2.2"))).status).toBe(503);
   });
 
+  /** Three SAM images plus 2,000 and 3,000 Muse tokens: a refund would leave room for a second check. */
+  const MUSE_CHECK = 3 * 2_500 + 2_000 * 1.25 + 3_000 * 4.25;
+  const MUSE_USAGE = { prompt_tokens: 2_000, completion_tokens: 3_000 };
+
+  it("a SAM count that is not a whole number refunds nothing", async () => {
+    stubMeta({ sam: { car: [samEmpty({ images_processed: "1" })] } });
+    const handler = handlerWith(R + 7_500);
+    expect((await handler(post("192.0.2.1"))).status).toBe(200);
+    expect((await handler(post("192.0.2.2"))).status).toBe(503);
+  });
+
+  it("a negative Muse count refunds nothing", async () => {
+    stubMeta({ sam: { person: [samFixture()] }, muse: [museReply({ prompt_tokens: -5, completion_tokens: 3_000 })] });
+    const handler = handlerWith(R + MUSE_CHECK);
+    expect((await handler(post("192.0.2.1"))).status).toBe(200);
+    expect((await handler(post("192.0.2.2"))).status).toBe(503);
+  });
+
+  it("a retried Muse call refunds nothing", async () => {
+    stubMeta({ sam: { person: [samFixture()] }, muse: [dropped(), museReply(MUSE_USAGE)] });
+    const handler = handlerWith(R + MUSE_CHECK);
+    expect((await handler(post("192.0.2.1"))).status).toBe(200);
+    expect((await handler(post("192.0.2.2"))).status).toBe(503);
+  });
+
+  it("the same Muse call without a retry does refund (control for the two above)", async () => {
+    stubMeta({ sam: { person: [samFixture()] }, muse: [museReply(MUSE_USAGE)] });
+    const handler = handlerWith(R + MUSE_CHECK);
+    expect((await handler(post("192.0.2.1"))).status).toBe(200);
+    expect((await handler(post("192.0.2.2"))).status).toBe(200);
+  });
+
+  it("a reply whose body is not JSON fails the check and keeps its reservation", async () => {
+    stubMeta({ sam: { person: [() => new Response("<html>gateway</html>", { status: 200 })] } });
+    const handler = handlerWith(R + 7_500);
+    expect((await handler(post("192.0.2.1"))).status).toBe(502);
+    expect((await handler(post("192.0.2.2"))).status).toBe(503);
+  });
+
   it("a failed check keeps its reservation", async () => {
     stubMeta({ sam: { person: [serverError()] } });
     const handler = handlerWith(R + 7_500);

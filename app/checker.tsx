@@ -337,6 +337,8 @@ export default function Checker() {
   const shownUrl = useRef<string | null>(null);
   /** Set on unmount so a resize still running then neither creates a URL nor starts a paid check. */
   const disposed = useRef(false);
+  /** Samples load after the paid-check lock is released, so a late load must not land on a newer check. */
+  const latestCheck = useRef(0);
 
   useEffect(() => {
     disposed.current = false;
@@ -356,6 +358,7 @@ export default function Checker() {
   async function check(file: File) {
     if (inFlight.current) return;
     inFlight.current = true;
+    const thisCheck = ++latestCheck.current;
     setState({ step: "preparing" });
     try {
       let blob: Blob;
@@ -376,10 +379,13 @@ export default function Checker() {
         if (!res.ok && REFUSAL_REASONS.includes(body.reason)) {
           const message = body.error ?? "Lusong can't take new checks right now.";
           setState({ step: "refused", message, samples: null, shown: 0 });
-          const samples = await loadSamples().catch(() => null);
-          if (!disposed.current && samples) {
-            setState((s) => (s.step === "refused" && s.message === message ? { ...s, samples } : s));
-          }
+          void loadSamples().then(
+            (samples) => {
+              if (disposed.current || latestCheck.current !== thisCheck) return;
+              setState((s) => (s.step === "refused" ? { ...s, samples } : s));
+            },
+            () => {},
+          );
           return;
         }
         if (!res.ok) throw new Error(body.error ?? "Something went wrong.");
