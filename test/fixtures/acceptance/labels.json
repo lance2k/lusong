@@ -1,0 +1,167 @@
+[
+ {
+  "file": "quiapo-1.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Quiapo,_Manila_Floods_Habagat-Carina_2024-1.jpg",
+  "licence": "CC BY-SA 4.0",
+  "author": "Michael Peronce (User:Mikeee 07)",
+  "caption": "Knee-deep flood lashes Quiapo district in the City of Manila due to southwest monsoon (Habagat) induced by Typhoon Carina (Gaemi).",
+  "captionDepth": "knee",
+  "refs": 6,
+  "expect": "not_patv",
+  "note": "Six waders, small at full width."
+ },
+ {
+  "file": "quiapo-2.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Quiapo,_Manila_Floods_Habagat-Carina_2024-2.jpg",
+  "licence": "CC BY-SA 4.0",
+  "author": "Michael Peronce (User:Mikeee 07)",
+  "caption": "Knee-deep flood lashes Quiapo district in the City of Manila due to southwest monsoon (Habagat) induced by Typhoon Carina (Gaemi).",
+  "captionDepth": "knee",
+  "refs": 0,
+  "expect": "cannot_measure",
+  "note": "Flooded street with nobody in the water."
+ },
+ {
+  "file": "grand-forks-1997.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:FEMA_-_1614_-_Photograph_by_Dave_Saville_taken_on_04-01-1997_in_Minnesota.jpg",
+  "licence": "Public domain",
+  "author": "Dave Saville",
+  "caption": "East Grand Forks, MN, 04/01/1997 -- An engineer walks through waist deep water along the roadbed of Highway 2 toward the Kennedy Bridge. FEMA/David Saville",
+  "captionDepth": "waist",
+  "refs": 1,
+  "expect": "not_patv",
+  "note": "One wader in open water."
+ },
+ {
+  "file": "townsville-1946.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:StateLibQld_1_83759_Townsville_during_flood,_1946.jpg",
+  "licence": "Public domain",
+  "author": "Unknown author Unknown author",
+  "caption": "Townsville during flood, 1946. Floodwaters in Plume Street, South Townsville. Image shows flooded houses and businesses. People are walking waist-deep through the water.",
+  "captionDepth": "waist",
+  "refs": 4,
+  "expect": "not_patv",
+  "note": "Black and white; four waders."
+ },
+ {
+  "file": "brisbane-margaret-st-1890.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:StateLibQld_1_130883_Margaret_Street,_Brisbane,_during_the_1890_flood.jpg",
+  "licence": "Public domain",
+  "author": "Hogg, J. J.",
+  "caption": "Margaret Street, Brisbane, during the 1890 flood. Margaret Street, looking south, during the 1890 flood. People are seen standing, pants rolled up, in knee-deep water in the middle of the street. Image depicts intersection of Margaret and Edward Streets. On the south-east side of the intersection is the Shamrock Hotel, and on the north-east side is the Harbours and Rivers Department building. The ",
+  "captionDepth": "knee",
+  "refs": 8,
+  "expect": "not_patv",
+  "note": "Black and white; many small figures."
+ },
+ {
+  "file": "barasoain-wedding.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Jade_Rick_Verdillo_and_Jamaica_Aguilar_walked_down_a_knee-deep,_flooded_aisle_in_their_wedding.jpg",
+  "licence": "CC BY 2.5",
+  "author": "Aaron Favila",
+  "caption": "Jade Rick Verdillo and Jamaica Aguilar walked down a knee-deep, flooded aisle in their wedding at the historic Barasoain Church in Malolos, Bulacan, Philippines on July 22, 2025, after heavy monsoon rains from a typhoon submerged the venue.",
+  "captionDepth": "knee",
+  "refs": 2,
+  "expect": "not_patv",
+  "note": "Indoors: a flooded church aisle. 678 px wide."
+ },
+ {
+  "file": "new-orleans-2018.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:New_Orleans_May_2018_Flooding_-_Flooded_Walkway.jpg",
+  "licence": "CC BY 2.0",
+  "author": "Bart Everson",
+  "caption": "Meanwhile I'm over here on the walkway, wading through knee-deep water and floating debris with my bicycle, much like this person with the scooter. Yes, the elevated walkway was flooded too. Note the water gushing through the broken brick structure on the right. It's been broken wide open like that for years, but it was repaired a couple months after I took this photo. I wonder if that will make a",
+  "captionDepth": "knee",
+  "refs": 1,
+  "expect": "not_patv",
+  "note": "The caption's knee-deep is the photographer's; one person with a scooter."
+ },
+ {
+  "file": "shah-alam-2021.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Section_24,_Shah_Alam_Floodings.jpg",
+  "licence": "CC BY-SA 4.0",
+  "author": "Muhammad Zaim",
+  "caption": "Man crossing knee deep waters around a residential area at Section 24, Shah Alam during Malaysia December 2021 Floods",
+  "captionDepth": "knee",
+  "refs": 5,
+  "expect": "not_patv",
+  "note": "One wader plus parked cars standing in the water."
+ },
+ {
+  "file": "logan-road-1890.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:StateLibQld_1_50124_Logan_Road_at_Woolloongabba,_Brisbane,_during_the_1890_flood.jpg",
+  "licence": "Public domain",
+  "author": "Poulsen, Poul C., 1857-1925",
+  "caption": "Logan Road at Woolloongabba, Brisbane, during the 1890 flood. Children gathered on Logan Road at Woolloongabba, Brisbane, standing knee-deep in the floodwaters, 1890.",
+  "captionDepth": "knee",
+  "refs": 12,
+  "expect": "not_patv",
+  "note": "CHECK: the caption's knee-deep is the children's knees, about the 33 cm line. Children are excluded from readings; adults stand in it too."
+ },
+ {
+  "file": "manila-2009-pedicabs.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Flooded_urban_poor_area_in_Manila_(4046572324).jpg",
+  "licence": "CC BY 2.0",
+  "author": "SuSanA Secretariat",
+  "caption": "Photo by Jörg Dietze Oct. 2009",
+  "captionDepth": null,
+  "refs": 6,
+  "expect": "any",
+  "note": "Shallow, about ankle deep by eye; pedicabs and people."
+ },
+ {
+  "file": "awka-road.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Road_Flooding_and_Water_Erosion_at_Ichedi,_Umudioka,_Awka,_Anambra_State.jpg",
+  "licence": "CC BY-SA 4.0",
+  "author": "Johnnybam",
+  "caption": "Overflowing stormwater has flooded the street, forcing people to wade through water to cross while creating unsafe conditions for both pedestrians and motorists.",
+  "captionDepth": null,
+  "refs": 2,
+  "expect": "any",
+  "note": "Two men wading, about shin deep by eye."
+ },
+ {
+  "file": "manila-2012-raincoats.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Flood_damage_in_Manila,_Philippines_2012._Photo-_AusAID_(10695531666).jpg",
+  "licence": "CC BY 2.0",
+  "author": "Department of Foreign Affairs and Trade",
+  "caption": "Flood damage in Manila, Philippines 2012. Photo: AusAID",
+  "captionDepth": null,
+  "refs": 6,
+  "expect": "any",
+  "note": "Long raincoats hide several people's legs above the water."
+ },
+ {
+  "file": "manila-2012-canal.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Flood_damage_in_Manila,_Philippines_2012._Photo-_AusAID_(10695537345).jpg",
+  "licence": "CC BY 2.0",
+  "author": "Department of Foreign Affairs and Trade",
+  "caption": "Flood damage in Manila, Philippines 2012. Photo: AusAID",
+  "captionDepth": null,
+  "refs": 0,
+  "expect": "cannot_measure",
+  "note": "People on the bank and balconies, none in the water."
+ },
+ {
+  "file": "minot-2011-soldiers.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Black_Hawks_reinforce_flood_levees_in_Minot_110624-F-WA217-410.jpg",
+  "licence": "Public domain",
+  "author": "Senior Master Sgt. David Lipp",
+  "caption": "North Dakota Army National Guard soldiers from the 817th Engineer Company, from left to right, Spc. Ryan Lindberg, Spc. Michael Young, and Staff Sgt. Jason Lothspeich wade through flood water to sling-load one-ton sandbags from a flatbed truck onto a UH-60 Black Hawk helicopter June 24, at a flood levee near 13th Street and Railway Avenue, Minot, N.D. The North Dakota National Guard helicopter is ",
+  "captionDepth": null,
+  "refs": 3,
+  "expect": "any",
+  "note": "Shallow water, about ankle deep by eye; legs visible."
+ },
+ {
+  "file": "brisbane-queen-st-1893.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:StateLibQld_1_63831_Intersection_of_Queen_and_Edward_Streets,_Brisbane,_during_the_1893_flood.jpg",
+  "licence": "Public domain",
+  "author": "unknown",
+  "caption": "Intersection of Queen and Edward Streets, Brisbane, during the 1893 flood. Intersection of Queen and Edward Streets, looking along Queen Street towards Albert Street, Brisbane, during the 1893 flood. The men on the right are standing knee-deep in the floodwaters, while others use a boat to get around the streets.",
+  "captionDepth": null,
+  "refs": 2,
+  "expect": "any",
+  "note": "A wader at the far left looks waist deep by eye; others in a boat or at the kerb."
+ }
+]

@@ -13,6 +13,8 @@ export interface AcceptancePhoto {
   /** People and cars standing in the water, counted by a person looking at the photo. */
   refs: number;
   expect: "not_patv" | "cannot_measure" | "any";
+  /** Why the labels are what they are, for the person checking them. */
+  note?: string;
 }
 
 export interface AcceptanceDraw {
