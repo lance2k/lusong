@@ -142,7 +142,7 @@ describe.each(stores)("%s", (_name, makeStore) => {
 describe("the reservation", () => {
   it("covers every attempt at the input bound", async () => {
     const everyAttempt: MeteredUsage = {
-      samImages: 6,
+      samImages: 8,
       museInputTokens: 2 * MUSE_INPUT_TOKEN_BOUND,
       museOutputTokens: 2 * MUSE_MAX_COMPLETION_TOKENS,
       complete: true,

@@ -14,8 +14,8 @@ const DRAWS = Number(process.env.LUSONG_DEPTH_DRAWS ?? 2);
 const START_DRAWS_FOR_MS = 35 * 60_000;
 
 /**
- * Measures the depth set; it is not a gate and must not be tuned on. Costs real money (about $0.023 a draw,
- * $0.098 at worst), so it runs only with LUSONG_LIVE=1, LUSONG_DEPTH=1 and MODEL_API_KEY set. Every draw's
+ * Measures the depth set; it is not a gate and must not be tuned on. Costs real money (about $0.021 a draw,
+ * $0.103 at worst), so it runs only with LUSONG_LIVE=1, LUSONG_DEPTH=1 and MODEL_API_KEY set. Every draw's
  * result and metered usage is appended to test/depth-runs/<stamp>/records.jsonl as it finishes; results.json and
  * the error report are written at the end.
  */

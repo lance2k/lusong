@@ -2,6 +2,7 @@ import { OutputCapError, segment, type Meter } from "./meta";
 import { maskToPlacedPath, waterlineY, type PlacedPath } from "./overlay";
 import { readWaterlines, type LabelledObject } from "./readings";
 import { parseSamText, placeRaster, type Box, type SamObject } from "./sam";
+import { tyreEstimates } from "./tyre";
 import {
   decideVerdict,
   isUsable,
@@ -27,6 +28,8 @@ export interface CheckedObject {
   landmark: Landmark | null;
   usable: boolean;
   interval: Interval | null;
+  /** Cars only: the depth from the hidden part of its tyre, when one is seen side-on at the waterline. */
+  tyreCm: Interval | null;
   note: string | null;
 }
 
@@ -57,6 +60,7 @@ export function forPage(result: CheckResult): PageResult {
       landmark: o.landmark,
       usable: o.usable,
       interval: o.interval,
+      tyreCm: o.tyreCm,
     })),
     verdict: result.verdict,
     timingsMs: result.timingsMs,
@@ -91,11 +95,11 @@ export async function checkPhoto(
   const deadline = started + PIPELINE_BUDGET_MS;
   // Settle every call before failing, so the meter holds what the others cost.
   const settled = await Promise.allSettled(
-    ["flood water", "person", "car"].map((phrase) => segment(imageDataUrl, phrase, deadline, meter)),
+    ["flood water", "person", "car", "tire"].map((phrase) => segment(imageDataUrl, phrase, deadline, meter)),
   );
   const failed = settled.find((s) => s.status === "rejected");
   if (failed) throw failed.reason;
-  const [waterText, personText, carText] = settled.map((s) => (s as PromiseFulfilledResult<string>).value);
+  const [waterText, personText, carText, tyreText] = settled.map((s) => (s as PromiseFulfilledResult<string>).value);
   const segmented = Date.now();
 
   const water = parseSamText(waterText);
@@ -117,6 +121,12 @@ export async function checkPhoto(
       : null;
   const read = Date.now();
 
+  const placedWater = water.map((w) => placeRaster(w.mask));
+  const tyres = tyreEstimates(
+    objects.filter((o) => o.kind === "car"),
+    parseSamText(tyreText),
+    placedWater,
+  );
   const verdict: Verdict = tooCrowded
     ? { kind: "cannot_measure", reason: "too_crowded" }
     : decideVerdict({
@@ -124,8 +134,8 @@ export async function checkPhoto(
         readingsComplete: (model?.problems.length ?? 0) === 0,
         waterFound: water.length > 0,
         modelSaysFlooded: model?.modelSaysFlooded ?? false,
+        tyreEstimates: tyres,
       });
-  const placedWater = water.map((w) => placeRaster(w.mask));
 
   return {
     image,
@@ -141,6 +151,7 @@ export async function checkPhoto(
         landmark: reading?.landmark ?? null,
         usable,
         interval: usable && reading ? LANDMARK_CM[reading.landmark as keyof typeof LANDMARK_CM] : null,
+        tyreCm: tyres.find((t) => t.label === o.label)?.interval ?? null,
         note: model?.notes[o.label] ?? null,
       };
     }),

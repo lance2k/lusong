@@ -116,6 +116,13 @@ describe("depthReport", () => {
     expect(report.markdown).toContain("| k.jpg | 1 | knee (38–54 cm) | 5–10 cm, shallow | too shallow |");
   });
 
+  it("marks a draw the tyre estimate decided", () => {
+    const measured = deciding(46, 56) as Extract<Verdict, { kind: "measured" }>;
+    const byTyre: Verdict = { ...measured, decidedBy: { label: "C1", landmark: "tyre_geometry", interval: { low: 46, high: 56 } } };
+    const report = depthReport([photo("k.jpg", "knee")], [{ file: "k.jpg", draw: 1, verdict: byTyre }]);
+    expect(report.markdown).toContain("| k.jpg | 1 | knee (38–54 cm) | 46–56 cm, NPLV (tyre, C1) | matched |");
+  });
+
   it("tallies every outcome by caption depth as well", () => {
     const photos = [photo("k.jpg", "knee"), photo("c.jpg", "chest")];
     const report = depthReport(photos, [

@@ -72,7 +72,8 @@ function lusongWords(d: DepthDraw): string {
   const v = d.verdict;
   if (v.kind === "cannot_measure") return v.reason === "too_crowded" ? "can't measure (too crowded)" : "can't measure";
   if (v.kind === "no_flood") return "no flood found";
-  return `${v.decidedBy.interval.low}–${v.decidedBy.interval.high} cm, ${v.passability}`;
+  const tyre = v.decidedBy.landmark === "tyre_geometry" ? ` (tyre, ${v.decidedBy.label})` : "";
+  return `${v.decidedBy.interval.low}–${v.decidedBy.interval.high} cm, ${v.passability}${tyre}`;
 }
 
 export function depthReport(photos: readonly DepthPhoto[], draws: readonly DepthDraw[]) {

@@ -125,7 +125,11 @@ function VerdictCard({ result }: { result: PageResult }) {
         {v.kind === "measured" && (
           <>
             <p>
-              Deepest reading: <b>{v.decidedBy.label}</b>, water {LANDMARK_WORDS[v.decidedBy.landmark]}, about{" "}
+              Deepest reading: <b>{v.decidedBy.label}</b>,{" "}
+              {v.decidedBy.landmark === "tyre_geometry"
+                ? "from the part of its tyre under water"
+                : `water ${LANDMARK_WORDS[v.decidedBy.landmark]}`}
+              , about{" "}
               <b>{cm(v.decidedBy.interval)}</b>, {gaugeWords(v.decidedBy.interval)}.
             </p>
             <p>
@@ -244,6 +248,7 @@ function Crops({ result, imageUrl }: { result: PageResult; imageUrl: string }) {
               <b>{o.label}</b> {LANDMARK_WORDS[o.landmark!]}
               {o.interval && <> · {cm(o.interval)}</>}
               {!o.usable && " · not used"}
+              {o.tyreCm && <> · tyre {cm(o.tyreCm)}</>}
             </p>
           </li>
         ))}
@@ -320,6 +325,7 @@ function ReadingList({ objects }: { objects: PageObject[] }) {
               {o.kind === "person" ? "Person" : "Vehicle"}, {o.landmark ? LANDMARK_WORDS[o.landmark] : "no reading"}
               {o.interval && <b> · {cm(o.interval)}</b>}
               {!o.usable && o.landmark && o.landmark !== "not_visible" && " · not used"}
+              {o.tyreCm && <> · by its tyre&apos;s hidden part, {cm(o.tyreCm)}</>}
             </span>
           </li>
         ))}

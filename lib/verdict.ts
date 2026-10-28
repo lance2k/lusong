@@ -89,8 +89,8 @@ export type Verdict =
       passability: Exclude<Passability, "PATV"> | "shallow" | "unsure";
       confidence: Confidence;
       readingsComplete: boolean;
-      /** The reading whose interval set the upper bound. */
-      decidedBy: { label: string; landmark: PersonLandmark | TyreLandmark; interval: Interval };
+      /** The reading whose interval set the upper bound, or the tyre estimate when that reads deeper. */
+      decidedBy: { label: string; landmark: PersonLandmark | TyreLandmark | "tyre_geometry"; interval: Interval };
       readingsUsed: string[];
     }
   /** "too_crowded": Muse Spark ran out of output tokens reading every person and car in the photo. */
@@ -137,6 +137,11 @@ export function decideVerdict(input: {
   readingsComplete: boolean;
   waterFound: boolean;
   modelSaysFlooded: boolean;
+  /**
+   * Depths from the hidden part of each car's tyre. They can only deepen the verdict: they join the choice of the
+   * deepest reading but are never counted as readings, so they cannot raise confidence or measure a photo alone.
+   */
+  tyreEstimates?: readonly { label: string; interval: Interval }[];
 }): Verdict {
   const usable = input.readings.filter(isUsable);
   if (usable.length === 0) {
@@ -148,7 +153,8 @@ export function decideVerdict(input: {
     const landmark = r.landmark as PersonLandmark | TyreLandmark;
     return { label: r.label, landmark, interval: LANDMARK_CM[landmark] };
   });
-  const deepest = measured.reduce((a, b) => (b.interval.high > a.interval.high ? b : a));
+  const tyres = (input.tyreEstimates ?? []).map((t) => ({ ...t, landmark: "tyre_geometry" as const }));
+  const deepest = [...measured, ...tyres].reduce((a, b) => (b.interval.high > a.interval.high ? b : a));
   const rangeCm = { low: Math.min(...measured.map((m) => m.interval.low)), high: deepest.interval.high };
   const confidence = confidenceFor(usable.length, rangeCm.high - rangeCm.low);
   const cls = passabilityFor(rangeCm.high);

@@ -6,9 +6,9 @@ const SAM_IMAGE_MICROS = 2_500;
 const MUSE_INPUT_MICROS_PER_TOKEN = 1.25;
 const MUSE_OUTPUT_MICROS_PER_TOKEN = 4.25;
 
-/** lib/meta.ts makes at most this many attempts per call; lib/check.ts makes 3 SAM calls and 1 Muse call. */
+/** lib/meta.ts makes at most this many attempts per call; lib/check.ts makes 4 SAM calls and 1 Muse call. */
 const ATTEMPTS_PER_CALL = 2;
-const SAM_CALLS = 3;
+const SAM_CALLS = 4;
 /** 1.5 × the 3,881 input tokens measured on a 1600×1600 photo with 12 objects, the largest the route
  *  accepts (one draw, 2026-10-28; 1600×1200 measured 2,968). */
 export const MUSE_INPUT_TOKEN_BOUND = 5_822;

@@ -104,6 +104,29 @@ describe("decideVerdict", () => {
     expect(v.passability).toBe("NPATV");
   });
 
+  it("a tyre estimate deeper than every landmark reading decides the verdict, without counting as a reading", () => {
+    const halfKnee = [person("P1", "half_knee"), person("P2", "half_knee"), person("P3", "half_knee")];
+    const v = decideVerdict({ readings: halfKnee, tyreEstimates: [{ label: "C1", interval: { low: 46, high: 56 } }], ...flooded });
+    expect(v).toMatchObject({
+      kind: "measured",
+      rangeCm: { low: 18, high: 56 },
+      passability: "NPLV",
+      decidedBy: { label: "C1", landmark: "tyre_geometry", interval: { low: 46, high: 56 } },
+      readingsUsed: ["P1", "P2", "P3"],
+    });
+  });
+
+  it("a tyre estimate shallower than the deepest reading changes nothing", () => {
+    const readings = [person("P1", "knee"), car("C1", "tyre_half")];
+    const shallowTyre = [{ label: "C1", interval: { low: 21, high: 26 } }];
+    expect(decideVerdict({ readings, tyreEstimates: shallowTyre, ...flooded })).toEqual(decideVerdict({ readings, ...flooded }));
+  });
+
+  it("a tyre estimate alone never turns 'cannot measure' into a measurement", () => {
+    const v = decideVerdict({ readings: [car("C1", "not_visible")], tyreEstimates: [{ label: "C1", interval: { low: 46, high: 56 } }], ...flooded });
+    expect(v).toEqual({ kind: "cannot_measure" });
+  });
+
   it("says no flood only when SAM found no water and the model agrees", () => {
     expect(decideVerdict({ readings: [], readingsComplete: true, waterFound: false, modelSaysFlooded: false })).toEqual({ kind: "no_flood" });
     expect(decideVerdict({ readings: [], readingsComplete: true, waterFound: false, modelSaysFlooded: true })).toEqual({ kind: "cannot_measure" });

@@ -18,5 +18,5 @@ it("a SAM call that fails waits for the others, so their usage is metered before
   });
   const meter = new Meter();
   await expect(checkPhoto("data:image/jpeg;base64,", { width: 100, height: 100 }, meter)).rejects.toThrow("HTTP 400");
-  expect(meter.usage().samImages).toBe(2);
+  expect(meter.usage().samImages).toBe(3);
 });

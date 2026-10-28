@@ -100,16 +100,16 @@ describe("the check handler", () => {
     expect((await handler(post("192.0.2.2"))).status).toBe(200);
   });
 
-  it("a metered check refunds its reservation down to the three SAM images", async () => {
+  it("a metered check refunds its reservation down to the four SAM images", async () => {
     stubMeta();
-    const handler = handlerWith(R + 7_500);
+    const handler = handlerWith(R + 10_000);
     expect((await handler(post("192.0.2.1"))).status).toBe(200);
     expect((await handler(post("192.0.2.2"))).status).toBe(200);
     expect((await handler(post("192.0.2.3"))).status).toBe(503);
   });
 
   it("charges Muse Spark's tokens as well as SAM's images", async () => {
-    const cost = 3 * 2_500 + 2_000 * 1.25 + 3_000 * 4.25;
+    const cost = 4 * 2_500 + 2_000 * 1.25 + 3_000 * 4.25;
     for (const [budget, secondStatus] of [
       [R + cost, 200],
       [R + cost - 1, 503],
@@ -125,7 +125,7 @@ describe("the check handler", () => {
     const calls = stubMeta({ sam: { car: [dropped(), samEmpty()] } });
     const handler = handlerWith(R + 7_500);
     expect((await handler(post("192.0.2.1"))).status).toBe(200);
-    expect(calls).toHaveLength(4);
+    expect(calls).toHaveLength(5);
     expect((await handler(post("192.0.2.2"))).status).toBe(503);
   });
 
@@ -144,7 +144,7 @@ describe("the check handler", () => {
   });
 
   /** Three SAM images plus 2,000 and 3,000 Muse tokens: a refund would leave room for a second check. */
-  const MUSE_CHECK = 3 * 2_500 + 2_000 * 1.25 + 3_000 * 4.25;
+  const MUSE_CHECK = 4 * 2_500 + 2_000 * 1.25 + 3_000 * 4.25;
   const MUSE_USAGE = { prompt_tokens: 2_000, completion_tokens: 3_000 };
 
   it("a SAM count that is not a whole number refunds nothing", async () => {
@@ -221,7 +221,7 @@ describe("the check handler", () => {
   it("a photo too crowded for Muse's output cap says it can't measure, and is charged what it cost", async () => {
     const recorded = JSON.parse(readFileSync("test/fixtures/muse/shah-alam-capped-1500.json", "utf8"));
     const capped = () => new Response(recorded.replies[0].body, { status: 200 });
-    const cost = 17_568; // 3 × 2,500 + 2,954 × 1.25 + 1,500 × 4.25 = 17,567.5 µ$, rounded up to a whole µ$
+    const cost = 20_068; // 4 × 2,500 + 2,954 × 1.25 + 1,500 × 4.25 = 20,067.5 µ$, rounded up to a whole µ$
     for (const [budget, secondStatus] of [
       [R + cost, 200],
       [R + cost - 1, 503],
@@ -254,6 +254,23 @@ describe("the check handler", () => {
     expect(res.status).toBe(502);
     expect(await res.text()).not.toContain("too_crowded");
   });
+
+  it("the reservation covers a check whose every Meta call needs its retry", async () => {
+    const calls = stubMeta({
+      sam: {
+        "flood water": [serverError(), samEmpty()],
+        person: [serverError(), samFixture()],
+        car: [serverError(), samEmpty()],
+        tire: [serverError(), samEmpty()],
+      },
+      muse: [serverError(), museReply({ prompt_tokens: 1, completion_tokens: 1 })],
+    });
+    expect((await handlerWith(R)(post("192.0.2.1"))).status).toBe(200);
+    const muse = calls.filter((url) => url.endsWith("/chat/completions")).length;
+    expect([calls.length - muse, muse]).toEqual([8, 2]);
+    // 8 SAM images at $2.50 per 1,000, and 2 Muse attempts at 5,822 tokens in and 8,000 out, all billed.
+    expect(R).toBe(8 * 2_500 + 2 * 41_278);
+  }, 20_000);
 
   it("a failed check keeps its reservation", async () => {
     stubMeta({ sam: { person: [serverError()] } });

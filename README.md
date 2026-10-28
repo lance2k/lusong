@@ -14,7 +14,7 @@ track). Everything in this repository was written during the event; the commit h
 
 1. The browser shrinks the photo to at most 1600 px and re-encodes it as JPEG, which drops EXIF and
    GPS. The server strips metadata again in case a client skipped that step.
-2. SAM 3.1 segments `flood water`, `person` and `car`, one request each, in parallel.
+2. SAM 3.1 segments `flood water`, `person`, `car` and `tire`, one request each, in parallel.
 3. Muse Spark 1.3 gets the photo and the list of people and cars SAM found (boxes on its 0–1000
    grid). A JSON schema makes it report, for each one, where the waterline sits from a fixed list
    of landmarks (ankle, half-knee, knee… or a quarter, half, the top of a tyre).
@@ -24,6 +24,10 @@ track). Everything in this repository was written during the event; the commit h
    passable to all vehicles (PATV), Lusong says "shallow where measured" and never PATV: the photo
    shows only the spots where someone stands, not the deepest part of the street. With no person
    or car in the water, it says it can't measure.
+   A second estimate comes from geometry: a wheel is round, so a tyre seen side-on at the
+   waterline gives its diameter from its width, and the part hidden below the water gives the
+   depth, taking a car tyre as 58–70 cm across. It can only make the verdict deeper, never
+   shallower, and it never measures a photo on its own.
 5. The page draws the water mask, boxes each person and car it measured, and marks the waterline
    where SAM's mask of that person or car meets the water.
 
@@ -41,7 +45,7 @@ pnpm dev
 
 ### Spending limits
 
-Every check reserves its worst-case cost ($0.098: six SAM images and two Muse Spark attempts at the
+Every check reserves its worst-case cost ($0.103: eight SAM images and two Muse Spark attempts at the
 measured input bound and the 8,000-token output cap) against a daily dollar budget before any paid
 call, then settles to what Meta's usage blocks report. A failed or retried call keeps the whole
 reservation. When the budget or an address's daily checks run out, the page shows sample results.
