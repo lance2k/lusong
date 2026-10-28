@@ -1,0 +1,30 @@
+# Meta Model API: what we measured
+
+Notes from building Lusong against `https://api.meta.ai/v1`, October 2026. Each line says how it was
+established.
+
+## SAM 3.1 (`POST /responses`, model `sam-3.1`)
+
+- One noun phrase per request. Comma lists return zero matches (docs, `sam/segmenting`), so Lusong
+  sends `flood water`, `person` and `car` as three parallel requests. 3–4 s each from the
+  Philippines (measured, 2 photos).
+- Non-streaming works and returns the same text grammar as streaming (docs). `@meta-sam/parser`
+  only advertises stream parsers, but `formats.segmentation.image().createParser()` takes
+  `push(text)` and `finish({ status: "completed" })` for a complete reply (from the package's type
+  declarations; used in `lib/sam.ts`).
+- A mask raster covers its object's box but is not always 1:1 with the photo: person masks were box
+  size + 1 px, while large water masks came back downscaled to 1024 px wide (measured on 9 records).
+  Use the mask record's `bounds` to scale, never assume 1:1.
+- `usage` reports 0 tokens plus `images_processed`; billing is per image, $2.50 per 1,000 (measured
+  usage block; price from the docs).
+
+## Muse Spark 1.3 (`POST /chat/completions`)
+
+- It always reasons: 1,956 and 2,452 output tokens on the two probe photos, of which 1,740 and
+  2,200 were reasoning; about $0.01 and 10 s each (measured, 2 calls). Reasoning counts against `max_completion_tokens`, so cap
+  it with room to spare and treat `finish_reason: "length"` as a failure.
+- `response_format: { type: "json_schema" }` constrains decoding to the schema (docs), which lets the
+  model choose from a fixed list of landmarks instead of inventing centimetres.
+- `web_search` exists only on the Responses and Messages APIs, not on Chat Completions (docs).
+- `muse-spark-1.3` is Standard mode, where content is not used for training; `-contributor` models
+  trade that for a lower price (docs, `models`).
