@@ -12,3 +12,6 @@ node_modules/
 *.tsbuildinfo
 next-env.d.ts
 .vercel
+
+# The incremental log of a depth run; results.json holds the same records.
+test/depth-runs/*/records.jsonl

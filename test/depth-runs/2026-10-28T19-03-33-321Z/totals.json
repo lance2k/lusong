@@ -1,0 +1,29 @@
+{
+ "all": {
+  "draws": 90,
+  "too_shallow": 33,
+  "matched": 40,
+  "too_deep": 4,
+  "cannot_measure": 13,
+  "no_flood": 0,
+  "error": 0
+ },
+ "flood": {
+  "draws": 64,
+  "too_shallow": 22,
+  "matched": 30,
+  "too_deep": 2,
+  "cannot_measure": 10,
+  "no_flood": 0,
+  "error": 0
+ },
+ "wading": {
+  "draws": 26,
+  "too_shallow": 11,
+  "matched": 10,
+  "too_deep": 2,
+  "cannot_measure": 3,
+  "no_flood": 0,
+  "error": 0
+ }
+}
