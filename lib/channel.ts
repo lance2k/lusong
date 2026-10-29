@@ -1,8 +1,13 @@
-export type SendResult = { ok: true } | { ok: false; permanent: boolean };
+export type SendResult =
+  | { ok: true }
+  /** Telegram answered and didn't take the message. `permanent`: the chat can't be messaged again. */
+  | { ok: false; rejected: true; permanent: boolean }
+  /** No clear answer (a timeout, a dropped connection, a server error): the message may have been delivered. */
+  | { ok: false; rejected: false };
 
 /** Where a watcher's messages go. */
 export interface Channel {
-  /** Never throws. `permanent` means the chat can't be messaged again, so the watcher should be switched off. */
+  /** Never throws. */
   send(chatId: string, text: string): Promise<SendResult>;
 }
 
@@ -28,11 +33,14 @@ export class TelegramChannel implements Channel {
       if (res.ok && body?.ok === true) return { ok: true };
       // The URL holds the bot token, so only the status and Telegram's description are logged.
       console.error(`Telegram sendMessage HTTP ${res.status}: ${typeof body?.description === "string" ? body.description : "no description"}`);
+      // Only a 4XX says the message wasn't taken. A 5XX can come from a gateway after Telegram had the request.
       // UNVERIFIED: that a blocked bot or a deleted chat answers 403. The docs say only that error_code "is subject to change".
-      return { ok: false, permanent: res.status === 403 };
+      if (res.status >= 400 && res.status < 500) return { ok: false, rejected: true, permanent: res.status === 403 };
+      return { ok: false, rejected: false };
     } catch (err) {
+      // A timeout or a connection dropped mid-request can come after Telegram had the message.
       console.error("Telegram unreachable:", err instanceof Error ? err.name : "error");
-      return { ok: false, permanent: false };
+      return { ok: false, rejected: false };
     }
   }
 }

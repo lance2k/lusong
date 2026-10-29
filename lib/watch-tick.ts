@@ -38,7 +38,7 @@ export interface TickSummary {
   due: number;
   checked: number;
   sent: number;
-  /** Checks that gave no answer, and messages Telegram didn't take. */
+  /** Checks that gave no answer, and messages Telegram didn't take or didn't answer for. */
   failed: number;
   /** Due watchers left for the next tick by the cap or the time budget. */
   deferred: number;
@@ -54,7 +54,8 @@ export function watchMessage(m: { kind: AnswerKind; was: AnswerKind | null; at: 
 /**
  * One run of the scheduler: checks each linked watcher inside its window at most once per gap, and messages it when its
  * window opens (its first answer of the PHT day) and whenever the answer differs from the last one sent. A failed
- * check sends nothing and keeps the last answer. A message counts as sent only once Telegram takes it.
+ * check sends nothing and keeps the last answer. A message is sent at most once: one Telegram refused can go again at the
+ * next check, but one it may have taken (no clear answer) counts as sent.
  */
 export async function runTick(deps: TickDeps): Promise<TickSummary> {
   const limits = { ...TICK_LIMITS, ...deps.limits };
@@ -116,21 +117,31 @@ async function runOne(
   const at = deps.now();
   if (!inWindow(w.window, at)) return "quiet";
   const day = phtDay(at);
-  const opening = w.lastDay !== day;
-  if (!opening && result.kind === w.lastKind) return "quiet";
+  // A message whose delivery was uncertain counts as sent.
+  const last = w.sending ?? { kind: w.lastKind, day: w.lastDay };
+  const opening = last.day !== day;
+  if (!opening && result.kind === last.kind) return "quiet";
+  const answer = { kind: result.kind, day };
   try {
-    // Switched off (or switched on again) while the check ran: this run speaks for no one.
-    if (!(await deps.store.isCurrent(w.id, w.gen))) return "quiet";
-    const text = watchMessage({ kind: result.kind, was: opening ? null : w.lastKind, at, window: w.window, pageUrl: deps.pageUrl });
-    const sent = await deps.channel.send(w.chatId!, text);
-    if (!sent.ok) {
-      if (sent.permanent) await deps.store.remove(w.id);
-      return "failed";
-    }
-    await deps.store.commit(w.id, w.gen, { kind: result.kind, day });
-    return "sent";
+    // Recorded before the send, so a send whose outcome is unknown, or whose commit fails, is never sent again.
+    // False when switched off (or switched on again) while the check ran: this run speaks for no one.
+    if (!(await deps.store.markSending(w.id, w.gen, answer))) return "quiet";
   } catch (err) {
-    console.error("watch store failed:", err instanceof Error ? err.message : err);
+    console.error("watch store failed before sending:", err instanceof Error ? err.message : err);
     return "failed";
   }
+  const text = watchMessage({ kind: result.kind, was: opening ? null : last.kind, at, window: w.window, pageUrl: deps.pageUrl });
+  const sent = await deps.channel.send(w.chatId!, text);
+  try {
+    if (sent.ok) {
+      await deps.store.commit(w.id, w.gen, answer);
+    } else if (sent.rejected) {
+      if (sent.permanent) await deps.store.remove(w.id);
+      else await deps.store.dropSending(w.id, w.gen);
+    }
+  } catch (err) {
+    // The mark stays, so the answer counts as sent: after a refusal that means one missed message, never a duplicate.
+    console.error("watch store failed after sending:", err instanceof Error ? err.message : err);
+  }
+  return sent.ok ? "sent" : "failed";
 }

@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { FakeChannel } from "../test/fake-channel";
 import type { AnswerKind } from "./answer";
+import { TelegramChannel } from "./channel";
 import type { ScheduledCheck } from "./commute-handler";
 import { MemoryWatchStore, type NewWatcher, type WatchStore } from "./watch-store";
 import { runTick, type TickDeps } from "./watch-tick";
@@ -132,7 +133,7 @@ describe("the watcher's tick (fake clock, fake channel)", () => {
   it("a message Telegram didn't take is sent again at the next check, not lost", async () => {
     const { clock, store, channel, answers, tick } = setup("2026-10-30T06:00:00+08:00");
     await linkedWatcher(store);
-    channel.next = [{ ok: false, permanent: false }];
+    channel.next = [{ ok: false, rejected: true, permanent: false }];
     answers.push("go");
     expect(await tick()).toMatchObject({ sent: 0, failed: 1 });
     clock.set("2026-10-30T06:10:00+08:00");
@@ -141,10 +142,75 @@ describe("the watcher's tick (fake clock, fake channel)", () => {
     expect(channel.sent[0].text).toContain("At 06:10 PHT: Go");
   });
 
+  it("a message Telegram took counts as sent even when recording it fails: the next check doesn't send it again", async () => {
+    const { clock, store, channel, answers, tick } = setup("2026-10-30T06:00:00+08:00");
+    await linkedWatcher(store);
+    const commit = store.commit.bind(store);
+    let commits = 0;
+    store.commit = async (...args) => {
+      commits += 1;
+      if (commits === 1) throw new Error("store down");
+      return commit(...args);
+    };
+    answers.push("go");
+    await tick();
+    expect(channel.sent).toHaveLength(1);
+    clock.set("2026-10-30T06:10:00+08:00");
+    answers.push("go");
+    await tick();
+    expect(channel.sent).toHaveLength(1);
+  });
+
+  /** Telegram's Bot API faked at fetch: every request is counted, as if Telegram had it, before the reply is decided. */
+  function telegramAt(replies: ("ok" | "timeout" | 429)[]) {
+    const requests: string[] = [];
+    const fetch = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
+      requests.push(JSON.parse(String(init?.body)).text);
+      const reply = replies.shift() ?? "ok";
+      if (reply === "timeout") throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      if (reply === 429) return new Response(JSON.stringify({ ok: false, error_code: 429, parameters: { retry_after: 3 } }), { status: 429 });
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }));
+    });
+    return { requests, channel: new TelegramChannel("TEST-TOKEN", fetch) };
+  }
+
+  it("a message Telegram may have taken (no reply before the timeout) counts as sent: it isn't sent again", async () => {
+    const { clock, store, answers, deps } = setup("2026-10-30T06:00:00+08:00");
+    await linkedWatcher(store);
+    const telegram = telegramAt(["timeout"]);
+    deps.channel = telegram.channel;
+    answers.push("go");
+    await runTick(deps);
+    clock.set("2026-10-30T06:10:00+08:00");
+    answers.push("go");
+    await runTick(deps);
+    expect(telegram.requests).toHaveLength(1);
+    // A later change is told against the answer that may have gone.
+    clock.set("2026-10-30T06:20:00+08:00");
+    answers.push("wait");
+    await runTick(deps);
+    expect(telegram.requests).toHaveLength(2);
+    expect(telegram.requests[1]).toContain("It was: Go");
+  });
+
+  it("a message Telegram refused (a 429) is sent again at the next check", async () => {
+    const { clock, store, answers, deps } = setup("2026-10-30T06:00:00+08:00");
+    await linkedWatcher(store);
+    const telegram = telegramAt([429, "ok"]);
+    deps.channel = telegram.channel;
+    answers.push("go");
+    expect(await runTick(deps)).toMatchObject({ sent: 0, failed: 1 });
+    clock.set("2026-10-30T06:10:00+08:00");
+    answers.push("go");
+    expect(await runTick(deps)).toMatchObject({ sent: 1 });
+    expect(telegram.requests).toHaveLength(2);
+    expect(telegram.requests[1]).toContain("At 06:10 PHT: Go");
+  });
+
   it("a chat that has blocked the bot switches its watcher off", async () => {
     const { store, channel, answers, tick } = setup("2026-10-30T06:00:00+08:00");
     const w = await linkedWatcher(store);
-    channel.next = [{ ok: false, permanent: true }];
+    channel.next = [{ ok: false, rejected: true, permanent: true }];
     answers.push("go");
     await tick();
     expect(await store.get(w.id)).toBeNull();

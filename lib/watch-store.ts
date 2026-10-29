@@ -27,11 +27,21 @@ export interface WatchRecord {
   /** The answer in the last message sent, and the PHT day it was sent. */
   lastKind: AnswerKind | null;
   lastDay: string | null;
+  /**
+   * An answer whose message was handed to Telegram and not yet recorded as sent. It counts as sent, so a message whose
+   * delivery is uncertain is never sent twice; the cost is that one may be missed, and the page still shows the answer.
+   */
+  sending: SentAnswer | null;
   /** Epoch ms of the last run claimed; 0 for never. */
   checkedAt: number;
 }
 
 export type NewWatcher = Pick<WatchRecord, "id" | "gen" | "trip" | "window">;
+
+export interface SentAnswer {
+  kind: AnswerKind;
+  day: string;
+}
 
 export interface WatchStore {
   /** Saves the watcher and its first link code, unless MAX_WATCHERS are already live. */
@@ -48,8 +58,12 @@ export interface WatchStore {
   /** Atomic: marks a run at `nowMs` if the generation matches and the last run was at least `minGapMs` earlier. */
   claimRun(id: string, gen: string, nowMs: number, minGapMs: number): Promise<boolean>;
   isCurrent(id: string, gen: string): Promise<boolean>;
-  /** Records the answer just sent, if the generation still matches. */
-  commit(id: string, gen: string, last: { kind: AnswerKind; day: string }): Promise<boolean>;
+  /** Before a send: records the answer about to go, if the generation still matches. False means don't send. */
+  markSending(id: string, gen: string, answer: SentAnswer): Promise<boolean>;
+  /** After Telegram refused the message: it wasn't sent, so the next check may send it again. */
+  dropSending(id: string, gen: string): Promise<void>;
+  /** Records the answer just sent and clears the one marked as sending, if the generation still matches. */
+  commit(id: string, gen: string, last: SentAnswer): Promise<boolean>;
   /** Deletes the trip, chat binding, history and any outstanding code. */
   remove(id: string): Promise<void>;
 }
@@ -63,6 +77,8 @@ function fromFields(id: string, f: Fields): WatchRecord | null {
     const endMin = Number(f.end);
     if (![trip.from.lat, trip.from.lon, trip.to.lat, trip.to.lon, startMin, endMin].every(Number.isFinite)) return null;
     const lastKind = ANSWER_KINDS.find((k) => k === f.lastKind) ?? null;
+    const [sendingKind, sendingDay] = (f.sending ?? "").split("|");
+    const sendingAs = ANSWER_KINDS.find((k) => k === sendingKind);
     return {
       id,
       gen: f.gen,
@@ -71,6 +87,7 @@ function fromFields(id: string, f: Fields): WatchRecord | null {
       chatId: f.chat || null,
       lastKind,
       lastDay: f.lastDay || null,
+      sending: sendingAs && sendingDay ? { kind: sendingAs, day: sendingDay } : null,
       checkedAt: Number(f.checkedAt) || 0,
     };
   } catch {
@@ -199,11 +216,24 @@ export class MemoryWatchStore implements WatchStore {
     return this.live(id)?.gen === gen;
   }
 
-  async commit(id: string, gen: string, last: { kind: AnswerKind; day: string }) {
+  async markSending(id: string, gen: string, answer: SentAnswer) {
+    const fields = this.live(id);
+    if (!fields || fields.gen !== gen) return false;
+    fields.sending = `${answer.kind}|${answer.day}`;
+    return true;
+  }
+
+  async dropSending(id: string, gen: string) {
+    const fields = this.live(id);
+    if (fields?.gen === gen) delete fields.sending;
+  }
+
+  async commit(id: string, gen: string, last: SentAnswer) {
     const fields = this.live(id);
     if (!fields || fields.gen !== gen) return false;
     fields.lastKind = last.kind;
     fields.lastDay = last.day;
+    delete fields.sending;
     return true;
   }
 
@@ -292,9 +322,21 @@ if redis.call('HGET', KEYS[1], 'gen') == ARGV[1] then return 1 end
 return 0
 `;
 
+const MARK_SENDING_SCRIPT = `
+if redis.call('HGET', KEYS[1], 'gen') ~= ARGV[1] then return 0 end
+redis.call('HSET', KEYS[1], 'sending', ARGV[2])
+return 1
+`;
+
+const DROP_SENDING_SCRIPT = `
+if redis.call('HGET', KEYS[1], 'gen') == ARGV[1] then redis.call('HDEL', KEYS[1], 'sending') end
+return 1
+`;
+
 const COMMIT_SCRIPT = `
 if redis.call('HGET', KEYS[1], 'gen') ~= ARGV[1] then return 0 end
 redis.call('HSET', KEYS[1], 'lastKind', ARGV[2], 'lastDay', ARGV[3])
+redis.call('HDEL', KEYS[1], 'sending')
 return 1
 `;
 
@@ -400,7 +442,15 @@ export class UpstashWatchStore implements WatchStore {
     return (await this.evalScript(CURRENT_SCRIPT, [this.record(id)], [gen])) === 1;
   }
 
-  async commit(id: string, gen: string, last: { kind: AnswerKind; day: string }) {
+  async markSending(id: string, gen: string, answer: SentAnswer) {
+    return (await this.evalScript(MARK_SENDING_SCRIPT, [this.record(id)], [gen, `${answer.kind}|${answer.day}`])) === 1;
+  }
+
+  async dropSending(id: string, gen: string) {
+    await this.evalScript(DROP_SENDING_SCRIPT, [this.record(id)], [gen]);
+  }
+
+  async commit(id: string, gen: string, last: SentAnswer) {
     return (await this.evalScript(COMMIT_SCRIPT, [this.record(id)], [gen, last.kind, last.day])) === 1;
   }
 

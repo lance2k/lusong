@@ -104,4 +104,6 @@ finishes in under 45 s, inside the route's 60 s limit.
    nothing more.
 
 `"sent":0` with `"failed":1` means the check gave no answer (the daily cap, the routing server, the report store) or
-Telegram didn't take the message. The Vercel function log for `/api/watch/tick` says which.
+Telegram didn't take the message or didn't answer. The Vercel function log for `/api/watch/tick` says which. A message
+Telegram refused is sent again at the next check; one it didn't answer for (a timeout, a 5XX) counts as sent and isn't,
+so a rider is never messaged twice about the same answer, at the cost of a message that may be missed.

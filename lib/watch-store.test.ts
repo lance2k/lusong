@@ -106,6 +106,24 @@ describe.each(watchStores)("the watch %s", (_name, make) => {
     expect(await store.claimRun("b".repeat(64), "g1", T, 9 * 60_000)).toBe(false);
   });
 
+  it("marks the answer being sent, for the current generation only; reading the watcher shows it until a commit or a drop", async () => {
+    const { store } = make();
+    const id = "a".repeat(64);
+    await store.create(watcher(), "code1");
+    expect(await store.markSending(id, "g2", { kind: "go", day: "2026-10-30" })).toBe(false);
+    expect((await store.get(id))?.sending).toBeNull();
+    expect(await store.markSending(id, "g1", { kind: "go", day: "2026-10-30" })).toBe(true);
+    expect((await store.list())[0]).toMatchObject({ sending: { kind: "go", day: "2026-10-30" }, lastKind: null });
+    expect(await store.commit(id, "g1", { kind: "go", day: "2026-10-30" })).toBe(true);
+    expect(await store.get(id)).toMatchObject({ sending: null, lastKind: "go", lastDay: "2026-10-30" });
+    expect(await store.markSending(id, "g1", { kind: "wait", day: "2026-10-30" })).toBe(true);
+    await store.dropSending(id, "g1");
+    expect(await store.get(id)).toMatchObject({ sending: null, lastKind: "go" });
+    await store.remove(id);
+    expect(await store.markSending(id, "g1", { kind: "go", day: "2026-10-30" })).toBe(false);
+    expect(await store.get(id)).toBeNull();
+  });
+
   it("commits the last answer only for the current generation", async () => {
     const { store } = make();
     await store.create(watcher(), "code1");
