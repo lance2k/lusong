@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { FEED_URL } from "./advisory";
 import { createBudget, MemoryBudgetStore, type Budget } from "./budget";
 import { ADVISORY_CACHE_MS, COMMUTE_RESERVE_MICROS, makeCommuteHandler, ROUTE_CACHE_MS, UNREADABLE_RETRY_MS } from "./commute-handler";
+import { scenariosFor, type DemoTripId } from "./samples";
 import { CAP_EDITS, CV_GFA5, FEED, feedWith, SAVED } from "../test/pagasa-fixtures";
 import { makeValhallaGate, MemorySlotStore, VALHALLA_URL, type SlotStore } from "./router";
 
@@ -11,14 +12,31 @@ const ROUTES: Record<string, string> = {
   "10.346,123.911": read("test/fixtures/valhalla/banilad-itpark-plain.json"),
   "10.3143,123.9147": read("test/fixtures/valhalla/mabolo-cbp-plain.json"),
 };
-/** Valhalla's replies with each trip's blocked spots excluded (2026-10-30 01:16 and 02:24 PHT). */
-const DETOURS: Record<string, string> = {
-  "10.346,123.911": read("test/fixtures/valhalla/banilad-itpark-excluded.json"),
-  "10.3143,123.9147": read("test/fixtures/valhalla/mabolo-cbp-excluded.json"),
-};
-/** Valhalla's real reply when the excluded box leaves no way to the destination (2026-10-30 02:24 PHT). */
-const NO_ROUTE = read("test/fixtures/valhalla/banilad-itpark-destination-excluded.json");
-const EXCLUDED_REQUEST = JSON.parse(read("test/fixtures/valhalla/banilad-itpark-excluded.request.json"));
+/** Valhalla's saved replies with blocked spots excluded (2026-10-30 01:16 and 02:24 PHT), each beside the request it answered. */
+const recorded = (name: string, status: number) => ({
+  request: JSON.parse(read(`test/fixtures/valhalla/${name}.request.json`)),
+  reply: read(`test/fixtures/valhalla/${name}.json`),
+  status,
+});
+const DETOUR_RECORDS = [
+  recorded("banilad-itpark-excluded", 200),
+  recorded("mabolo-cbp-excluded", 200),
+  /** IT Park itself excluded: Valhalla's real "No path could be found". */
+  recorded("banilad-itpark-destination-excluded", 400),
+];
+const NO_ROUTE = DETOUR_RECORDS[2].reply;
+const EXCLUDED_REQUEST = DETOUR_RECORDS[0].request;
+
+const near = (a: number[][][], b: number[][][]) =>
+  a.length === b.length &&
+  a.every((ring, i) => ring.length === b[i].length && ring.every(([x, y], k) => Math.abs(x - b[i][k][0]) < 1e-9 && Math.abs(y - b[i][k][1]) < 1e-9));
+
+/** The saved reply to exactly this request (same trip, same boxes), or none. */
+function detourRecordFor(sent: { locations: unknown; exclude_polygons: number[][][] }) {
+  return DETOUR_RECORDS.find(
+    (r) => JSON.stringify(r.request.locations) === JSON.stringify(sent.locations) && near(r.request.exclude_polygons, sent.exclude_polygons),
+  );
+}
 
 /** 20:00 PHT on 2026-10-25: the Central Visayas advisory sent at 17:27 is active. */
 const ADVISORY_ACTIVE = new Date("2026-10-25T20:00:00+08:00");
@@ -49,7 +67,10 @@ function network(opts: Options = {}) {
       if (!sent.exclude_polygons) return new Response(ROUTES[from], { status: 200 });
       if (opts.detour === "down") throw new TypeError("fetch failed");
       if (opts.detour === "no_route") return new Response(NO_ROUTE, { status: 400 });
-      return new Response(opts.detour === "plain" ? ROUTES[from] : DETOURS[from], { status: 200 });
+      if (opts.detour === "plain") return new Response(ROUTES[from], { status: 200 });
+      const saved = detourRecordFor(sent);
+      if (!saved) throw new TypeError("fetch failed: no saved Valhalla reply for this request");
+      return new Response(saved.reply, { status: saved.status });
     }
     throw new TypeError("fetch failed");
   });
@@ -84,6 +105,8 @@ describe("the demo commute check", () => {
     { trip: "banilad-itpark", scenario: "flooded", now: NO_ADVISORY, rain: true, answer: "no_one_knows" },
     { trip: "banilad-itpark", scenario: "flooded", now: ADVISORY_ACTIVE, rain: false, answer: "no_one_knows" },
     { trip: "banilad-itpark", scenario: "unclear", now: NO_ADVISORY, rain: false, answer: "no_one_knows" },
+    { trip: "banilad-itpark", scenario: "no_way_around", now: NO_ADVISORY, rain: false, answer: "wait" },
+    { trip: "banilad-itpark", scenario: "no_way_around", now: ADVISORY_ACTIVE, rain: true, answer: "wait" },
     { trip: "mabolo-cbp", scenario: "none", now: NO_ADVISORY, rain: false, answer: "go" },
     { trip: "mabolo-cbp", scenario: "none", now: NO_ADVISORY, rain: true, answer: "no_one_knows" },
     { trip: "mabolo-cbp", scenario: "flooded", now: NO_ADVISORY, rain: false, answer: "go_another_way" },
@@ -229,13 +252,14 @@ describe("the demo commute check", () => {
 
   it("clicking through every demo choice asks Valhalla once per trip, once per detour, and PAGASA's feed once", async () => {
     const { handler, calls, valhallaCalls } = handlerAt(NO_ADVISORY);
-    for (const trip of ["banilad-itpark", "mabolo-cbp"]) {
-      for (const scenario of ["none", "flooded", "unclear"]) {
-        for (const rain of [false, true]) expect((await handler(demo(trip, scenario, rain))).status).toBe(200);
+    for (const trip of ["banilad-itpark", "mabolo-cbp"] as DemoTripId[]) {
+      for (const { id } of scenariosFor(trip)) {
+        for (const rain of [false, true]) expect((await handler(demo(trip, id, rain))).status).toBe(200);
       }
     }
     expect(valhallaCalls().filter((c) => !JSON.parse(c.body!).exclude_polygons)).toHaveLength(2);
-    expect(valhallaCalls().filter((c) => JSON.parse(c.body!).exclude_polygons)).toHaveLength(2);
+    // Banilad flooded, Banilad with no way around (its "no route" is kept too), Mabolo flooded.
+    expect(valhallaCalls().filter((c) => JSON.parse(c.body!).exclude_polygons)).toHaveLength(3);
     expect(calls.filter((c) => c.url === FEED_URL)).toHaveLength(1);
   }, 10_000);
 
@@ -302,8 +326,8 @@ describe("the demo commute check", () => {
   it("never says 'passable to all types of vehicles' or PATV, in any demo answer", async () => {
     for (const now of [NO_ADVISORY, ADVISORY_ACTIVE]) {
       const { handler } = handlerAt(now);
-      for (const trip of ["banilad-itpark", "mabolo-cbp"]) {
-        for (const scenario of ["none", "flooded", "unclear"]) {
+      for (const trip of ["banilad-itpark", "mabolo-cbp"] as DemoTripId[]) {
+        for (const { id: scenario } of scenariosFor(trip)) {
           for (const rain of [false, true]) {
             const text = await handler(demo(trip, scenario, rain)).then((r) => r.text());
             expect(text.toLowerCase()).not.toContain("passable to all types of vehicles");
@@ -409,4 +433,31 @@ describe("go another way", () => {
     expect(body.detour).toMatchObject({ lengthKm: 1.909, timeMin: 7 });
     expect(body.detour.streets[0]).toBe("Pope John Paul Ⅱ Avenue");
   });
+
+  it("Banilad → IT Park with a flooded spot at IT Park itself ⇒ Wait: Valhalla found no way around it (real 442 record)", async () => {
+    const { handler, valhallaCalls } = handlerAt(NO_ADVISORY);
+    const body = await (await handler(demo("banilad-itpark", "no_way_around"))).json();
+    expect(body.answer.kind).toBe("wait");
+    expect(body.answer.title).toBe("Wait. Check again in 30 minutes.");
+    expect(body.answer.reason).toBe("Your way is blocked at V. Padriga Street at IT Park, and no way around the reported spots was found.");
+    expect(body.detour).toBeNull();
+    expect(body.reports).toEqual([expect.objectContaining({ sample: true, onRoute: true, role: "block", counts: true })]);
+    const sent = JSON.parse(valhallaCalls()[1].body!);
+    expect(detourRecordFor(sent)?.status).toBe(400);
+  });
+
+  it("the no-way-around scenario is offered on Banilad → IT Park only: elsewhere it is refused before any request", async () => {
+    const { handler, calls } = handlerAt(NO_ADVISORY);
+    expect((await handler(demo("mabolo-cbp", "no_way_around"))).status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("on a dry day, with no rain tap, the demo reaches every answer (spec story 36)", async () => {
+    const { handler } = handlerAt(NO_ADVISORY);
+    const reached = new Set<string>();
+    for (const trip of ["banilad-itpark", "mabolo-cbp"] as DemoTripId[]) {
+      for (const { id } of scenariosFor(trip)) reached.add((await (await handler(demo(trip, id))).json()).answer.kind);
+    }
+    expect([...reached].sort()).toEqual(["go", "go_another_way", "no_one_knows", "wait"]);
+  }, 10_000);
 });

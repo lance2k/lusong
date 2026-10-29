@@ -6,7 +6,7 @@ import { clientIp } from "./check-handler";
 import { boxAround, detourAvoids } from "./detour";
 import { ageWords, depthWords, MMDA_CREDIT, passabilityLine, phtTime } from "./commute-words";
 import { fetchRoute, type Route, type RouteResult, type ValhallaGate } from "./router";
-import { DEMO_TRIPS, SCENARIOS, sampleReports, type DemoTripId, type ScenarioId } from "./samples";
+import { DEMO_TRIPS, sampleReports, scenariosFor, type DemoTripId, type ScenarioId } from "./samples";
 
 /** The demo check makes no Meta call, so it reserves 1 µ$: enough to pass through the daily admission and its per-address limit. */
 export const COMMUTE_RESERVE_MICROS = 1;
@@ -47,7 +47,7 @@ function parseDemo(body: unknown): DemoRequest | null {
   const b = body as Record<string, unknown>;
   if (b.mode !== "demo") return null;
   if (typeof b.trip !== "string" || !Object.hasOwn(DEMO_TRIPS, b.trip)) return null;
-  if (!SCENARIOS.some((s) => s.id === b.scenario)) return null;
+  if (!scenariosFor(b.trip as DemoTripId).some((s) => s.id === b.scenario)) return null;
   if (b.rainingHere !== undefined && typeof b.rainingHere !== "boolean") return null;
   return { trip: b.trip as DemoTripId, scenario: b.scenario as ScenarioId, rainingHere: b.rainingHere === true };
 }
