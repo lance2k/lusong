@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clearTrip, loadTrip, saveTrip, startTrip, tapTrip, type TripStorage } from "./trip";
+import { clearTrip, createTripStore, loadTrip, saveTrip, startTrip, tapTrip, type TripStorage } from "./trip";
 
 const BANILAD = { lat: 10.346, lon: 123.911 };
 const IT_PARK = { lat: 10.3307, lon: 123.9058 };
@@ -65,7 +65,7 @@ describe("the trip on the phone", () => {
     for (const storage of [null, blocked]) {
       expect(loadTrip(storage)).toBeNull();
       expect(saveTrip(storage, { home: BANILAD, work: IT_PARK })).toBe(false);
-      expect(() => clearTrip(storage)).not.toThrow();
+      expect(clearTrip(storage)).toBe(true);
     }
   });
 
@@ -78,5 +78,66 @@ describe("the trip on the phone", () => {
     const phone = fakeStorage();
     phone.setItem("lusong.trip", raw);
     expect(loadTrip(phone)).toBeNull();
+  });
+});
+
+/** A phone whose storage reads and writes but refuses to remove anything. */
+function stuckStorage() {
+  const phone = fakeStorage();
+  phone.removeItem = () => {
+    throw new DOMException("denied", "SecurityError");
+  };
+  return phone;
+}
+
+describe("clearing a trip the phone won't let go of", () => {
+  it("clearing reports that it failed, and the trip is still there", () => {
+    const phone = stuckStorage();
+    saveTrip(phone, { home: BANILAD, work: IT_PARK });
+    expect(clearTrip(phone)).toBe(false);
+    expect(loadTrip(phone)).toEqual({ home: BANILAD, work: IT_PARK });
+  });
+
+  it("the page's trip store keeps showing the trip when it can't be removed", () => {
+    const phone = stuckStorage();
+    const store = createTripStore(phone, null);
+    store.save({ home: BANILAD, work: IT_PARK });
+    expect(store.clear()).toBe(false);
+    expect(store.get()).toEqual({ home: BANILAD, work: IT_PARK });
+  });
+});
+
+describe("the same trip open in two tabs", () => {
+  /** Another tab's change reaches this one only as a storage event, never through this tab's own store. */
+  function otherTab(events: EventTarget, change: () => void) {
+    change();
+    events.dispatchEvent(Object.assign(new Event("storage"), { key: "lusong.trip" }));
+  }
+
+  it("clearing in the other tab clears it here, and tells the page so a shown answer goes", () => {
+    const phone = fakeStorage();
+    const events = new EventTarget();
+    saveTrip(phone, { home: BANILAD, work: IT_PARK });
+    const store = createTripStore(phone, events);
+    let told = 0;
+    store.subscribe(() => told++);
+    expect(store.get()).toEqual({ home: BANILAD, work: IT_PARK });
+    otherTab(events, () => phone.removeItem("lusong.trip"));
+    expect(store.get()).toBeNull();
+    expect(told).toBe(1);
+  });
+
+  it("a new trip tapped in the other tab replaces this one; other keys don't disturb it", () => {
+    const phone = fakeStorage();
+    const events = new EventTarget();
+    const store = createTripStore(phone, events);
+    let told = 0;
+    store.subscribe(() => told++);
+    expect(store.get()).toBeNull();
+    events.dispatchEvent(Object.assign(new Event("storage"), { key: "something-else" }));
+    expect(told).toBe(0);
+    otherTab(events, () => saveTrip(phone, { home: IT_PARK, work: BANILAD }));
+    expect(store.get()).toEqual({ home: IT_PARK, work: BANILAD });
+    expect(told).toBe(1);
   });
 });

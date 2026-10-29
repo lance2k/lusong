@@ -60,10 +60,62 @@ export function saveTrip(storage: TripStorage | null, trip: Trip): boolean {
   }
 }
 
-export function clearTrip(storage: TripStorage | null): void {
+/** True when no trip is left on the phone. */
+export function clearTrip(storage: TripStorage | null): boolean {
   try {
     storage?.removeItem(KEY);
+    return true;
   } catch {
-    // Nothing more can be done; the page carries on without it.
+    // Storage that can't be read back holds nothing this page can show or send, so only a readable trip is a failure.
+    return loadTrip(storage) === null;
   }
+}
+
+type StorageEvents = Pick<EventTarget, "addEventListener" | "removeEventListener">;
+
+/**
+ * The page's trip: read from the phone once, then kept in step with this tab's taps and with other tabs, whose
+ * changes arrive only as storage events. It also holds a trip the phone refused to store, for as long as the page is open.
+ */
+export function createTripStore(storage: TripStorage | null, events: StorageEvents | null) {
+  let current: Trip | null | undefined;
+  const listeners = new Set<() => void>();
+  const notify = () => {
+    for (const listener of listeners) listener();
+  };
+  const fromOtherTab = (event: Event) => {
+    const key = (event as StorageEvent).key;
+    // A null key is the other tab clearing all of storage.
+    if (key !== null && key !== KEY) return;
+    current = loadTrip(storage);
+    notify();
+  };
+  return {
+    get(): Trip | null {
+      if (current === undefined) current = loadTrip(storage);
+      return current;
+    },
+    /** False when the phone wouldn't store it, so it lasts only while the page is open. */
+    save(trip: Trip): boolean {
+      const kept = saveTrip(storage, trip);
+      current = trip;
+      notify();
+      return kept;
+    },
+    /** False when the phone wouldn't remove it: the trip is still saved and still shown. */
+    clear(): boolean {
+      if (!clearTrip(storage)) return false;
+      current = null;
+      notify();
+      return true;
+    },
+    subscribe(listener: () => void): () => void {
+      if (listeners.size === 0) events?.addEventListener("storage", fromOtherTab);
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+        if (listeners.size === 0) events?.removeEventListener("storage", fromOtherTab);
+      };
+    },
+  };
 }

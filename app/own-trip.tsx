@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Point } from "../lib/answer";
-import { clearTrip, loadTrip, saveTrip, startTrip, tapTrip, type Trip, type TripDraft } from "./trip";
+import { createTripStore, startTrip, tapTrip, type TripDraft } from "./trip";
 
 function phone(): Storage | null {
   try {
@@ -12,24 +12,15 @@ function phone(): Storage | null {
   }
 }
 
-/** The trip this page holds, read from the phone once; it also carries a trip the phone refused to keep. */
-let current: Trip | null | undefined;
-const listeners = new Set<() => void>();
+let store: ReturnType<typeof createTripStore> | null = null;
 
-function savedTrip(): Trip | null {
-  if (current === undefined) current = loadTrip(phone());
-  return current;
+function tripStore() {
+  store ??= createTripStore(phone(), window);
+  return store;
 }
 
-function setSavedTrip(trip: Trip | null) {
-  current = trip;
-  for (const listener of listeners) listener();
-}
-
-function subscribe(listener: () => void) {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
+const subscribe = (listener: () => void) => tripStore().subscribe(listener);
+const savedTrip = () => tripStore().get();
 
 export interface OwnTrip {
   draft: TripDraft;
@@ -37,42 +28,53 @@ export interface OwnTrip {
   outside: boolean;
   /** False when the phone wouldn't store the trip, so it lasts only while the page is open. */
   kept: boolean;
+  /** The last clear failed: the phone wouldn't remove the trip, so it is still saved. */
+  clearFailed: boolean;
   tap: (at: Point) => void;
   clear: () => void;
 }
 
-/** `changed` runs whenever a tap or a clear changes the trip, so an answer for the old one isn't left showing. */
+/** `changed` runs whenever a tap, a clear or another tab changes the trip, so an answer for the old one isn't left showing. */
 export function useOwnTrip(changed: () => void): OwnTrip {
   // The server has no phone storage, so it renders no trip and the saved one appears once the page is running.
   const saved = useSyncExternalStore(subscribe, savedTrip, () => null);
   const [home, setHome] = useState<Point | null>(null);
   const [outside, setOutside] = useState(false);
   const [kept, setKept] = useState(true);
+  const [clearFailed, setClearFailed] = useState(false);
+  const latestChanged = useRef(changed);
+  useEffect(() => {
+    latestChanged.current = changed;
+  });
+  useEffect(() => tripStore().subscribe(() => latestChanged.current()), []);
   const draft: TripDraft = home ? { step: "work", home } : startTrip(saved);
 
   function tap(at: Point) {
     const next = tapTrip(draft, at);
     setOutside(next.outside);
+    setClearFailed(false);
     if (next.outside) return;
     if (next.draft.step === "work") setHome(next.draft.home);
     if (next.draft.step === "set") {
       setHome(null);
-      setKept(saveTrip(phone(), next.draft.trip));
-      setSavedTrip(next.draft.trip);
+      setKept(tripStore().save(next.draft.trip));
     }
     changed();
   }
 
   function clear() {
-    clearTrip(phone());
+    if (!tripStore().clear()) {
+      setClearFailed(true);
+      return;
+    }
+    setClearFailed(false);
     setHome(null);
     setOutside(false);
     setKept(true);
-    setSavedTrip(null);
     changed();
   }
 
-  return { draft, outside, kept, tap, clear };
+  return { draft, outside, kept, clearFailed, tap, clear };
 }
 
 export function OwnTripPanel({ own }: { own: OwnTrip }) {
@@ -92,6 +94,12 @@ export function OwnTripPanel({ own }: { own: OwnTrip }) {
             <p className="text-amber-800 dark:text-amber-300">This phone wouldn&apos;t store it, so it lasts until you close the page.</p>
           )}
         </>
+      )}
+      {own.clearFailed && (
+        <p role="status" className="font-medium text-amber-800 dark:text-amber-300">
+          This phone wouldn&apos;t remove your trip, so it is still saved here. Try again, or clear this site&apos;s data in
+          your browser.
+        </p>
       )}
       {own.outside && (
         <p role="status" className="font-medium text-amber-800 dark:text-amber-300">
