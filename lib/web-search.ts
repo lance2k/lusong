@@ -104,6 +104,22 @@ export class UpstashKvStore implements KvStore {
   }
 }
 
+const sharedMemoryStore = (() => {
+  let store: MemoryKvStore | null = null;
+  return () => (store ??= new MemoryKvStore());
+})();
+
+/** The same store and switches as the budget (lib/budget.ts); none configured means no search. */
+export function searchStoreFromEnv(env: Record<string, string | undefined> = process.env): KvStore | null {
+  if (env.LUSONG_BUDGET_STORE === "memory") {
+    const deployed = Boolean(env.VERCEL) || env.NODE_ENV === "production";
+    return deployed ? null : sharedMemoryStore();
+  }
+  if (env.UPSTASH_REDIS_REST_URL && env.UPSTASH_REDIS_REST_TOKEN) return new UpstashKvStore(env.UPSTASH_REDIS_REST_URL, env.UPSTASH_REDIS_REST_TOKEN);
+  if (env.KV_REST_API_URL && env.KV_REST_API_TOKEN) return new UpstashKvStore(env.KV_REST_API_URL, env.KV_REST_API_TOKEN);
+  return null;
+}
+
 export type WebPlan = { kind: "cached"; evidence: WebEvidence } | { kind: "search" } | { kind: "off"; why: string };
 
 interface Stored {

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Meter } from "./meta";
@@ -5,10 +6,12 @@ import {
   MemoryKvStore,
   planWebSearch,
   runWebSearch,
+  searchStoreFromEnv,
   SEARCH_MAX_OUTPUT_TOKENS,
   WEB_SEARCH_CACHE_MS,
   WEB_SEARCH_FAILED_CACHE_MS,
   WEB_SEARCH_KEY,
+  UpstashKvStore,
   type KvStore,
 } from "./web-search";
 import { fakeMeta, searchReply } from "../test/muse-derived";
@@ -168,5 +171,31 @@ describe("one search is shared by every check for a while", () => {
     const readOnly: KvStore = { get: async () => null, set: () => Promise.reject(new Error("down")) };
 
     expect(await searchOnce(readOnly)).toMatchObject({ state: "searched", findings: [{ id: "web-0" }] });
+  });
+});
+
+/** The real store runs against Redis behind serverless-redis-http (Upstash's REST API), when one is up. */
+const upstashUrl = process.env.LUSONG_TEST_UPSTASH_URL;
+describe.skipIf(!upstashUrl)("the Upstash store for the shared search", () => {
+  it("gives back what was set until its time runs out", async () => {
+    const store = new UpstashKvStore(upstashUrl!, process.env.LUSONG_TEST_UPSTASH_TOKEN ?? "", `lusong-test-${randomUUID()}`);
+    expect(await store.get(WEB_SEARCH_KEY)).toBeNull();
+    await store.set(WEB_SEARCH_KEY, '{"a":1}', 300);
+    expect(await store.get(WEB_SEARCH_KEY)).toBe('{"a":1}');
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(await store.get(WEB_SEARCH_KEY)).toBeNull();
+  });
+});
+
+describe("the shared search store from the environment: the budget's store and switches", () => {
+  it.each([
+    { name: "Upstash REST variables", env: { UPSTASH_REDIS_REST_URL: "https://u.example", UPSTASH_REDIS_REST_TOKEN: "t" }, kind: "UpstashKvStore" },
+    { name: "Vercel's KV variables", env: { KV_REST_API_URL: "https://u.example", KV_REST_API_TOKEN: "t" }, kind: "UpstashKvStore" },
+    { name: "the local memory switch", env: { LUSONG_BUDGET_STORE: "memory" }, kind: "MemoryKvStore" },
+    { name: "the memory switch on Vercel", env: { LUSONG_BUDGET_STORE: "memory", VERCEL: "1" }, kind: null },
+    { name: "nothing set", env: {}, kind: null },
+  ])("$name ⇒ $kind", ({ env, kind }) => {
+    const store = searchStoreFromEnv(env);
+    expect(store ? store.constructor.name : null).toBe(kind);
   });
 });
