@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { admit } from "./admission";
-import { roleOf, type Point, type Role } from "./answer";
+import { counts, REPORT_LIFETIME_MS, roleOf, type Point, type Role } from "./answer";
 import { budgetFromEnv, RESERVE_MICROS, type Budget } from "./budget";
 import { checkPhoto } from "./check";
 import { clientIp } from "./check-handler";
@@ -56,14 +56,25 @@ export interface ReportView {
   depth: string;
   passability: string;
   role: Role;
+  /** Whether the report counts in commute checks right now. */
+  counts: boolean;
   effect: string;
   mmdaCredit: string;
 }
 
-function effectOf(report: StoredReport, role: Role): string {
-  if (role === "clear") return "Others checking a trip through here will count this spot as clear for 3 hours.";
+function durationWords(ms: number): string {
+  const totalMin = Math.floor(ms / 60_000);
+  if (totalMin < 1) return "less than a minute";
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return h === 0 ? `${m} min` : m === 0 ? `${h} h` : `${h} h ${m} min`;
+}
+
+function effectOf(report: StoredReport, role: Role, leftMs: number): string {
+  const left = durationWords(leftMs);
+  if (role === "clear") return `Others checking a trip through here will count this spot as clear for the next ${left}.`;
   if (role === "block") {
-    return "Others checking a trip through here will count this spot as not passable for 3 hours, unless a newer photo of the same road shows it clear.";
+    return `Others checking a trip through here will count this spot as not passable for the next ${left}, unless a newer photo of the same road shows it clear.`;
   }
   if (report.verdict.kind !== "no_flood") return "Others will see this report, but it neither clears nor blocks the spot.";
   if (report.capturedAt === null) {
@@ -72,8 +83,16 @@ function effectOf(report: StoredReport, role: Role): string {
   return "Your photo's capture time (read as Philippine time) isn't within the hour before you sent it, so others will see it, but it can't mark the spot clear.";
 }
 
-function viewOf(report: StoredReport): ReportView {
-  const role = roleOf(toReport(report), new Date(report.receivedAt));
+/** What the report does for others as of `now`: nothing if it wasn't saved or its 3 h are up. */
+function viewOf(report: StoredReport, now: Date, stored: boolean): ReportView {
+  const asRule = toReport(report);
+  const role = roleOf(asRule, now);
+  const live = stored && counts(asRule, now);
+  const effect = !stored
+    ? "Lusong couldn't save the report, so it doesn't count in anyone's check. Try sending it again in a minute."
+    : !live
+      ? "Lusong received this photo over 3 hours ago, so it no longer counts in anyone's check. Send a new photo of the street."
+      : effectOf(report, role, REPORT_LIFETIME_MS - (now.getTime() - asRule.receivedAt.getTime()));
   return {
     id: report.id,
     place: report.place,
@@ -82,7 +101,8 @@ function viewOf(report: StoredReport): ReportView {
     depth: depthWords(report.verdict),
     passability: passabilityLine(report.verdict),
     role,
-    effect: effectOf(report, role),
+    counts: live,
+    effect,
     mmdaCredit: MMDA_CREDIT,
   };
 }
@@ -140,7 +160,7 @@ export function makeReportHandler(deps: {
       console.error("report store unreachable on claim:", err instanceof Error ? err.message : err);
       return fail(503, "Lusong can't take reports right now.");
     }
-    if (claim.state === "duplicate") return Response.json({ duplicate: true, stored: true, report: viewOf(claim.report) });
+    if (claim.state === "duplicate") return Response.json({ duplicate: true, stored: true, report: viewOf(claim.report, receivedAt, true) });
     if (claim.state === "in_flight") return fail(409, "Lusong is already reading this photo.");
 
     const release = () =>
@@ -188,9 +208,9 @@ export function makeReportHandler(deps: {
       } catch (err) {
         console.error("report store unreachable on save:", err instanceof Error ? err.message : err);
         await release();
-        return Response.json({ duplicate: false, stored: false, report: viewOf(report) });
+        return Response.json({ duplicate: false, stored: false, report: viewOf(report, receivedAt, false) });
       }
-      return Response.json({ duplicate: false, stored: true, report: viewOf(report) });
+      return Response.json({ duplicate: false, stored: true, report: viewOf(report, receivedAt, true) });
     } finally {
       await run.settle(succeeded);
     }

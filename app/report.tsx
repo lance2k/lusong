@@ -13,7 +13,7 @@ type State =
   | { step: "idle" }
   | { step: "locating" }
   | { step: "reading"; startedAt: number }
-  | { step: "done"; report: ReportView; duplicate: boolean; stored: boolean }
+  | { step: "done"; report: ReportView; duplicate: boolean }
   | { step: "failed"; message: string };
 
 /**
@@ -55,9 +55,9 @@ const ROLE_TONES: Record<Role, string> = {
 };
 
 function Reading({ state }: { state: Extract<State, { step: "done" }> }) {
-  const { report, duplicate, stored } = state;
+  const { report, duplicate } = state;
   return (
-    <div className={`space-y-2 rounded-2xl border px-5 py-4 ${ROLE_TONES[report.role]}`} data-testid="report-reading">
+    <div className={`space-y-2 rounded-2xl border px-5 py-4 ${ROLE_TONES[report.counts ? report.role : "neutral"]}`} data-testid="report-reading">
       <p className="text-sm font-medium uppercase tracking-wide opacity-75">Lusong read your photo</p>
       <p className="text-xl font-semibold">{report.passability}</p>
       <p>Depth: {report.depth}</p>
@@ -66,10 +66,7 @@ function Reading({ state }: { state: Extract<State, { step: "done" }> }) {
         {report.captured ? `, photo taken ${report.captured}` : ""}.
       </p>
       <p className="text-[15px]">{report.effect}</p>
-      {duplicate && <p className="text-[15px]">Lusong already had this photo, so it stays one report.</p>}
-      {!stored && (
-        <p className="text-[15px] font-medium">Lusong couldn&apos;t save the report. Try sending it again in a minute.</p>
-      )}
+      {duplicate && report.counts && <p className="text-[15px]">Lusong already had this photo, so it stays one report.</p>}
       <p className="text-sm opacity-75">{report.mmdaCredit}</p>
     </div>
   );
@@ -106,7 +103,7 @@ export default function ReportStreet() {
         const res = await fetch("/api/report", { method: "POST", body: form });
         const body = await res.json();
         if (!res.ok) throw new Error(body.error ?? "Something went wrong.");
-        setState({ step: "done", report: body.report, duplicate: body.duplicate, stored: body.stored });
+        setState({ step: "done", report: body.report, duplicate: body.duplicate });
       } catch (err) {
         setState({ step: "failed", message: err instanceof Error ? err.message : "Something went wrong." });
       }

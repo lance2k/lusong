@@ -6,6 +6,7 @@ import { withExifTime } from "./exif";
 import { createBudget, MemoryBudgetStore, RESERVE_MICROS as R, type Budget } from "./budget";
 import { makeReportHandler } from "./report-handler";
 import { MemoryReportStore, UpstashReportStore, type ReportStore } from "./report-store";
+import { REPORT_LIFETIME_MS } from "./answer";
 import type { ValhallaGate } from "./router";
 
 const photo = new Uint8Array(readFileSync("test/fixtures/photos/quiapo-1.jpg"));
@@ -171,6 +172,7 @@ describe("the reporter", () => {
         depth: "no flood water seen",
         passability: "No flood water in the photo",
         role: "neutral",
+        counts: true,
         effect: expect.stringContaining("carries no time it was taken"),
         mmdaCredit: expect.stringContaining("MMDA"),
       },
@@ -409,5 +411,49 @@ describe("one deadline for the whole request (route maxDuration 120 s)", () => {
     expect(REQUEST_BUDGET_MS).toBeLessThan(maxDuration * 1_000);
     // Save and settle are each one Upstash call bounded at 5 s.
     expect(FINISH_RESERVE_MS).toBeGreaterThanOrEqual(2 * 5_000);
+  });
+});
+
+describe("what the reporter is told the report does", () => {
+  const fresh = () => withExifTime(photo, "2026:10:30 08:40:00");
+
+  it("a new clearing report counts for the next 3 h", async () => {
+    stubMeta();
+    const { report } = await (await handlerWith()(post("192.0.2.1", { bytes: fresh() }))).json();
+    expect(report).toMatchObject({ role: "clear", counts: true });
+    expect(report.effect).toBe("Others checking a trip through here will count this spot as clear for the next 3 h.");
+  });
+
+  it("a duplicate sent 1 min before the 3 h are up is told the time left", async () => {
+    stubMeta();
+    const store = new MemoryReportStore();
+    await handlerWith({ store })(post("192.0.2.1", { bytes: fresh() }));
+    const later = new Date(NOW.getTime() + REPORT_LIFETIME_MS - 60_000);
+    const { duplicate, report } = await (await handlerWith({ store, now: () => later })(post("192.0.2.1", { bytes: fresh() }))).json();
+    expect(duplicate).toBe(true);
+    expect(report).toMatchObject({ role: "clear", counts: true });
+    expect(report.effect).toBe("Others checking a trip through here will count this spot as clear for the next 1 min.");
+  });
+
+  it("a duplicate sent at 3 h is told the report no longer counts", async () => {
+    stubMeta();
+    const store = new MemoryReportStore();
+    await handlerWith({ store })(post("192.0.2.1", { bytes: fresh() }));
+    const later = new Date(NOW.getTime() + REPORT_LIFETIME_MS);
+    const { duplicate, report } = await (await handlerWith({ store, now: () => later })(post("192.0.2.1", { bytes: fresh() }))).json();
+    expect(duplicate).toBe(true);
+    expect(report.counts).toBe(false);
+    expect(report.effect).toBe("Lusong received this photo over 3 hours ago, so it no longer counts in anyone's check. Send a new photo of the street.");
+  });
+
+  it("a report that couldn't be saved doesn't claim to count for others", async () => {
+    stubMeta();
+    const store = new MemoryReportStore();
+    store.save = async () => {
+      throw new Error("Upstash HTTP 500");
+    };
+    const body = await (await handlerWith({ store })(post("192.0.2.1", { bytes: fresh() }))).json();
+    expect(body).toMatchObject({ stored: false, report: { counts: false, depth: "no flood water seen" } });
+    expect(body.report.effect).toBe("Lusong couldn't save the report, so it doesn't count in anyone's check. Try sending it again in a minute.");
   });
 });
