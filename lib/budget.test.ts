@@ -75,6 +75,16 @@ describe.each(stores)("%s", (_name, makeStore) => {
     expect(await budget.admit(null, NOON)).toEqual({ ok: false, reason: "budget" });
   });
 
+  it("a reservation that is not a positive whole number of µ$ is refused and changes nothing", async () => {
+    const budget = budgetFor(1, 1);
+    for (const reserve of [-R, 0, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(await budget.admit("192.0.2.1", NOON, reserve)).toEqual({ ok: false, reason: "unavailable" });
+      expect(await budget.admit(null, NOON, reserve)).toEqual({ ok: false, reason: "unavailable" });
+    }
+    expect((await budget.admit("192.0.2.1", NOON)).ok).toBe(true);
+    expect(await budget.admit("192.0.2.2", NOON)).toEqual({ ok: false, reason: "budget" });
+  });
+
   it("the store skips the address check when there is no address", async () => {
     const store = makeStore();
     const admit = (id: string) =>

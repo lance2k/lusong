@@ -82,6 +82,11 @@ export function createBudget(options: { store: BudgetStore | null; budgetUsd: nu
   return {
     async admit(ip, now, reserveMicros = RESERVE_MICROS) {
       if (!store || !Number.isFinite(budgetMicros) || budgetMicros <= 0) return { ok: false, reason: "unavailable" };
+      // A negative reservation would lower the day's spend, and Redis's INCRBY takes only integers.
+      if (!Number.isSafeInteger(reserveMicros) || reserveMicros <= 0) {
+        console.error(`refused a reservation of ${reserveMicros} µ$: it must be a positive whole number`);
+        return { ok: false, reason: "unavailable" };
+      }
       const day = utcDay(now);
       const id = randomUUID();
       let outcome: Awaited<ReturnType<BudgetStore["admit"]>>;
