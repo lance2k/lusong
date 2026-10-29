@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Meter, MetaApiError, segment } from "./meta";
 
@@ -77,19 +78,19 @@ describe("the meter reads each operation's usage", () => {
   it("a Muse Spark reply from the Responses API is metered by its tokens, not as SAM images", () => {
     const meter = new Meter();
     meter.reply("spark-responses", sparkResponse({ input_tokens: 2_000, output_tokens: 3_000, images_processed: 1 }));
-    expect(meter.usage()).toEqual({ samImages: 0, museInputTokens: 2_000, museOutputTokens: 3_000, complete: true });
+    expect(meter.usage()).toEqual({ samImages: 0, museInputTokens: 2_000, museOutputTokens: 3_000, webSearchQueries: 0, complete: true });
   });
 
   it("a SAM reply is metered by its images, not its tokens", () => {
     const meter = new Meter();
     meter.reply("sam", { usage: { input_tokens: 0, output_tokens: 0, images_processed: 1 } });
-    expect(meter.usage()).toEqual({ samImages: 1, museInputTokens: 0, museOutputTokens: 0, complete: true });
+    expect(meter.usage()).toEqual({ samImages: 1, museInputTokens: 0, museOutputTokens: 0, webSearchQueries: 0, complete: true });
   });
 
   it("a Muse Spark chat reply is metered by its prompt and completion tokens", () => {
     const meter = new Meter();
     meter.reply("spark-chat", { usage: { prompt_tokens: 2_000, completion_tokens: 3_000 } });
-    expect(meter.usage()).toEqual({ samImages: 0, museInputTokens: 2_000, museOutputTokens: 3_000, complete: true });
+    expect(meter.usage()).toEqual({ samImages: 0, museInputTokens: 2_000, museOutputTokens: 3_000, webSearchQueries: 0, complete: true });
   });
 
   it("a Responses-API Spark reply without usage, or with only part of it, is not a complete count", () => {
@@ -103,14 +104,27 @@ describe("the meter reads each operation's usage", () => {
   it("the tokens a partial usage block does report still count, so an overrun is charged", () => {
     const meter = new Meter();
     meter.reply("spark-responses", sparkResponse({ input_tokens: 2_000 }));
-    expect(meter.usage()).toEqual({ samImages: 0, museInputTokens: 2_000, museOutputTokens: 0, complete: false });
+    expect(meter.usage()).toEqual({ samImages: 0, museInputTokens: 2_000, museOutputTokens: 0, webSearchQueries: 0, complete: false });
   });
 
-  it("a Spark reply that ran a tool with no price yet, such as web_search, is not a complete count", () => {
+  it("each web_search_call item is metered as one search query, a search or an opened page alike", () => {
+    const meter = new Meter();
+    const real = JSON.parse(readFileSync("test/fixtures/muse/real-2026-10-30-responses-web-search-capped-3000.json", "utf8"));
+    meter.reply("spark-responses", real.body);
+    expect(meter.usage()).toEqual({
+      samImages: 0,
+      museInputTokens: 90_257,
+      museOutputTokens: 3_000,
+      webSearchQueries: 11,
+      complete: true,
+    });
+  });
+
+  it("a Spark reply holding an output item with no known price is not a complete count", () => {
     const meter = new Meter();
     meter.reply(
       "spark-responses",
-      sparkResponse({ input_tokens: 2_000, output_tokens: 3_000 }, [{ type: "web_search_call" }, { type: "message" }]),
+      sparkResponse({ input_tokens: 2_000, output_tokens: 3_000 }, [{ type: "code_interpreter_call" }, { type: "message" }]),
     );
     expect(meter.usage().complete).toBe(false);
   });
@@ -123,7 +137,7 @@ describe("the meter reads each operation's usage", () => {
     ]) {
       const meter = new Meter();
       meter.reply("spark-responses", body);
-      expect(meter.usage()).toEqual({ samImages: 0, museInputTokens: 2_000, museOutputTokens: 3_000, complete: false });
+      expect(meter.usage()).toEqual({ samImages: 0, museInputTokens: 2_000, museOutputTokens: 3_000, webSearchQueries: 0, complete: false });
     }
   });
 

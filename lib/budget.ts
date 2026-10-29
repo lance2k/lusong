@@ -1,13 +1,18 @@
 import { createHash, randomUUID } from "node:crypto";
 import { MUSE_MAX_COMPLETION_TOKENS } from "./readings";
 
-/** Meta's list prices (docs, 2026-10): SAM $2.50 per 1,000 images; Muse Spark $1.25 / $4.25 per 1M tokens. */
-const SAM_IMAGE_MICROS = 2_500;
-const MUSE_INPUT_MICROS_PER_TOKEN = 1.25;
-const MUSE_OUTPUT_MICROS_PER_TOKEN = 4.25;
+/**
+ * Meta's list prices (docs, 2026-10): SAM $2.50 per 1,000 images; Muse Spark $1.25 / $4.25 per 1M tokens; web search
+ * grounding "$2.50 per 1,000 search queries, in addition to the request's token cost". Cached input tokens are priced as
+ * full input: the docs give no cached rate.
+ */
+export const SAM_IMAGE_MICROS = 2_500;
+export const MUSE_INPUT_MICROS_PER_TOKEN = 1.25;
+export const MUSE_OUTPUT_MICROS_PER_TOKEN = 4.25;
+export const WEB_SEARCH_QUERY_MICROS = 2_500;
 
 /** lib/meta.ts makes at most this many attempts per call; lib/check.ts makes 4 SAM calls and 1 Muse call. */
-const ATTEMPTS_PER_CALL = 2;
+export const ATTEMPTS_PER_CALL = 2;
 const SAM_CALLS = 4;
 /** 1.5 × the 3,881 input tokens measured on a 1600×1600 photo with 12 objects, the largest the route
  *  accepts (one draw, 2026-10-28; 1600×1200 measured 2,968). */
@@ -26,6 +31,8 @@ export interface MeteredUsage {
   samImages: number;
   museInputTokens: number;
   museOutputTokens: number;
+  /** Every web_search_call item a reply carried, whether it searched or opened a page. */
+  webSearchQueries: number;
   /** False when any call was retried, failed, or came back without a usage block: a billed attempt may
    *  be missing from the counts, so the counts are a floor, not the cost. */
   complete: boolean;
@@ -35,7 +42,8 @@ export function costMicros(usage: MeteredUsage): number {
   return Math.ceil(
     usage.samImages * SAM_IMAGE_MICROS +
       usage.museInputTokens * MUSE_INPUT_MICROS_PER_TOKEN +
-      usage.museOutputTokens * MUSE_OUTPUT_MICROS_PER_TOKEN,
+      usage.museOutputTokens * MUSE_OUTPUT_MICROS_PER_TOKEN +
+      usage.webSearchQueries * WEB_SEARCH_QUERY_MICROS,
   );
 }
 
