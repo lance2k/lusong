@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   fetchRoute,
   makeValhallaGate,
+  MAX_ACK_MS,
   MemorySlotStore,
   slotStoreFromEnv,
   UpstashSlotStore,
@@ -132,8 +133,45 @@ describe("one request a second to Valhalla, shared through the store (🔴P7)", 
     const { fetch } = valhalla([ok()]);
     await fetchRoute({ from: BANILAD, to: IT_PARK }, { fetch, gate: makeValhallaGate(store) });
     expect(VALHALLA_SLOT_KEY).toBe("lusong:valhalla:slot");
-    expect(claims).toEqual([[VALHALLA_SLOT_KEY, 1_050]]);
+    expect(claims).toEqual([[VALHALLA_SLOT_KEY, 1_000 + MAX_ACK_MS]]);
   });
+
+  /** A store whose acknowledgement reaches the caller `delays[n]` ms after the n-th claim was decided in the store. */
+  function slowAcks(delays: number[]): SlotStore {
+    const inner = new MemorySlotStore();
+    let n = 0;
+    return {
+      async claim(key, ttlMs) {
+        const delay = delays[Math.min(n++, delays.length - 1)];
+        const granted = await inner.claim(key, ttlMs);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        return granted;
+      },
+    };
+  }
+
+  it("a grant whose acknowledgement arrived 900 ms late is not used: the next start still comes ≥ 1 s after the first", async () => {
+    const store = slowAcks([900, 0]);
+    const { fetch, starts } = valhalla([ok()]);
+    const results = await Promise.all([
+      fetchRoute({ from: BANILAD, to: IT_PARK }, { fetch, gate: makeValhallaGate(store) }),
+      new Promise((resolve) => setTimeout(resolve, 20)).then(() =>
+        fetchRoute({ from: BANILAD, to: IT_PARK }, { fetch, gate: makeValhallaGate(store) }),
+      ),
+    ]);
+    expect(results.every((r) => r.ok)).toBe(true);
+    const times = starts.map((s) => s.at).sort((a, b) => a - b);
+    expect(times).toHaveLength(2);
+    expect(times[1] - times[0]).toBeGreaterThanOrEqual(1_000);
+  }, 10_000);
+
+  it("a grant acknowledged after its lease has expired never starts a request", async () => {
+    const store = slowAcks([1_000 + MAX_ACK_MS + 100]);
+    const { fetch, starts } = valhalla([ok()]);
+    const gate = makeValhallaGate(store, { waitMs: 2_000 });
+    expect(await fetchRoute({ from: BANILAD, to: IT_PARK }, { fetch, gate })).toEqual({ ok: false, reason: "busy" });
+    expect(starts).toHaveLength(0);
+  }, 10_000);
 
   it("a slot that stays taken past the bounded wait gives 'busy' and no request", async () => {
     const store: SlotStore = { claim: async () => false };
@@ -167,9 +205,9 @@ describe("one request a second to Valhalla, shared through the store (🔴P7)", 
     );
     try {
       const store = new UpstashSlotStore("https://upstash.example", "token");
-      expect(await store.claim("lusong:valhalla:slot", 1_050)).toBe(true);
-      expect(await store.claim("lusong:valhalla:slot", 1_050)).toBe(false);
-      expect(bodies[0]).toEqual(["SET", "lusong:valhalla:slot", "1", "NX", "PX", "1050"]);
+      expect(await store.claim("lusong:valhalla:slot", 1_500)).toBe(true);
+      expect(await store.claim("lusong:valhalla:slot", 1_500)).toBe(false);
+      expect(bodies[0]).toEqual(["SET", "lusong:valhalla:slot", "1", "NX", "PX", "1500"]);
     } finally {
       vi.unstubAllGlobals();
     }

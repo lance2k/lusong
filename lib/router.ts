@@ -7,8 +7,13 @@ export const VALHALLA_CLIENT_ID = "lusong";
 
 /** One key for every Lusong instance, so the 1-request-a-second limit holds across all of them. */
 export const VALHALLA_SLOT_KEY = "lusong:valhalla:slot";
-/** 1 s plus 50 ms for the gap between claiming the slot and the request leaving. */
-export const VALHALLA_SLOT_MS = 1_050;
+/**
+ * The lease starts in the store before the caller hears it was granted. A grant is used only when its round trip took at
+ * most MAX_ACK_MS, so the request leaves at most MAX_ACK_MS into a lease of 1 s + MAX_ACK_MS, and the next lease, which
+ * cannot start before this one ends, puts the next request at least 1 s later.
+ */
+export const MAX_ACK_MS = 500;
+export const VALHALLA_SLOT_MS = 1_000 + MAX_ACK_MS;
 export const GATE_WAIT_MS = 4_000;
 const GATE_POLL_MS = 100;
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -85,7 +90,9 @@ export function makeValhallaGate(
       const giveUpAt = Date.now() + waitMs;
       for (;;) {
         try {
-          if (await store.claim(VALHALLA_SLOT_KEY, VALHALLA_SLOT_MS)) return "ok";
+          const asked = Date.now();
+          const granted = await store.claim(VALHALLA_SLOT_KEY, VALHALLA_SLOT_MS);
+          if (granted && Date.now() - asked <= MAX_ACK_MS) return "ok";
         } catch (err) {
           console.error("Valhalla slot store unreachable:", err instanceof Error ? err.message : err);
           return "unavailable";
