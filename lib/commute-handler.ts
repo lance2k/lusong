@@ -358,6 +358,7 @@ export function makeCommuteHandler(deps: {
           id: r.id,
           sample: r.sample,
           place: r.place,
+          at: r.at,
           age: ageWords(at.getTime() - r.receivedAt.getTime()),
           depth: verdict ? depthWords(verdict) : null,
           passability: verdict ? passabilityLine(verdict) : null,

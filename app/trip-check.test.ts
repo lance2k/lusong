@@ -75,3 +75,15 @@ describe("checking your own trip", () => {
     for (const coordinate of ["10.346", "123.911", "10.3307", "123.9058"]) expect(JSON.stringify(after)).not.toContain(coordinate);
   });
 });
+
+describe("what the map draws", () => {
+  it("the answer carries the route's and the detour's lines, and each report's spot for its pin", async () => {
+    const store = new MemoryReportStore({ now: () => NO_ADVISORY.getTime() });
+    const report = flooded();
+    await store.save(report);
+    const body = await (await handlerWith(store)(post(checkRequest(TRIP, false)))).json();
+    expect(body.route.line.length).toBeGreaterThan(1);
+    expect(body.detour.line.length).toBeGreaterThan(1);
+    expect(body.reports).toEqual([expect.objectContaining({ id: report.id, at: { lat: 10.335398, lon: 123.910908 }, age: expect.any(String) })]);
+  });
+});
