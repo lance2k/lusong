@@ -37,8 +37,9 @@ function post(opts: { audio?: Uint8Array; lat?: unknown; lon?: unknown; language
 
 type Reply = (init: RequestInit) => Response | Promise<Response>;
 const transcribed = (transcript: string): Reply => () => Response.json({ sessionId: "s", transcript, audioDurationMs: 5_000, turns: [] });
+/** Muse Spark's reply: the claim, read as a flood report unless the test says otherwise. */
 const claimed = (claim: object): Reply => () =>
-  Response.json({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify(claim) } }], usage: { prompt_tokens: 600, completion_tokens: 200 } });
+  Response.json({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify({ heard_as: "flood_report", ...claim }) } }], usage: { prompt_tokens: 600, completion_tokens: 200 } });
 /** A reply that never comes: the call ends only when its own timeout aborts it. */
 const hangs: Reply = (init) => new Promise<Response>((_, reject) => init.signal?.addEventListener("abort", () => reject(init.signal!.reason)));
 
@@ -164,6 +165,17 @@ describe("what is stored and what the reporter is shown", () => {
     const body = await (await handlerWith()(post())).json();
     expect(body.report).toMatchObject({ role: "neutral", saidPlace: null, heard: "Lusong heard that the water is below the knee and vehicles can pass." });
     expect(body.report.effect).toBe("Others will see this report, but a voice report can't mark a street clear: only a recent photo can.");
+  });
+
+  it("words Muse Spark can't read as a flood report in the picked language are stored as unsure, and block nothing", async () => {
+    const sent: RequestInit[] = [];
+    stubMeta({ spark: (init) => (sent.push(init), claimed({ heard_as: "unsure", place: "Cuenco Avenue", depth: "knee_or_deeper", passable: "no" })(init)) });
+    const store = new MemoryReportStore();
+    const body = await (await handlerWith({ store })(post({ language: "en" }))).json();
+    expect(JSON.stringify(JSON.parse(String(sent[0].body)).messages)).toContain("The rider said the note is in English");
+    expect(body.report).toMatchObject({ role: "neutral", saidPlace: null, heard: "Lusong couldn't tell from your note how deep the water is or whether vehicles can pass." });
+    const [record] = await store.recent(NOW);
+    expect(record).toMatchObject({ claim: { place: null, depth: "not_said", passable: "not_said" } });
   });
 
   it("Voice Transcribe is asked for Tagalog and English", async () => {

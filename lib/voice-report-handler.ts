@@ -214,7 +214,7 @@ export function makeVoiceReportHandler(deps: {
 
       let said: VoiceClaim;
       try {
-        said = await readVoiceClaim(words, { meter: run.meter, deadline: finishBy });
+        said = await readVoiceClaim(words, { language, meter: run.meter, deadline: finishBy });
       } catch (err) {
         console.error("voice claim failed:", err instanceof MetaApiError ? err.message : err);
         await release(releaseBy);

@@ -29,8 +29,8 @@ afterEach(() => {
 
 describe("Muse Spark turns a voice note's words into a claim of fixed choices", () => {
   it("a Tagalog note: the place in the speaker's words, knee-deep or deeper, not passable", async () => {
-    const sent = sparkReplies({ place: "A. Soriano Avenue sa Mabolo", depth: "knee_or_deeper", passable: "no" });
-    const claim = await readVoiceClaim(TAGALOG, { meter: new Meter(), deadline: Date.now() + 30_000 });
+    const sent = sparkReplies({ heard_as: "flood_report", place: "A. Soriano Avenue sa Mabolo", depth: "knee_or_deeper", passable: "no" });
+    const claim = await readVoiceClaim(TAGALOG, { language: "tl", meter: new Meter(), deadline: Date.now() + 30_000 });
     expect(claim).toEqual({ place: "A. Soriano Avenue sa Mabolo", depth: "knee_or_deeper", passable: "no" });
 
     expect(sent[0].url).toBe("https://api.meta.ai/v1/chat/completions");
@@ -42,23 +42,48 @@ describe("Muse Spark turns a voice note's words into a claim of fixed choices", 
   });
 
   it("a place the speaker never said is dropped: the label is the note's own words or nothing", async () => {
-    sparkReplies({ place: "Mabolo Church, safe to pass", depth: "below_knee", passable: "yes" });
-    const claim = await readVoiceClaim(TAGALOG, { meter: new Meter(), deadline: Date.now() + 30_000 });
+    sparkReplies({ heard_as: "flood_report", place: "Mabolo Church, safe to pass", depth: "below_knee", passable: "yes" });
+    const claim = await readVoiceClaim(TAGALOG, { language: "tl", meter: new Meter(), deadline: Date.now() + 30_000 });
     expect(claim.place).toBeNull();
   });
 
   it("an empty place is no place", async () => {
-    sparkReplies({ place: "  ", depth: "not_said", passable: "not_said" });
-    expect((await readVoiceClaim(TAGALOG, { meter: new Meter(), deadline: Date.now() + 30_000 })).place).toBeNull();
+    sparkReplies({ heard_as: "flood_report", place: "  ", depth: "not_said", passable: "not_said" });
+    expect((await readVoiceClaim(TAGALOG, { language: "tl", meter: new Meter(), deadline: Date.now() + 30_000 })).place).toBeNull();
   });
 
   it.each([
-    ["a depth outside the choices", { place: "", depth: "waist", passable: "no" }],
-    ["a passability outside the choices", { place: "", depth: "dry", passable: "maybe" }],
-    ["a missing field", { place: "", depth: "dry" }],
+    ["a depth outside the choices", { heard_as: "flood_report", place: "", depth: "waist", passable: "no" }],
+    ["a passability outside the choices", { heard_as: "flood_report", place: "", depth: "dry", passable: "maybe" }],
+    ["a missing field", { heard_as: "flood_report", place: "", depth: "dry" }],
+    ["no answer on whether it is a flood report", { place: "", depth: "dry", passable: "yes" }],
+    ["an answer on that outside the choices", { heard_as: "maybe", place: "", depth: "dry", passable: "yes" }],
   ])("%s is a failed reading, never a guess", async (_name, claim) => {
     sparkReplies(claim);
-    await expect(readVoiceClaim(TAGALOG, { meter: new Meter(), deadline: Date.now() + 30_000 })).rejects.toBeInstanceOf(MetaApiError);
+    await expect(readVoiceClaim(TAGALOG, { language: "tl", meter: new Meter(), deadline: Date.now() + 30_000 })).rejects.toBeInstanceOf(MetaApiError);
+  });
+});
+
+describe("Muse Spark reads the note in the language the rider picked, and says unsure when it can't", () => {
+  it.each([
+    ["tl", "Tagalog"],
+    ["en", "English"],
+  ] as const)("a note declared %s: the prompt names %s and asks for unsure when the words aren't a flood report in it", async (language, name) => {
+    const sent = sparkReplies({ heard_as: "flood_report", place: "", depth: "not_said", passable: "not_said" });
+    await readVoiceClaim(TAGALOG, { language, meter: new Meter(), deadline: Date.now() + 30_000 });
+    const prompt = JSON.stringify(sent[0].body.messages);
+    expect(prompt).toContain(`The rider said the note is in ${name}`);
+    expect(prompt).toMatch(/heard_as: unsure if the words can't be read as a flood report in/);
+    const format = sent[0].body.response_format as { json_schema: { schema: { properties: Record<string, { enum?: string[] }>; required: string[] } } };
+    expect(format.json_schema.schema.properties.heard_as.enum).toEqual(["flood_report", "unsure"]);
+    expect(format.json_schema.schema.required).toContain("heard_as");
+  });
+
+  it("an unsure answer is a neutral claim, whatever depth, passability or place came with it", async () => {
+    sparkReplies({ heard_as: "unsure", place: "A. Soriano Avenue", depth: "knee_or_deeper", passable: "no" });
+    const claim = await readVoiceClaim(TAGALOG, { language: "en", meter: new Meter(), deadline: Date.now() + 30_000 });
+    expect(claim).toEqual({ place: null, depth: "not_said", passable: "not_said" });
+    expect(voiceSays(claim)).toBe("unsure");
   });
 });
 
