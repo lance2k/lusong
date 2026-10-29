@@ -3,13 +3,13 @@ import { channelFromEnv, TelegramChannel } from "./channel";
 
 /** No request leaves the test: every call is answered here. */
 function fakeTelegram(status: number, body: unknown) {
-  return vi.fn(async (_url: string | URL, _init?: RequestInit) => new Response(JSON.stringify(body), { status }));
+  return vi.fn<typeof globalThis.fetch>(async () => new Response(JSON.stringify(body), { status }));
 }
 
 describe("the Telegram channel (no real call: fetch is faked)", () => {
   it("sends one text message to the chat through the Bot API's sendMessage, with link previews off", async () => {
     const fetch = fakeTelegram(200, { ok: true, result: { message_id: 1 } });
-    const result = await new TelegramChannel("TEST-TOKEN", fetch as unknown as typeof globalThis.fetch).send("4242", "Go");
+    const result = await new TelegramChannel("TEST-TOKEN", fetch).send("4242", "Go");
     expect(result).toEqual({ ok: true });
     expect(fetch).toHaveBeenCalledTimes(1);
     const [url, init] = fetch.mock.calls[0];
@@ -21,7 +21,7 @@ describe("the Telegram channel (no real call: fetch is faked)", () => {
 
   it("calls a 403 permanent: the rider has blocked the bot", async () => {
     const fetch = fakeTelegram(403, { ok: false, error_code: 403, description: "Forbidden: bot was blocked by the user" });
-    expect(await new TelegramChannel("T", fetch as unknown as typeof globalThis.fetch).send("1", "x")).toEqual({ ok: false, permanent: true });
+    expect(await new TelegramChannel("T", fetch).send("1", "x")).toEqual({ ok: false, permanent: true });
   });
 
   it.each([
@@ -30,14 +30,14 @@ describe("the Telegram channel (no real call: fetch is faked)", () => {
     ["a 200 that isn't ok", 200, { ok: false }],
   ])("calls %s worth another try", async (_label, status, body) => {
     const fetch = fakeTelegram(status, body);
-    expect(await new TelegramChannel("T", fetch as unknown as typeof globalThis.fetch).send("1", "x")).toEqual({ ok: false, permanent: false });
+    expect(await new TelegramChannel("T", fetch).send("1", "x")).toEqual({ ok: false, permanent: false });
   });
 
   it("calls a dropped connection worth another try, and never throws", async () => {
-    const fetch = vi.fn(async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => {
       throw new TypeError("fetch failed");
     });
-    expect(await new TelegramChannel("T", fetch as unknown as typeof globalThis.fetch).send("1", "x")).toEqual({ ok: false, permanent: false });
+    expect(await new TelegramChannel("T", fetch).send("1", "x")).toEqual({ ok: false, permanent: false });
   });
 
   it("is missing without a bot token", () => {
