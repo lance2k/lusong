@@ -532,23 +532,36 @@ describe("web findings: they can block a way, never clear one (criterion 3, 🔴
     expect(told.reports).toEqual([expect.objectContaining({ kind: "web", role: "block", url: "https://example.ph/banilad-closed" })]);
   });
 
-  it("an undated closure on your way does not block it: it is neutral, so the way is unknown, never Go", async () => {
+  // 🔴P8's disposition: a web finding enters the rules only when dated today (PHT) and located; anything else is shown,
+  // not counted, so it leaves the answer exactly as it was without it.
+  it.each([
+    ["undated closure", { sourceDate: null }, NOW],
+    ["closure dated yesterday", { sourceDate: "2026-10-29" }, NOW],
+  ] as const)("%s on your way is shown, not counted: the answer is the one without it", async (_name, overrides, now) => {
     const { sources, asked } = sourcesOf();
     quiet();
 
-    const result = await investigate(inputOf(sources, { web: searched(finding({ sourceDate: null })) }));
+    const result = await investigate(inputOf(sources, { now, web: searched(finding(overrides)) }));
 
-    expect(plainState(result)).toMatchObject({ state: "unknown", blockedBy: [] });
+    expect(plainState(result)).toMatchObject({ state: "passable", reportIds: [], blockedBy: [] });
+    if (!result.ok) throw new Error("expected an answer");
+    expect(result.answer.answer).toBe("go");
+    expect(result.reports).toEqual([]);
+    expect(result.web.findings).toHaveLength(1);
     expect(asked.routeAround).toEqual([]);
   });
 
-  it("a closure dated yesterday does not block either", async () => {
+  it("a closure dated today, cached from before PHT midnight and used after it, is no longer counted", async () => {
     const { sources } = sourcesOf();
     quiet();
+    // Searched 23:50 PHT on 2026-10-29 with a closure dated that day; checked at 00:10 PHT on 2026-10-30.
+    const web = { state: "searched" as const, searchedAt: "2026-10-29T15:50:00Z", findings: [finding({ sourceDate: "2026-10-29" })] };
 
-    const result = await investigate(inputOf(sources, { web: searched(finding({ sourceDate: "2026-10-29" })) }));
+    const result = await investigate(inputOf(sources, { now: new Date("2026-10-29T16:10:00Z"), web }));
 
-    expect(plainState(result)).toMatchObject({ state: "unknown", blockedBy: [] });
+    if (!result.ok) throw new Error("expected an answer");
+    expect(result.answer.answer).toBe("go");
+    expect(result.reports).toEqual([]);
   });
 
   it("a closure with no location is shown and never given to the rules", async () => {

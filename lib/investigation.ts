@@ -74,7 +74,7 @@ export type InvestigationResult =
   | {
       ok: true;
       answer: Answer;
-      /** Every report the rules were given, web findings with a location included. */
+      /** Every report the rules were given: web findings only when located and dated today. */
       reports: Report[];
       detours: Detour[];
       web: WebEvidence;
@@ -296,16 +296,25 @@ class Evidence {
   }
 }
 
-function webReportsOf(web: WebEvidence): Report[] {
+function phtDay(t: Date): string {
+  return new Date(t.getTime() + 8 * 3_600_000).toISOString().slice(0, 10);
+}
+
+/**
+ * 🔴P8: a web finding enters the rules only when it is located and dated today in PHT. Any other finding is shown and
+ * never counted, not even as neutral, so it can't turn a Go into No one knows.
+ */
+function webReportsOf(web: WebEvidence, now: Date): Report[] {
   if (web.searchedAt === null) return [];
   const receivedAt = new Date(web.searchedAt);
+  const today = phtDay(now);
   return web.findings
-    .filter((f): f is WebFinding & { at: Point } => f.at !== null)
+    .filter((f): f is WebFinding & { at: Point } => f.at !== null && f.sourceDate === today)
     .map((f) => ({ id: f.id, at: f.at, wayId: null, receivedAt, place: f.place, reading: { source: "web", says: "closed", sourceDate: f.sourceDate } }));
 }
 
 export async function investigate(input: InvestigationInput): Promise<InvestigationResult> {
-  const evidence = new Evidence(input, webReportsOf(input.web));
+  const evidence = new Evidence(input, webReportsOf(input.web, input.now));
   const plainReports = await input.sources.reportsAlong(input.plainLine);
   if (!plainReports.ok) return { ok: false, failed: "reports" };
   evidence.add(plainReports.reports);
