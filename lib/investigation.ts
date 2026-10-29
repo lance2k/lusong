@@ -129,6 +129,18 @@ export const SEARCH_QUERIES_RESERVED = 22;
 
 const LAST_TURN_NOTE = "No more tool calls: write the explanation now.";
 
+/**
+ * Model calls (the web search included) must finish this long after the check starts. Valhalla requests are bounded
+ * on their own: two 10 s attempts and a 4 s slot wait.
+ */
+export const INVESTIGATION_BUDGET_MS = 45_000;
+/** A way around is asked for only with this much time left: a cached Valhalla slot and one attempt, with room to explain. */
+export const ROUTE_AROUND_MIN_MS = 12_000;
+
+export function investigationDeadline(checkStartedAt: number): number {
+  return checkStartedAt + INVESTIGATION_BUDGET_MS;
+}
+
 /** At most this many ways around the model may ask for in one check: each is a request to the shared Valhalla server. */
 export const ROUTE_AROUND_CAP = 1;
 export const ROUTE_AROUND_MAX_SPOTS = 3;
@@ -369,6 +381,10 @@ export async function investigate(input: InvestigationInput): Promise<Investigat
         }
         if (!spots.every((p) => typeof p === "object" && p !== null && inMetroCebu(p))) {
           return refuse("spot outside Metro Cebu", "every spot must be a {lat, lon} in Metro Cebu");
+        }
+        if (input.deadline - Date.now() < ROUTE_AROUND_MIN_MS) {
+          toolCalls.push({ name: call.name, outcome: "no time left" });
+          return { result: "no time left" };
         }
         routeArounds++;
         const blocking = plainBlockers();

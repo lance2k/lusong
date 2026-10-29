@@ -8,7 +8,10 @@ import {
   EXPLANATION_UNAVAILABLE,
   FIRST_TURN_MAX_BYTES,
   investigate,
+  investigationDeadline,
   investigationReserveMicros,
+  INVESTIGATION_BUDGET_MS,
+  ROUTE_AROUND_MIN_MS,
   PROMPT_MAX_BYTES,
   LOOP_MAX_OUTPUT_TOKENS,
   LOOP_TURN_CAP,
@@ -400,6 +403,16 @@ describe("route_around: a way around the model proposes is judged by the same ru
     expect(result.detours).toEqual([]);
   });
 
+  it("a way around that can't finish before the deadline is not started", async () => {
+    const { sources, asked } = sourcesOf({ reports: [blocker], around: onlyWithModelSpot });
+    const meta = fakeMeta({ turns: [proposeAround([MODEL_SPOT]), textReply("resp_2", "No way around Banilad was found.")] });
+
+    await investigate(inputOf(sources, { deadline: Date.now() + ROUTE_AROUND_MIN_MS - 1_000 }));
+
+    expect(asked.routeAround).toHaveLength(1);
+    expect(JSON.parse((meta.requests[1].input as { output: string }[])[0].output)).toMatchObject({ result: "no time left" });
+  });
+
   it("reports along the model's way around that can't be read give no answer", async () => {
     const { sources } = sourcesOf({ reports: [blocker], around: onlyWithModelSpot, failReportsFrom: 1 });
     fakeMeta({ turns: [proposeAround([MODEL_SPOT])] });
@@ -712,5 +725,11 @@ describe("settling an investigation through the shared admission", () => {
     // 1,000,000 × 1.25 + 4,000 × 4.25 + 200 × 2,500 + 4,477 = 1,771,477 µ$
     expect(charged).toBe(1_771_477);
     expect(charged).toBeGreaterThan(reserved);
+  });
+});
+
+describe("the investigation's deadline", () => {
+  it(`ends ${INVESTIGATION_BUDGET_MS / 1000} s after the check starts`, () => {
+    expect(investigationDeadline(1_000_000)).toBe(1_000_000 + INVESTIGATION_BUDGET_MS);
   });
 });
