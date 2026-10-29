@@ -35,7 +35,8 @@ Pick a trip (a preset one such as Banilad → IT Park, or your own two points on
   Lusong writes every sentence on the page from those ids, so the model can't change the answer or put its own words
   in front of the rider. A closure it finds blocks a way only when it is dated today and placed on that way.
 - **The demo trips** are recorded routes with sample reports. Every sample says it is a sample and where the photo was
-  really taken (Metro Manila, from the MMDA-labelled test set), so it is never mistaken for a report from Cebu.
+  really taken (Cavite, Manila or Shah Alam in Malaysia, from Lusong's labelled test photos), so it is never
+  mistaken for a report from Cebu.
 
 ## Built during the hackathon
 
