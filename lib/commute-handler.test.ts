@@ -3,12 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import { FEED_URL } from "./advisory";
 import { createBudget, MemoryBudgetStore, type Budget } from "./budget";
 import { ADVISORY_CACHE_MS, COMMUTE_RESERVE_MICROS, makeCommuteHandler, ROUTE_CACHE_MS } from "./commute-handler";
+import { CAP_EDITS, CV_GFA5, FEED, feedWith, SAVED } from "../test/pagasa-fixtures";
 import { makeValhallaGate, MemorySlotStore, VALHALLA_URL, type SlotStore } from "./router";
 
 const read = (path: string) => readFileSync(path, "utf8");
-const FEED = read("test/fixtures/pagasa/feed-2026-10-29.xml");
-const CV_GFA5_URL = "https://publicalert.pagasa.dost.gov.ph/output/gfa/f1232c02-5d52-4786-90aa-46865ab991a4.cap";
-const CV_GFA5 = read("test/fixtures/pagasa/central-visayas-gfa-2026-10-25T1727.cap");
 const ROUTES: Record<string, string> = {
   "10.346,123.911": read("test/fixtures/valhalla/banilad-itpark-plain.json"),
   "10.3143,123.9147": read("test/fixtures/valhalla/mabolo-cbp-plain.json"),
@@ -19,19 +17,17 @@ const ADVISORY_ACTIVE = new Date("2026-10-25T20:00:00+08:00");
 /** Noon on 2026-10-29: no GFA entry in the feed's last 24 h, so no advisory. */
 const NO_ADVISORY = new Date("2026-10-29T12:00:00+08:00");
 
-type Options = { valhalla?: "ok" | "down"; feed?: "ok" | "down" };
+type Options = { valhalla?: "ok" | "down"; feed?: "ok" | "down"; pagasa?: Record<string, string> };
 
-/** PAGASA and Valhalla faked at fetch with their saved records; any other CAP link fails as a dropped connection. */
+/** PAGASA and Valhalla faked at fetch with their saved records; any CAP link not saved fails as a dropped connection. */
 function network(opts: Options = {}) {
   const calls: { url: string; at: number; body?: string }[] = [];
   const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
     const u = String(url);
     calls.push({ url: u, at: performance.now(), body: init?.body ? String(init.body) : undefined });
-    if (u === FEED_URL) {
-      if (opts.feed === "down") throw new TypeError("fetch failed");
-      return new Response(FEED);
-    }
-    if (u === CV_GFA5_URL) return new Response(CV_GFA5);
+    if (u === FEED_URL && opts.feed === "down") throw new TypeError("fetch failed");
+    const pagasa = opts.pagasa ?? { [FEED_URL]: FEED, ...SAVED };
+    if (u in pagasa) return new Response(pagasa[u]);
     if (u === `${VALHALLA_URL}/route`) {
       if (opts.valhalla === "down") throw new TypeError("fetch failed");
       const from = JSON.parse(String(init!.body)).locations[0];
@@ -125,6 +121,19 @@ describe("the demo commute check", () => {
     expect(body.advisory.note).toBe("Lusong couldn't read PAGASA's flood advisory feed, so it counts an advisory as active.");
     expect(body.answer.kind).toBe("no_one_knows");
   });
+
+  it.each(CAP_EDITS.map((e) => [e.name, e.edit] as const))(
+    "the active Cebu record with %s gives no Go, dry and with nothing reported (🔴2)",
+    async (_name, edit) => {
+      const onlyCebu = feedWith((t) => t === "GFA #5 - Region 7 (Central Visayas)");
+      const control = handlerAt(ADVISORY_ACTIVE, { pagasa: { [FEED_URL]: onlyCebu, [CV_GFA5]: SAVED[CV_GFA5] } });
+      expect((await (await control.handler(demo("banilad-itpark", "none"))).json()).answer.kind).toBe("no_one_knows");
+      const { handler } = handlerAt(ADVISORY_ACTIVE, { pagasa: { [FEED_URL]: onlyCebu, [CV_GFA5]: edit(SAVED[CV_GFA5]) } });
+      const body = await (await handler(demo("banilad-itpark", "none"))).json();
+      expect(body.advisory.state).toBe("unreadable");
+      expect(body.answer.kind).not.toBe("go");
+    },
+  );
 
   it("an unreachable routing server is said so, with no answer", async () => {
     const { handler } = handlerAt(NO_ADVISORY, { valhalla: "down" });

@@ -1,20 +1,7 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { FEED_URL, readAdvisory } from "./advisory";
 
-const fixture = (name: string) => readFileSync(`test/fixtures/pagasa/${name}`, "utf8");
-const FEED = fixture("feed-2026-10-29.xml");
-const GFA_URL = (id: string) => `https://publicalert.pagasa.dost.gov.ph/output/gfa/${id}.cap`;
-
-/** The real CAP records saved from PAGASA, by the URL the feed links them at. */
-const SAVED: Record<string, string> = {
-  [GFA_URL("f1232c02-5d52-4786-90aa-46865ab991a4")]: fixture("central-visayas-gfa-2026-10-25T1727.cap"),
-  [GFA_URL("da3e8383-a066-49ed-99ef-8dd3fe93fb55")]: fixture("central-visayas-gfa-final-2026-10-26T0522.cap"),
-  [GFA_URL("bc03a078-80b2-4f2c-9bfd-b4ea606cdcdf")]: fixture("eastern-visayas-gfa-final-2026-10-26T0526.cap"),
-  [GFA_URL("b83d7200-67eb-44a1-9d73-da74b3634b9f")]: fixture("western-visayas-gfa-final-2026-10-26T0520.cap"),
-};
-const CV_GFA5 = GFA_URL("f1232c02-5d52-4786-90aa-46865ab991a4");
-const CV_GFA6_FINAL = GFA_URL("da3e8383-a066-49ed-99ef-8dd3fe93fb55");
+import { CAP_EDITS, CV_GFA5, CV_GFA5_LONG, CV_GFA6_FINAL, FEED, feedWith, GFA_URL, NEWEST_PER_REGION, SAVED } from "../test/pagasa-fixtures";
 
 type Served = Record<string, string | (() => Promise<Response>)>;
 
@@ -82,14 +69,34 @@ describe("reading PAGASA's flood advisory for Cebu", () => {
   });
 
   it("after every Cebu advisory has expired or been closed, with each record read, there is none", async () => {
-    const { fetch } = pagasa(only(CV_GFA6_FINAL, GFA_URL("bc03a078-80b2-4f2c-9bfd-b4ea606cdcdf"), GFA_URL("b83d7200-67eb-44a1-9d73-da74b3634b9f")));
+    const { fetch } = pagasa(only(...NEWEST_PER_REGION));
     expect(await readAdvisory({ fetch, now: at("2026-10-26T17:35:00+08:00") })).toEqual({ state: "none" });
   });
 
-  it("days after the last GFA entry there is nothing to follow: none", async () => {
-    const { fetch, calls } = pagasa(only());
+  it("at the feed's date, with each of the eight regions' newest record read and none active: none", async () => {
+    const { fetch, calls } = pagasa(only(...NEWEST_PER_REGION));
     expect(await readAdvisory({ fetch, now: at("2026-10-29T12:00:00+08:00") })).toEqual({ state: "none" });
-    expect(calls).toEqual([FEED_URL]);
+    expect(calls.slice(1).sort()).toEqual([...NEWEST_PER_REGION].sort());
+  });
+
+  it("an advisory still active more than 24 h after it was sent is read as active (🔴3)", async () => {
+    const noFinalForCebu = feedWith((t) => !t.startsWith("GFA #6 (Final) - Region 7"));
+    const { fetch } = pagasa({ ...only(...NEWEST_PER_REGION), [FEED_URL]: noFinalForCebu, [CV_GFA5]: CV_GFA5_LONG });
+    const result = await readAdvisory({ fetch, now: at("2026-10-26T20:00:00+08:00") });
+    expect(result).toMatchObject({ state: "active", advisory: { id: "f1232c02-5d52-4786-90aa-46865ab991a4", expires: "2026-10-28T05:27:04+08:00" } });
+  });
+
+  it("a region's older records are not fetched once its newest is read", async () => {
+    const { fetch, calls } = pagasa(only(...NEWEST_PER_REGION));
+    await readAdvisory({ fetch, now: at("2026-10-29T12:00:00+08:00") });
+    expect(calls).not.toContain(CV_GFA5);
+  });
+
+  it("without region names in the titles, a later record that references an earlier one still replaces it", async () => {
+    const unnamed = feedWith((t) => t.includes("Region 7")).replace(/ - Region 7 \(Central Visayas\)/g, "");
+    const { fetch } = pagasa({ [FEED_URL]: unnamed, [CV_GFA5]: SAVED[CV_GFA5], [CV_GFA6_FINAL]: SAVED[CV_GFA6_FINAL] });
+    const result = await readAdvisory({ fetch, now: at("2026-10-26T05:25:00+08:00"), limits: { maxCapFetches: 20 } });
+    expect(result.state).not.toBe("active");
   });
 
   it("a Final advisory (responseType AllClear) is not an active one, though it hasn't expired", async () => {
@@ -149,6 +156,24 @@ describe("reading PAGASA's flood advisory for Cebu", () => {
   });
 });
 
+describe("a record missing what decides its state is 'unreadable', never inactive (🔴2)", () => {
+  const onlyCebuEntry = feedWith((t) => t === "GFA #5 - Region 7 (Central Visayas)");
+  const now = at("2026-10-25T20:00:00+08:00");
+  const cap = SAVED[CV_GFA5];
+
+  it("the saved record, alone in the feed, is active (positive control)", async () => {
+    const { fetch } = pagasa({ [FEED_URL]: onlyCebuEntry, [CV_GFA5]: cap });
+    expect((await readAdvisory({ fetch, now })).state).toBe("active");
+  });
+
+  it.each(CAP_EDITS.map((e) => [e.name, e.edit] as const))("%s ⇒ unreadable", async (_name, edit) => {
+    const edited = edit(cap);
+    expect(edited).not.toBe(cap);
+    const { fetch } = pagasa({ [FEED_URL]: onlyCebuEntry, [CV_GFA5]: edited });
+    expect((await readAdvisory({ fetch, now })).state).toBe("unreadable");
+  });
+});
+
 describe("anything malformed or failed is 'unreadable', never 'none'", () => {
   const now = at("2026-10-25T20:00:00+08:00");
 
@@ -163,7 +188,7 @@ describe("anything malformed or failed is 'unreadable', never 'none'", () => {
     expect((await readAdvisory({ fetch, now })).state).toBe("unreadable");
   });
 
-  const FINALS = [CV_GFA6_FINAL, GFA_URL("bc03a078-80b2-4f2c-9bfd-b4ea606cdcdf"), GFA_URL("b83d7200-67eb-44a1-9d73-da74b3634b9f")];
+  const FINALS = NEWEST_PER_REGION;
   const afterFinals = at("2026-10-26T17:35:00+08:00");
 
   it("every record read and none active, but more candidates than it may fetch", async () => {
@@ -224,6 +249,7 @@ describe("anything malformed or failed is 'unreadable', never 'none'", () => {
       return new Response(FEED);
     });
     await readAdvisory({ fetch: fetchMock as unknown as typeof fetch, now: at("2026-10-29T12:00:00+08:00") });
-    expect(seen).toEqual(["Lusong/0.1 (hackathon entry; github.com/lance2k/lusong)"]);
+    expect(seen.length).toBeGreaterThan(1);
+    expect(new Set(seen)).toEqual(new Set(["Lusong/0.1 (hackathon entry; github.com/lance2k/lusong)"]));
   });
 });

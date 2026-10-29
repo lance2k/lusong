@@ -6,14 +6,8 @@ export const USER_AGENT = "Lusong/0.1 (hackathon entry; github.com/lance2k/luson
 const ATOM = "http://www.w3.org/2005/Atom";
 const CAP = "urn:oasis:names:tc:emergency:cap:1.2";
 
-/**
- * Only GFA entries updated this recently are followed. Both Central Visayas records saved (2026-10-25 and -26)
- * expire 12 h after they were sent; 24 h leaves room for a longer one (2 records, an assumption beyond that).
- */
-export const ADVISORY_LOOKBACK_MS = 24 * 60 * 60 * 1000;
-
 export interface AdvisoryLimits {
-  /** At most this many CAP records are fetched per reading; more candidates than that is 'unreadable'. */
+  /** At most this many CAP records are fetched per reading; needing more than that to settle every region is 'unreadable'. */
   maxCapFetches: number;
   maxBytes: number;
   /** Per request. */
@@ -75,6 +69,14 @@ interface FeedEntry {
   title: string;
   updated: number;
   link: string;
+  /** "Region 7 (Central Visayas)" from "GFA #5 - Region 7 (Central Visayas)"; null when the title names none. */
+  region: string | null;
+}
+
+function regionOf(title: string): string | null {
+  const dash = title.lastIndexOf(" - ");
+  const region = dash < 0 ? "" : title.slice(dash + 3).trim();
+  return region === "" ? null : region;
 }
 
 function readFeed(xml: string): FeedEntry[] {
@@ -85,7 +87,14 @@ function readFeed(xml: string): FeedEntry[] {
     if (!/\bGFA\b/.test(title)) return [];
     const link = childrenOf(entry, ATOM, "link").find((l) => /\.cap$/.test(l.attrs.href ?? "") || l.attrs.type === "application/cap+xml");
     if (!link?.attrs.href) throw new Unreadable(`GFA entry "${title}" has no CAP link`);
-    return [{ title, updated: time(textOf(entry, ATOM, "updated"), `"${title}" updated`), link: new URL(link.attrs.href, FEED_URL).href }];
+    return [
+      {
+        title,
+        updated: time(textOf(entry, ATOM, "updated"), `"${title}" updated`),
+        link: new URL(link.attrs.href, FEED_URL).href,
+        region: regionOf(title),
+      },
+    ];
   });
 }
 
@@ -105,42 +114,64 @@ function riversFor(description: string): string | null {
     .replace(/\.$/, "");
 }
 
-/** An advisory for Cebu counts only while it is a live Alert or Update, not an all-clear, and not yet expired. */
+/** CAP 1.2's code lists (OASIS CAP v1.2 §3.2.1, §3.2.2). Anything else is a record Lusong can't read. */
+const STATUSES = new Set(["Actual", "Exercise", "System", "Test", "Draft"]);
+const MSG_TYPES = new Set(["Alert", "Update", "Cancel", "Ack", "Error"]);
+const RESPONSE_TYPES = new Set(["Shelter", "Evacuate", "Prepare", "Execute", "Avoid", "Monitor", "Assess", "AllClear", "None"]);
+
+function required(el: XmlElement, name: string, link: string): string {
+  const value = textOf(el, CAP, name);
+  if (!value) throw new Unreadable(`${link} has no ${name}`);
+  return value;
+}
+
+/**
+ * Every field the state depends on is checked before the state is decided, so a record missing one is 'unreadable'
+ * rather than quietly inactive. An advisory for Cebu counts only while it is a live Alert or Update, not an all-clear,
+ * and not yet expired.
+ */
 function readCap(xml: string, link: string, now: number): CapRecord {
   const alert = parseXml(xml);
   if (alert.ns !== CAP || alert.name !== "alert") throw new Unreadable(`${link} is not a CAP alert`);
-  const id = textOf(alert, CAP, "identifier");
-  if (!id) throw new Unreadable(`${link} has no identifier`);
-  const sentText = textOf(alert, CAP, "sent");
+  const id = required(alert, "identifier", link);
+  const sentText = required(alert, "sent", link);
   const sent = time(sentText, `${link} sent`);
+  const status = required(alert, "status", link);
+  if (!STATUSES.has(status)) throw new Unreadable(`${link} has status ${status}`);
+  const msgType = required(alert, "msgType", link);
+  if (!MSG_TYPES.has(msgType)) throw new Unreadable(`${link} has msgType ${msgType}`);
   const references = (textOf(alert, CAP, "references") ?? "")
     .split(/\s+/)
     .filter(Boolean)
     .map((ref) => ref.split(",")[1])
     .filter((ref): ref is string => Boolean(ref));
 
-  const live =
-    textOf(alert, CAP, "status") === "Actual" && ["Alert", "Update"].includes(textOf(alert, CAP, "msgType") ?? "") && sent <= now;
   const infos = childrenOf(alert, CAP, "info");
   if (infos.length === 0) throw new Unreadable(`${link} has no info block`);
-  const forCebu = infos.find((info: XmlElement) => {
-    const expires = time(textOf(info, CAP, "expires"), `${link} expires`);
-    const allClear = childrenOf(info, CAP, "responseType").some((r) => r.text.trim() === "AllClear");
-    const inCebu = childrenOf(info, CAP, "area").some((area) => CEBU.test(textOf(area, CAP, "areaDesc") ?? ""));
-    return live && !allClear && expires > now && inCebu;
+  const read = infos.map((info) => {
+    const expiresText = required(info, "expires", link);
+    const expires = time(expiresText, `${link} expires`);
+    const responses = childrenOf(info, CAP, "responseType").map((r) => r.text.trim());
+    if (responses.some((r) => !RESPONSE_TYPES.has(r))) throw new Unreadable(`${link} has an unknown responseType`);
+    const areas = childrenOf(info, CAP, "area").map((area) => textOf(area, CAP, "areaDesc") ?? "");
+    if (areas.length === 0 || areas.some((a) => a === "")) throw new Unreadable(`${link} has no usable area`);
+    return { info, expiresText, expires, allClear: responses.includes("AllClear"), inCebu: areas.some((a) => CEBU.test(a)) };
   });
-  if (!forCebu) return { advisory: null, references };
-  const description = childOf(forCebu, CAP, "description")?.text ?? "";
+
+  const live = status === "Actual" && (msgType === "Alert" || msgType === "Update") && sent <= now;
+  const active = read.find((r) => live && !r.allClear && r.expires > now && r.inCebu);
+  if (!active) return { advisory: null, references };
+  const description = childOf(active.info, CAP, "description")?.text ?? "";
   return {
     references,
     advisory: {
       id,
-      headline: textOf(forCebu, CAP, "headline"),
-      event: textOf(forCebu, CAP, "event"),
+      headline: textOf(active.info, CAP, "headline"),
+      event: textOf(active.info, CAP, "event"),
       rainForecast: /rainfall forecast is\s+([^.\n]+?)\s*\.?\s*$/im.exec(description)?.[1] ?? null,
       riversForCebu: riversFor(description),
-      sent: sentText!,
-      expires: textOf(forCebu, CAP, "expires")!,
+      sent: sentText,
+      expires: active.expiresText,
       link,
     },
   };
@@ -158,21 +189,31 @@ export async function readAdvisory(deps: {
   const limits = { ...DEFAULT_LIMITS, ...deps.limits };
   const now = deps.now.getTime();
   const deadline = AbortSignal.timeout(limits.deadlineMs);
-  let candidates: FeedEntry[];
+  let entries: FeedEntry[];
   try {
-    candidates = readFeed(await fetchText(FEED_URL, deps, limits, deadline))
-      .filter((e) => e.updated <= now && now - e.updated < ADVISORY_LOOKBACK_MS)
+    entries = readFeed(await fetchText(FEED_URL, deps, limits, deadline))
+      .filter((e) => e.updated <= now)
       .sort((a, b) => b.updated - a.updated);
   } catch (err) {
     return { state: "unreadable", why: `feed: ${err instanceof Error ? err.message : String(err)}` };
   }
 
+  // Each region's newest record is its current state, however old: older records of a settled region are skipped.
+  const settled = new Set<string>();
   const replaced = new Set<string>();
   const seen = new Set<string>();
-  let failure: string | null = candidates.length > limits.maxCapFetches ? `${candidates.length} candidates, limit ${limits.maxCapFetches}` : null;
-  for (const entry of candidates.slice(0, limits.maxCapFetches)) {
+  let fetched = 0;
+  let failure: string | null = null;
+  for (const entry of entries) {
+    if (entry.region !== null && settled.has(entry.region)) continue;
     if (seen.has(entry.link)) continue;
+    if (fetched >= limits.maxCapFetches) {
+      failure ??= `more than ${limits.maxCapFetches} records needed`;
+      break;
+    }
     seen.add(entry.link);
+    fetched++;
+    if (entry.region !== null) settled.add(entry.region);
     try {
       const record = readCap(await fetchText(entry.link, deps, limits, deadline), entry.link, now);
       // Newest first, so every record that replaces this one has already been read.
