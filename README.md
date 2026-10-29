@@ -85,20 +85,27 @@ Two sets of openly licensed Wikimedia Commons photos run through the real pipeli
 words in each photo's caption (knee-deep, waist-deep…), not measured depths, so they test whether Lusong picks
 the right landmark rather than whether its centimetres are right.
 
-**Depth set** (`test/fixtures/depth-set/`, 45 photos, 2 draws each = 90 draws). It measures and was never tuned on:
-nothing in the prompt or rules changed after seeing it. A draw is "too shallow" when the whole interval of the
-reading that decided the verdict sits below the caption's; touching or overlapping counts as a match.
+**Depth set** (`test/fixtures/depth-set/`, 45 photos, 2 draws each = 90 draws). 32 are flood scenes; 13 show
+people wading in rivers or the sea, which Lusong is not built for but which carry a depth in the caption, so they
+are counted apart. It measures and was never tuned on: nothing in the prompt or rules changed after seeing it. A
+draw is "too shallow" when the whole interval of the reading that decided the verdict sits below the caption's;
+touching or overlapping counts as a match.
 
-| Run (2026-10-29) | Draws | too shallow | matched | too deep | can't measure | errors |
-|---|---|---|---|---|---|---|
-| baseline, `3e160c6` | 90 | 33 | 40 | 4 | 13 | 0 |
-| with the tyre estimate, `6fa88e6` | 90 | 33 | 39 | 4 | 14 | 0 |
+| Run (2026-10-29) | Photos | Draws | too shallow | matched | too deep | can't measure | errors |
+|---|---|---|---|---|---|---|---|
+| baseline, `3e160c6`: flood scenes | 32 | 64 | 22 | 30 | 2 | 10 | 0 |
+| baseline: wading in rivers or the sea | 13 | 26 | 11 | 10 | 2 | 3 | 0 |
+| baseline: all | 45 | 90 | 33 | 40 | 4 | 13 | 0 |
+| with the tyre estimate, `6fa88e6`: flood scenes | 32 | 64 | 22 | 28 | 2 | 12 | 0 |
+| with the tyre estimate: wading | 13 | 26 | 11 | 11 | 2 | 2 | 0 |
+| with the tyre estimate: all | 45 | 90 | 33 | 39 | 4 | 14 | 0 |
 
-Too shallow is the error that matters, and it is high: 33 of 90 draws in both runs. Most of those still came
-with a cautious answer: on photos whose caption says knee-deep or deeper (82 draws), Lusong answered "shallow"
-on 10 in each run, and even then the page says "not a go-ahead". The tyre estimate appeared on 2 of 90 draws
-and decided none, so it changed nothing here; 6 of the 45 photos changed outcome between the two runs from
-draw-to-draw variation alone. Reports: `test/depth-runs/`.
+Too shallow is the error that matters, and it is high: on the flood scenes 22 of 64 draws in both runs (33 of
+90 with the wading photos). Most of those still came with a cautious answer: on flood scenes whose caption says
+knee-deep or deeper (56 draws), Lusong answered "shallow" on 8 in each run (10 of 82 with the wading photos), and
+even then the page says "not a go-ahead". The tyre estimate appeared on 2 of 90 draws and decided none, so it
+changed nothing here; 6 of the 45 photos changed outcome between the two runs from draw-to-draw variation
+alone. Reports: `test/depth-runs/`.
 
 **Acceptance gate** (`test/fixtures/acceptance/`, 15 photos × 2 draws = 30). It fails on "no flood found" for a
 knee-deep-or-deeper photo and on any measurement of a photo with no person or car in the water. On `6fa88e6`
