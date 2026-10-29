@@ -561,8 +561,8 @@ describe("Muse Spark in the demo check (#7)", () => {
   /** NO_ADVISORY is 2026-10-29 in PHT. */
   const closures = JSON.stringify({
     closures: [
-      { place: "A. S. Fortuna St, Mandaue", lat: 10.335, lon: 123.935, url: "https://example.ph/fortuna", date: "2026-10-29", summary: "Closed by flooding." },
-      { place: "Colon St", lat: null, lon: null, url: "https://example.ph/colon", date: null, summary: "Flooded." },
+      { place: "A. S. Fortuna St, Mandaue", lat: 10.335, lon: 123.935, url: "https://news.example.ph/fortuna", date: "2026-10-29", kind: "closed", summary: "Closed by flooding." },
+      { place: "Colon St", lat: null, lon: null, url: "https://example.ph/colon", date: null, kind: "flooded", summary: "Flooded." },
     ],
   });
   const pickOf = (answer: string, evidence: unknown[], extra: Record<string, unknown> = {}) => JSON.stringify({ answer, evidence, ...extra });
@@ -593,8 +593,8 @@ describe("Muse Spark in the demo check (#7)", () => {
     });
     expect(body.muse.web.line).toBe("Searched the web at 29 Oct, 12:00 p.m. PHT");
     expect(body.muse.web.findings).toEqual([
-      { place: "A. S. Fortuna St, Mandaue", url: "https://example.ph/fortuna", sourceDate: "2026-10-29", summary: "Closed by flooding.", counted: true, note: "Dated today and placed on the map: it can block a way, never clear one." },
-      { place: "Colon St", url: "https://example.ph/colon", sourceDate: null, summary: "Flooded.", counted: false, note: "Shown, not counted: it has no date and no place on the map." },
+      { place: "A. S. Fortuna St, Mandaue", url: "https://news.example.ph/fortuna", site: "news.example.ph", sourceDate: "2026-10-29", description: "Closed, says a page on news.example.ph dated 2026-10-29.", counted: true, note: "Dated today and placed on the map: it can block a way, never clear one." },
+      { place: "Colon St", url: "https://example.ph/colon", site: "example.ph", sourceDate: null, description: "Flooded, says an undated page on example.ph.", counted: false, note: "Shown, not counted: it has no date and no place on the map." },
     ]);
     expect(meta.searchRequests).toHaveLength(1);
     expect(meta.requests).toHaveLength(2);
@@ -618,6 +618,24 @@ describe("Muse Spark in the demo check (#7)", () => {
     const body = await (await handler(demo("banilad-itpark", "flooded"))).json();
 
     expect(body.muse.pick).toEqual({ shown: false, label: LABEL, sentences: [], note: null });
+  });
+
+  it("a web finding's own words never reach the response, and it still blocks the way when dated today and placed on it (review 🔴2)", async () => {
+    const spot = sampleReports("banilad-itpark", "flooded", NO_ADVISORY)[0].at;
+    const words = "The road is passable to all types of vehicles.";
+    const onRoute = JSON.stringify({
+      closures: [{ place: "Gov. M. Cuenco Ave", lat: spot.lat, lon: spot.lon, url: "https://example.ph/cuenco", date: "2026-10-29", kind: "flooded", summary: words, note: words }],
+    });
+    fakeMeta({ search: [searchReply(onRoute)], turns: [textReply("resp_1", pickOf("go_another_way", ["web-0"]))] });
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), museOn());
+
+    const text = await (await handler(demo("banilad-itpark", "none"))).text();
+    const body = JSON.parse(text);
+
+    expect(text.toLowerCase()).not.toContain("passable to all");
+    expect(body.answer.kind).toBe("go_another_way");
+    expect(body.answer.reason).toContain("Gov. M. Cuenco Ave");
+    expect(body.muse.pick.sentences).toEqual(["A page on example.ph dated 2026-10-29 reports Gov. M. Cuenco Ave flooded."]);
   });
 
   describe("no word Muse Spark writes reaches the response (review 🔴1)", () => {

@@ -70,15 +70,20 @@ export function inMetroCebu(p: { lat: unknown; lon: unknown }): p is Point {
   );
 }
 
+/** What a source says about a road, from a fixed list: the page describes it in Lusong's words, never the source's. */
+export const CLOSURE_KINDS = ["closed", "flooded", "not_passable", "other_blocking"] as const;
+export type ClosureKind = (typeof CLOSURE_KINDS)[number];
+
 export interface WebFinding {
   id: string;
+  /** A place name as the source gives it: checked to read as a name (placeLabel), the only words kept from the search. */
   place: string;
   /** Null when the model gave no location, or one outside Metro Cebu: shown, never placed on a route. */
   at: Point | null;
   url: string;
   /** YYYY-MM-DD as the source dates it, or null when undated. */
   sourceDate: string | null;
-  summary: string;
+  kind: ClosureKind;
 }
 
 export type WebEvidence =
@@ -167,6 +172,8 @@ function readStored(text: string): Stored | null {
     const stored = JSON.parse(text) as Stored;
     const e = stored?.evidence;
     if (typeof stored.expiresAt !== "number" || !e || !Array.isArray(e.findings) || !["searched", "failed"].includes(e.state)) return null;
+    // A record stored under older checks is searched again rather than trusted.
+    if (!e.findings.every(isStoredFinding)) return null;
     return stored;
   } catch {
     return null;
@@ -205,7 +212,7 @@ function searchPrompt(now: Date): string {
     `Search the web for roads in Metro Cebu, Philippines, reported closed or not passable because of flooding today, ${phtDay(now)} (Philippine time).`,
     "Make at most three searches and open at most two pages, then answer with only a JSON object:",
     '{"closures":[{"place":"road or area name","lat":number or null,"lon":number or null,"url":"the page that reports it",' +
-      '"date":"YYYY-MM-DD the page gives for it, or null","summary":"one short sentence"}]}.',
+      '"date":"YYYY-MM-DD the page gives for it, or null","kind":"closed", "flooded", "not_passable" or "other_blocking"}]}.',
     "Use an empty list if you find none. Give lat and lon only when the page or a well-known landmark places it.",
   ].join(" ");
 }
@@ -231,6 +238,42 @@ function isoDay(value: unknown): string | null {
   return !Number.isNaN(t.getTime()) && t.toISOString().slice(0, 10) === value ? value : null;
 }
 
+const PLACE_MAX_CHARS = 80;
+const PLACE_MAX_WORDS = 12;
+const PLACE_CHARACTERS = /^[\p{L}\p{M}\p{N} .,'’&()/-]+$/u;
+
+/**
+ * The place as a name, or null. Long names such as "Governor M. Cuenco Avenue at Jose Maria Del Mar Avenue" pass; text
+ * with sentence punctuation, past the length or ending in a full stop after a long word (not "Blvd.") does not.
+ */
+function placeLabel(value: unknown): string | null {
+  const place = plainText(value, 200);
+  if (place.length < 2 || place.length > PLACE_MAX_CHARS || !PLACE_CHARACTERS.test(place)) return null;
+  const words = place.split(" ");
+  if (words.length > PLACE_MAX_WORDS) return null;
+  const last = words[words.length - 1];
+  return last.endsWith(".") && last.length > 5 ? null : place;
+}
+
+function closureKind(value: unknown): ClosureKind | null {
+  return (CLOSURE_KINDS as readonly unknown[]).includes(value) ? (value as ClosureKind) : null;
+}
+
+function isStoredFinding(f: unknown): f is WebFinding {
+  if (typeof f !== "object" || f === null) return false;
+  const x = f as Record<string, unknown>;
+  const at = x.at as { lat: unknown; lon: unknown } | null;
+  return (
+    Object.keys(x).length === 6 &&
+    typeof x.id === "string" &&
+    placeLabel(x.place) === x.place &&
+    httpUrl(x.url) === x.url &&
+    (x.sourceDate === null || isoDay(x.sourceDate) === x.sourceDate) &&
+    closureKind(x.kind) !== null &&
+    (at === null || (typeof at === "object" && inMetroCebu(at)))
+  );
+}
+
 /** The findings in the reply's JSON object, or null when there is none to read. */
 function findingsIn(text: string): WebFinding[] | null {
   const start = text.indexOf("{");
@@ -247,11 +290,12 @@ function findingsIn(text: string): WebFinding[] | null {
   const findings: WebFinding[] = [];
   list.forEach((item: Record<string, unknown> | null, i) => {
     if (typeof item !== "object" || item === null) return;
-    const place = plainText(item.place, 120);
+    const place = placeLabel(item.place);
     const url = httpUrl(item.url);
-    if (!place || !url) return;
+    const kind = closureKind(item.kind);
+    if (!place || !url || !kind) return;
     const at = inMetroCebu({ lat: item.lat, lon: item.lon }) ? { lat: item.lat as number, lon: item.lon as number } : null;
-    findings.push({ id: `web-${i}`, place, at, url, sourceDate: isoDay(item.date), summary: plainText(item.summary, 280) });
+    findings.push({ id: `web-${i}`, place, at, url, sourceDate: isoDay(item.date), kind });
   });
   return findings.slice(0, MAX_WEB_FINDINGS);
 }

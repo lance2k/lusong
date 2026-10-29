@@ -28,12 +28,13 @@ describe("Muse Spark on the commute page", () => {
       <WebFindings
         web={{
           line: "Searched the web at 29 Oct, 12:00 p.m. PHT",
-          findings: [{ place: "Colon St", url: "https://example.ph/colon", sourceDate: null, summary: "Flooded.", counted: false, note: "Shown, not counted: it has no date and no place on the map." }],
+          findings: [{ place: "Colon St", url: "https://example.ph/colon", site: "example.ph", sourceDate: null, description: "Flooded, says an undated page on example.ph.", counted: false, note: "Shown, not counted: it has no date and no place on the map." }],
         }}
       />,
     );
     expect(html).toContain("Searched the web at 29 Oct, 12:00 p.m. PHT");
     expect(html).toContain('href="https://example.ph/colon"');
     expect(html).toContain("Shown, not counted: it has no date and no place on the map.");
+    expect(html).toContain("Flooded, says an undated page on example.ph.");
   });
 });

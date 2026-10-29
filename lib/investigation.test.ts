@@ -508,7 +508,7 @@ describe("web findings: they can block a way, never clear one (criterion 3, 🔴
     at: BLOCKED_SPOT,
     url: "https://example.ph/banilad-closed",
     sourceDate: TODAY,
-    summary: "Road closed by flooding.",
+    kind: "closed",
     ...overrides,
   });
   const searched = (...findings: WebFinding[]) => ({ state: "searched" as const, searchedAt: minutesAgo(5).toISOString(), findings });

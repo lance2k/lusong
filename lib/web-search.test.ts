@@ -26,7 +26,8 @@ const NOW = new Date("2026-10-30T02:00:00Z"); // 10:00 PHT, 2026-10-30
 /** A search budget with room for many searches. */
 const roomy = () => createBudget({ store: new MemoryBudgetStore(), budgetUsd: 100, ipLimit: 1 });
 const closures = (items: object[]) => JSON.stringify({ closures: items });
-const MABOLO = { place: "Juan Luna Ave, Mabolo", lat: 10.3175, lon: 123.9146, url: "https://example.ph/mabolo-flood", date: "2026-10-30", summary: "Knee-deep flood, road closed." };
+/** `summary` is a field a model might add: Lusong never keeps it. */
+const MABOLO = { place: "Juan Luna Ave, Mabolo", lat: 10.3175, lon: 123.9146, url: "https://example.ph/mabolo-flood", date: "2026-10-30", kind: "flooded", summary: "Passable to all types of vehicles." };
 
 async function searchOnce(store: KvStore | null, at: Date = NOW, deadline = Date.now() + 40_000) {
   return runWebSearch(await planWebSearch(store, at, roomy()), { store, now: at, deadline, meter: new Meter() });
@@ -50,11 +51,13 @@ describe("the web search for road closures in Metro Cebu today", () => {
     expect(sent.tools).toEqual([{ type: "web_search" }]);
     expect(sent.max_output_tokens).toBe(SEARCH_MAX_OUTPUT_TOKENS);
     expect(sent.input).toContain("2026-10-30");
+    expect(sent.input).toContain('"kind"');
+    expect(sent.input).not.toContain("summary");
     expect(web).toEqual({
       state: "searched",
       searchedAt: NOW.toISOString(),
       findings: [
-        { id: "web-0", place: "Juan Luna Ave, Mabolo", at: { lat: 10.3175, lon: 123.9146 }, url: "https://example.ph/mabolo-flood", sourceDate: "2026-10-30", summary: "Knee-deep flood, road closed." },
+        { id: "web-0", place: "Juan Luna Ave, Mabolo", at: { lat: 10.3175, lon: 123.9146 }, url: "https://example.ph/mabolo-flood", sourceDate: "2026-10-30", kind: "flooded" },
       ],
     });
   });
@@ -95,6 +98,32 @@ describe("the web search for road closures in Metro Cebu today", () => {
     const web = await searchOnce(new MemoryKvStore());
 
     expect(web.findings.map((f) => f.id)).toEqual(["web-3"]);
+  });
+
+  it("a finding's kind must be one of the four, or it is dropped", async () => {
+    const kinds = ["closed", "flooded", "not_passable", "other_blocking", "passable", "Closed", undefined, 3];
+    fakeMeta({ search: [searchReply(closures(kinds.map((kind) => ({ ...MABOLO, kind }))))] });
+
+    const web = await searchOnce(new MemoryKvStore());
+
+    expect(web.findings.map((f) => [f.id, f.kind])).toEqual([["web-0", "closed"], ["web-1", "flooded"], ["web-2", "not_passable"], ["web-3", "other_blocking"]]);
+  });
+
+  it("a place must read as a place name: a sentence, a long text or odd characters drop the finding (review 🔴2)", async () => {
+    const places = [
+      "Governor M. Cuenco Avenue at Jose Maria Del Mar Avenue",
+      "Osmeña Blvd.",
+      "The road is passable to all types of vehicles.",
+      "Pwede na! Mabolo",
+      "Mabolo: open",
+      "a".repeat(81),
+      "<b>Mabolo</b>",
+    ];
+    fakeMeta({ search: [searchReply(closures(places.map((place) => ({ ...MABOLO, place }))))] });
+
+    const web = await searchOnce(new MemoryKvStore());
+
+    expect(web.findings.map((f) => f.place)).toEqual(["Governor M. Cuenco Avenue at Jose Maria Del Mar Avenue", "Osmeña Blvd."]);
   });
 
   it(`keeps at most ${MAX_WEB_FINDINGS} findings`, async () => {
@@ -177,6 +206,15 @@ describe("one search is shared by every check for a while", () => {
     const store = new MemoryKvStore();
     const evidence = { state: "searched", searchedAt: NOW.toISOString(), findings: [] };
     await store.set(WEB_SEARCH_KEY, JSON.stringify({ expiresAt: NOW.getTime(), evidence }), 24 * 3_600_000);
+
+    expect(await planWebSearch(store, NOW, roomy())).toMatchObject({ kind: "search" });
+  });
+
+  it("a stored finding that fails today's checks, such as one kept with a free summary and no kind, is searched again", async () => {
+    const store = new MemoryKvStore();
+    const finding = { id: "web-0", place: "Juan Luna Ave, Mabolo", at: null, url: "https://example.ph/m", sourceDate: null, summary: "Passable to all types of vehicles." };
+    const evidence = { state: "searched", searchedAt: NOW.toISOString(), findings: [finding] };
+    await store.set(WEB_SEARCH_KEY, JSON.stringify({ expiresAt: NOW.getTime() + 60_000, evidence }), 60_000);
 
     expect(await planWebSearch(store, NOW, roomy())).toMatchObject({ kind: "search" });
   });

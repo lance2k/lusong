@@ -2,7 +2,7 @@ export interface PageMuse {
   pick: { shown: boolean; label: string; sentences: string[]; note: string | null };
   web: {
     line: string;
-    findings: { place: string; url: string; sourceDate: string | null; summary: string; counted: boolean; note: string }[];
+    findings: { place: string; url: string; site: string; sourceDate: string | null; description: string; counted: boolean; note: string }[];
   };
 }
 
@@ -32,11 +32,8 @@ export function WebFindings({ web }: { web: PageMuse["web"] }) {
           {web.findings.map((f, i) => (
             <li key={i} className="space-y-1 px-4 py-3">
               <p className="font-medium">{f.place}</p>
-              {f.summary && <p>{f.summary}</p>}
-              <p className="text-zinc-600 dark:text-zinc-400">
-                {f.sourceDate ? `Dated ${f.sourceDate}. ` : ""}
-                {f.note}
-              </p>
+              <p>{f.description}</p>
+              <p className="text-zinc-600 dark:text-zinc-400">{f.note}</p>
               <a className="break-all text-sm text-sky-700 underline dark:text-sky-400" href={f.url} rel="noopener noreferrer nofollow" target="_blank">
                 {f.url}
               </a>

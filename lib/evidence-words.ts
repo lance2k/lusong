@@ -1,7 +1,7 @@
 import type { AdvisoryReading } from "./advisory";
 import type { Report, RouteState } from "./answer";
 import { ageWords, depthWords, passabilityLine, phtTime } from "./commute-words";
-import type { WebFinding } from "./web-search";
+import type { ClosureKind, WebFinding } from "./web-search";
 
 /**
  * The sentences shown for the evidence Muse Spark picked (review 🔴1). Every word is Lusong's, built from fields Lusong
@@ -54,9 +54,11 @@ function advisorySentence(advisory: AdvisoryReading): string {
   return "Lusong couldn't read PAGASA's flood advisory, so it counts one as active.";
 }
 
+const CLOSURE_WORDS: Record<ClosureKind, string> = { closed: "closed", flooded: "flooded", not_passable: "not passable", other_blocking: "blocked" };
+
 function webSentence(f: WebFinding): string {
   const site = new URL(f.url).hostname;
-  return `A page on ${site}${f.sourceDate ? ` dated ${f.sourceDate}` : ", undated,"} reports a road closure at ${f.place}.`;
+  return `A page on ${site}${f.sourceDate ? ` dated ${f.sourceDate}` : ", undated,"} reports ${f.place} ${CLOSURE_WORDS[f.kind]}.`;
 }
 
 function sentenceFor(id: string, facts: EvidenceFacts): string | null {

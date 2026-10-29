@@ -79,6 +79,16 @@ describe("Lusong's own words for the evidence Muse Spark picked (review 🔴1)",
     expect(evidenceSentences(["rain_tap"], facts({ rainingHere: true }))).toEqual(["You tapped “raining here”."]);
   });
 
+  it.each([
+    ["closed", "2026-10-30", "A page on news.example.ph dated 2026-10-30 reports Osmeña Blvd closed."],
+    ["flooded", null, "A page on news.example.ph, undated, reports Osmeña Blvd flooded."],
+    ["not_passable", null, "A page on news.example.ph, undated, reports Osmeña Blvd not passable."],
+    ["other_blocking", null, "A page on news.example.ph, undated, reports Osmeña Blvd blocked."],
+  ] as const)("a web finding of kind %s, dated %s", (kind, sourceDate, sentence) => {
+    const web = [{ id: "web-0", place: "Osmeña Blvd", at: null, url: "https://news.example.ph/a?b=1", sourceDate, kind }];
+    expect(evidenceSentences(["web-0"], facts({ web }))).toEqual([sentence]);
+  });
+
   it("an id it has no facts for means no sentences at all, not a partial list", () => {
     expect(evidenceSentences(["plain", "v9"], facts())).toBeNull();
   });

@@ -16,6 +16,7 @@ import {
   runWebSearch,
   searchBudgetFromEnv,
   searchStoreFromEnv,
+  type ClosureKind,
   type KvStore,
   type WebEvidence,
   type WebFinding,
@@ -29,11 +30,11 @@ export const COMMUTE_RESERVE_MICROS = 1;
 export const COMMUTE_DEADLINE_MS = 80_000;
 /** Left after the deadline to settle the budget (Upstash times out at 5 s) and send the answer. */
 export const SETTLE_ROOM_MS = 10_000;
-/** The web search must end with this much of the deadline left, beyond a way around: for the model's summary. */
+/** The web search must end with this much of the deadline left, beyond a way around: for the model's pick. */
 export const MODEL_ROOM_MS = 15_000;
 
 export interface MuseDeps {
-  /** False runs the rules alone: no web search, no summary, nothing reserved for Muse Spark. */
+  /** False runs the rules alone: no web search, no pick, nothing reserved for Muse Spark. */
   enabled: boolean;
   searchStore: () => KvStore | null;
   searchBudget: () => Budget;
@@ -79,6 +80,9 @@ const WEB_WHY: Record<string, string> = {
   "store unreachable": "the shared store couldn't be reached",
 };
 
+const CLOSURE_WORDS: Record<ClosureKind, string> = { closed: "Closed", flooded: "Flooded", not_passable: "Not passable", other_blocking: "Blocked" };
+
+/** A web finding is shown as Lusong's description of its checked fields; the source's own words are never kept. */
 function webForPage(web: WebEvidence, now: Date) {
   const line =
     web.state === "searched" ? `Searched the web at ${phtTime(web.searchedAt)}` : `Web search skipped: ${WEB_WHY[web.why] ?? web.why}.`;
@@ -90,7 +94,11 @@ function webForPage(web: WebEvidence, now: Date) {
   };
   return {
     line,
-    findings: web.findings.map((f) => ({ place: f.place, url: f.url, sourceDate: f.sourceDate, summary: f.summary, counted: webFindingCounts(f, now), note: note(f) })),
+    findings: web.findings.map((f) => {
+      const site = new URL(f.url).hostname;
+      const page = f.sourceDate ? `a page on ${site} dated ${f.sourceDate}` : `an undated page on ${site}`;
+      return { place: f.place, url: f.url, site, sourceDate: f.sourceDate, description: `${CLOSURE_WORDS[f.kind]}, says ${page}.`, counted: webFindingCounts(f, now), note: note(f) };
+    }),
   };
 }
 
@@ -248,7 +256,7 @@ export function makeCommuteHandler(deps: {
     run: { plan: WebPlan; store: KvStore | null; modelOff?: string; meter: Meter; deadline: number },
   ): Promise<Response> {
     const trip = DEMO_TRIPS[demo.trip];
-    // The search ends early enough to leave a way around and the model's summary their time.
+    // The search ends early enough to leave a way around and the model's pick their time.
     const searchDeadline = run.deadline - timing.routeWorstMs - MODEL_ROOM_MS;
     const [advisory, routed, web] = await Promise.all([
       advisoryAt(at),
