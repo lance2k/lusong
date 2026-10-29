@@ -1180,6 +1180,37 @@ describe("Muse Spark in a real check (#6 with #7)", () => {
     expect(meta.searchRequests).toHaveLength(1);
   });
 
+  describe("a stored report off both judged routes never reaches the rider, even when Muse Spark picks its id (review 🔴C-3)", () => {
+    /** Tabunok, Talisay: kilometres from Banilad → IT Park and from its way around. */
+    const OFF_ROUTE_PLACE = "Tabunok Public Market";
+    it.each([
+      ["its id alone", (on: string, off: string) => [off]],
+      ["its id among on-route evidence", (on: string, off: string) => [on, off, "detour"]],
+    ])("%s", async (_name, picked) => {
+      const store = new MemoryReportStore();
+      const flooded = storedReport(NO_ADVISORY);
+      const offRoute = storedReport(NO_ADVISORY, { at: { lat: 10.2447, lon: 123.8494 }, place: OFF_ROUTE_PLACE });
+      await store.save(flooded);
+      await store.save(offRoute);
+      fakeMeta({
+        search: [searchReply(closures)],
+        turns: [callsReply("resp_1", [{ name: "reports_near_route", args: { route: "plain" } }]), textReply("resp_2", pickOf("go_another_way", picked(flooded.id, offRoute.id)))],
+      });
+      const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store, museOn());
+
+      const res = await handler(real());
+      const text = await res.text();
+
+      expect(res.status).toBe(200);
+      const body = JSON.parse(text);
+      expect(body.answer.kind).toBe("go_another_way");
+      expect(body.reports.map((r: { id: string }) => r.id)).toEqual([flooded.id]);
+      expect(body.muse.pick.shown).toBe(false);
+      expect(text).not.toContain(OFF_ROUTE_PLACE);
+      expect(text).not.toContain(offRoute.id);
+    });
+  });
+
   it("when Muse Spark fails on a real check, the rules' answer and the stored report stand and the page says the explanation is unavailable", async () => {
     const store = new MemoryReportStore();
     const flooded = storedReport(NO_ADVISORY);

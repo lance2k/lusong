@@ -125,12 +125,20 @@ function webForPage(web: WebEvidence, now: Date) {
   };
 }
 
-/** The evidence Muse Spark picked, each piece described in Lusong's words from its own checked fields. */
-function pickForPage(result: Extract<InvestigationResult, { ok: true }>, facts: { now: Date; advisory: AdvisoryReading; rainingHere: boolean }) {
+/**
+ * The evidence Muse Spark picked, each piece described in Lusong's words from its own checked fields. Only the reports
+ * the response sends can be described: a pick naming any other report is not shown at all.
+ */
+function pickForPage(
+  result: Extract<InvestigationResult, { ok: true }>,
+  facts: { now: Date; advisory: AdvisoryReading; rainingHere: boolean; sentReportIds: ReadonlySet<string> },
+) {
   const label = "Muse Spark picked this evidence";
   const hidden = { shown: false, label, sentences: [] as string[], note: !result.pick.shown && result.pick.unavailable ? PICK_UNAVAILABLE : null };
   if (!result.pick.shown) return hidden;
-  const sentences = evidenceSentences(result.pick.evidence, { ...facts, reports: result.reports, web: result.web.findings, routes: result.answer.routes });
+  const { sentReportIds, ...rest } = facts;
+  const reports = result.reports.filter((r) => sentReportIds.has(r.id));
+  const sentences = evidenceSentences(result.pick.evidence, { ...rest, reports, web: result.web.findings, routes: result.answer.routes });
   return sentences ? { shown: true, label, sentences, note: null } : hidden;
 }
 
@@ -447,6 +455,30 @@ export function makeCommuteHandler(deps: {
     const detourLine = shown?.line ?? null;
     const judged = new Map(answer.reports.map((r) => [r.id, r]));
     const used = gathered.filter((r) => answer.decidedBy.includes(r.id));
+    const sent = gathered
+      .map((r) => {
+        const j = judged.get(r.id)!;
+        const verdict = r.reading.source === "photo" ? r.reading.verdict : null;
+        return {
+          id: r.id,
+          sample: r.sample,
+          place: r.place,
+          at: r.at,
+          age: ageWords(at.getTime() - r.receivedAt.getTime()),
+          depth: verdict ? depthWords(verdict) : null,
+          passability: verdict ? passabilityLine(verdict) : null,
+          origin: r.origin,
+          credit: r.credit,
+          sourceUrl: r.sourceUrl,
+          counts: j.counts,
+          onRoute: placeOnRoute(r.at, plainLine).offM <= ROUTE_CORRIDOR_M,
+          onDetour: detourLine !== null && placeOnRoute(r.at, detourLine).offM <= ROUTE_CORRIDOR_M,
+          role: j.role,
+        };
+      })
+      // A real report off both routes played no part, and its exact spot is someone else's: it isn't sent.
+      .filter((r) => check.demo || r.onRoute || r.onDetour);
+    const sentReportIds = new Set(sent.map((r) => r.id));
 
     return Response.json({
       demo: check.demo,
@@ -471,30 +503,8 @@ export function makeCommuteHandler(deps: {
         line: detour.line,
       },
       advisory: advisoryForPage(advisory),
-      reports: gathered
-        .map((r) => {
-          const j = judged.get(r.id)!;
-          const verdict = r.reading.source === "photo" ? r.reading.verdict : null;
-          return {
-            id: r.id,
-            sample: r.sample,
-            place: r.place,
-            at: r.at,
-            age: ageWords(at.getTime() - r.receivedAt.getTime()),
-            depth: verdict ? depthWords(verdict) : null,
-            passability: verdict ? passabilityLine(verdict) : null,
-            origin: r.origin,
-            credit: r.credit,
-            sourceUrl: r.sourceUrl,
-            counts: j.counts,
-            onRoute: placeOnRoute(r.at, plainLine).offM <= ROUTE_CORRIDOR_M,
-            onDetour: detourLine !== null && placeOnRoute(r.at, detourLine).offM <= ROUTE_CORRIDOR_M,
-            role: j.role,
-          };
-        })
-        // A real report off both routes played no part, and its exact spot is someone else's: it isn't sent.
-        .filter((r) => check.demo || r.onRoute || r.onDetour),
-      muse: { pick: pickForPage(result, { now: at, advisory, rainingHere: check.rainingHere }), web: webForPage(result.web, at) },
+      reports: sent,
+      muse: { pick: pickForPage(result, { now: at, advisory, rainingHere: check.rainingHere, sentReportIds }), web: webForPage(result.web, at) },
       mmdaCredit: MMDA_CREDIT,
     });
   }
