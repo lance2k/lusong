@@ -8,6 +8,7 @@ import { cutEnd, cutStart, derivedReply } from "../test/valhalla-derived";
 import { CAP_EDITS, CV_GFA5, FEED, feedWith, SAVED } from "../test/pagasa-fixtures";
 import { makeValhallaGate, MemorySlotStore, VALHALLA_URL, type SlotStore } from "./router";
 import { MemoryReportStore, UpstashReportStore, type ReportStore, type StoredPhotoReport, type StoredVoiceReport } from "./report-store";
+import { seedReport } from "../test/seed-report";
 import { randomUUID } from "node:crypto";
 
 const read = (path: string) => readFileSync(path, "utf8");
@@ -569,7 +570,8 @@ function storedReport(at: Date, overrides: Partial<StoredPhotoReport> = {}): Sto
       decidedBy: { label: "C1", landmark: "tyre_half", interval: { low: 27, high: 39 } },
       readingsUsed: ["C1"],
     },
-    photoHash: "a".repeat(64),
+    // One photo per report: the store keeps one report per photo.
+    photoHash: randomUUID().replaceAll("-", ""),
     ...overrides,
   };
 }
@@ -578,7 +580,7 @@ describe("a real commute check (#6)", () => {
   it("a real commute check uses a stored real report and never a sample", async () => {
     const store = new MemoryReportStore();
     const flooded = storedReport(NO_ADVISORY);
-    await store.save(flooded);
+    await seedReport(store, flooded);
     const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
     const res = await handler(real());
     expect(res.status).toBe(200);
@@ -601,8 +603,8 @@ describe("a real commute check (#6)", () => {
     const store = new MemoryReportStore();
     const far = storedReport(NO_ADVISORY, { at: { lat: 10.3143, lon: 123.9147 } });
     const near = storedReport(NO_ADVISORY, { verdict: { kind: "no_flood" } });
-    await store.save(far);
-    await store.save(near);
+    await seedReport(store, far);
+    await seedReport(store, near);
     const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
     const body = await (await handler(real())).json();
     expect(body.reports.map((r: { id: string }) => r.id)).toEqual([near.id]);
@@ -611,7 +613,7 @@ describe("a real commute check (#6)", () => {
 
   it("a demo check never uses a real report, and never reads the store", async () => {
     const store = new MemoryReportStore();
-    await store.save(storedReport(NO_ADVISORY));
+    await seedReport(store, storedReport(NO_ADVISORY));
     const recent = vi.spyOn(store, "recent");
     const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
     const body = await (await handler(demo("banilad-itpark", "none"))).json();
@@ -708,7 +710,7 @@ function storedVoice(at: Date, claim: StoredVoiceReport["claim"], ageMin = 5): S
     place: "Governor M. Cuenco Avenue",
     receivedAt: new Date(at.getTime() - ageMin * 60_000).toISOString(),
     claim,
-    audioHash: "c".repeat(64),
+    audioHash: randomUUID().replaceAll("-", ""),
   };
 }
 
@@ -718,7 +720,7 @@ describe("voice reports in a real commute check, through the answer rules on the
 
   async function answerWith(...reports: (StoredPhotoReport | StoredVoiceReport)[]) {
     const store = new MemoryReportStore();
-    for (const r of reports) await store.save(r);
+    for (const r of reports) await seedReport(store, r);
     const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
     const res = await handler(real());
     expect(res.status).toBe(200);
@@ -790,7 +792,7 @@ describe.each([
 ] as [string, () => { store: ReportStore; held: () => Promise<Record<string, unknown>> }][])("after a real check, the %s", (_name, make) => {
   it("holds nothing about the trip: every key and value is as it was", async () => {
     const { store, held } = make();
-    await store.save(storedReport(new Date(), { receivedAt: new Date(Date.now() - 40 * 60_000).toISOString() }));
+    await seedReport(store, storedReport(new Date(), { receivedAt: new Date(Date.now() - 40 * 60_000).toISOString() }));
     const before = await held();
     expect(Object.keys(before)).toHaveLength(3);
     const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
@@ -808,7 +810,7 @@ describe("one deadline for the whole commute check (route maxDuration 60 s)", ()
 
   it("a slow plain route, then a detour that never answers: no answer, within the budget", async () => {
     const store = new MemoryReportStore();
-    await store.save(storedReport(NO_ADVISORY));
+    await seedReport(store, storedReport(NO_ADVISORY));
     const { handler, valhallaCalls } = handlerAt(NO_ADVISORY, { plainDelayMs: 1_200, detourHangs: true }, new MemorySlotStore(), openBudget(), store, timing);
     const started = Date.now();
     const res = await handler(real());

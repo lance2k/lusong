@@ -11,7 +11,7 @@ import { locateSpot } from "./locate";
 import { MetaApiError } from "./meta";
 import { inMetroCebu } from "./metro-cebu";
 import { beforeDeadline, readBody } from "./deadline";
-import { reportStoreFromEnv, toReport, type ReportStore, type StoredPhotoReport } from "./report-store";
+import { reportStoreFromEnv, toReport, type ReportStore, type Saved, type StoredPhotoReport } from "./report-store";
 import type { ValhallaGate } from "./router";
 
 const MAX_BYTES = 3 * 1024 * 1024;
@@ -174,8 +174,8 @@ export function makeReportHandler(deps: {
 
     const store = reportStore();
     if (!store) return fail(503, "Lusong can't take reports right now.");
-    const release = (by: number) =>
-      beforeDeadline(store.releasePhoto(photoHash), by).catch((err: unknown) => {
+    const release = (token: string, by: number) =>
+      beforeDeadline(store.releasePhoto(photoHash, token), by).catch((err: unknown) => {
         console.error("report store unreachable on release:", err instanceof Error ? err.message : err);
       });
 
@@ -192,7 +192,7 @@ export function makeReportHandler(deps: {
       // The claim may still land; free it then, so the photo can be sent again.
       void claiming.then(
         async (c) => {
-          if (c.state === "claimed") await release(Infinity);
+          if (c.state === "claimed") await release(c.token, Infinity);
         },
         () => {},
       );
@@ -200,9 +200,10 @@ export function makeReportHandler(deps: {
     }
     if (claim.state === "duplicate") return Response.json({ duplicate: true, stored: true, report: viewOf(claim.report, receivedAt, true) });
     if (claim.state === "in_flight") return fail(409, "Lusong is already reading this photo.");
+    const { token } = claim;
 
     if (Date.now() > admitBy) {
-      await release(releaseBy);
+      await release(token, releaseBy);
       return fail(503, OUT_OF_TIME);
     }
     const admitting = admit(budget(), { clientIp: clientIp(request), reserveMicros: RESERVE_MICROS, now: receivedAt });
@@ -215,17 +216,17 @@ export function makeReportHandler(deps: {
         },
         () => {},
       );
-      await release(releaseBy);
+      await release(token, releaseBy);
       return fail(503, OUT_OF_TIME);
     }
     if (!admission.ok) {
-      await release(releaseBy);
+      await release(token, releaseBy);
       return admission.response();
     }
 
     const { run } = admission;
     if (finishBy - Date.now() < timing.minReadMs) {
-      await release(releaseBy);
+      await release(token, releaseBy);
       await beforeDeadline(run.settle(true), settleBy);
       return fail(503, OUT_OF_TIME);
     }
@@ -237,7 +238,7 @@ export function makeReportHandler(deps: {
         verdict = (await checkPhoto(imageDataUrl, { width: jpeg.width, height: jpeg.height }, run.meter, { deadline: finishBy })).verdict;
       } catch (err) {
         console.error("report read failed:", err instanceof MetaApiError ? err.message : err);
-        await release(releaseBy);
+        await release(token, releaseBy);
         return fail(502, "The measuring service didn't answer. Try again in a minute.");
       }
       succeeded = true;
@@ -257,18 +258,23 @@ export function makeReportHandler(deps: {
         verdict,
         photoHash,
       };
-      let saved: void | "late";
+      let saved: Saved | "late";
       try {
-        saved = await beforeDeadline(store.save(report), saveBy);
+        saved = await beforeDeadline(store.save(report, token), saveBy);
       } catch (err) {
         console.error("report store unreachable on save:", err instanceof Error ? err.message : err);
         saved = "late";
       }
       if (saved === "late") {
-        await release(releaseBy);
+        await release(token, releaseBy);
         return Response.json({ duplicate: false, stored: false, report: viewOf(report, receivedAt, false) });
       }
-      return Response.json({ duplicate: false, stored: true, report: viewOf(report, receivedAt, true) });
+      if (saved.state === "duplicate" && saved.report.kind === "photo") {
+        return Response.json({ duplicate: true, stored: true, report: viewOf(saved.report, receivedAt, true) });
+      }
+      // not_owner: the claim lapsed and the store says it wrote nothing.
+      const stored = saved.state === "saved";
+      return Response.json({ duplicate: false, stored, report: viewOf(report, receivedAt, stored) });
     } finally {
       // A settle cut off here keeps the whole reservation charged: the safe side.
       await beforeDeadline(run.settle(succeeded), settleBy);

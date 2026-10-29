@@ -5,6 +5,7 @@ import { FEED_URL } from "../lib/advisory";
 import { createBudget, MemoryBudgetStore } from "../lib/budget";
 import { makeCommuteHandler } from "../lib/commute-handler";
 import { MemoryReportStore, type StoredReport } from "../lib/report-store";
+import { seedReport } from "../test/seed-report";
 import { makeValhallaGate, MemorySlotStore, VALHALLA_URL } from "../lib/router";
 import { FEED, SAVED } from "../test/pagasa-fixtures";
 import { checkRequest } from "./trip";
@@ -65,7 +66,7 @@ describe("checking your own trip", () => {
 
   it("after the page's check of a saved trip, the report store holds nothing about the trip", async () => {
     const store = new MemoryReportStore({ now: () => NO_ADVISORY.getTime() });
-    await store.save(flooded());
+    await seedReport(store, flooded());
     const before = store.dump();
     const res = await handlerWith(store)(post(checkRequest(TRIP, false)));
     expect(res.status).toBe(200);
@@ -80,7 +81,7 @@ describe("what the map draws", () => {
   it("the answer carries the route's and the detour's lines, and each report's spot for its pin", async () => {
     const store = new MemoryReportStore({ now: () => NO_ADVISORY.getTime() });
     const report = flooded();
-    await store.save(report);
+    await seedReport(store, report);
     const body = await (await handlerWith(store)(post(checkRequest(TRIP, false)))).json();
     expect(body.route.line.length).toBeGreaterThan(1);
     expect(body.detour.line.length).toBeGreaterThan(1);

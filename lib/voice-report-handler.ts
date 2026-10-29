@@ -8,7 +8,7 @@ import { beforeDeadline, readBody } from "./deadline";
 import { locateSpot } from "./locate";
 import { MetaApiError, transcribe } from "./meta";
 import { inMetroCebu } from "./metro-cebu";
-import { reportStoreFromEnv, toReport, type ReportStore, type StoredVoiceReport } from "./report-store";
+import { reportStoreFromEnv, toReport, type ReportStore, type Saved, type StoredVoiceReport } from "./report-store";
 import { durationWords, type Timing } from "./report-handler";
 import type { ValhallaGate } from "./router";
 import { voiceLanguageFrom } from "./voice-language";
@@ -146,8 +146,8 @@ export function makeVoiceReportHandler(deps: {
 
     const store = reportStore();
     if (!store) return fail(503, "Lusong can't take reports right now.");
-    const release = (by: number) =>
-      beforeDeadline(store.releaseVoice(audioHash), by).catch((err: unknown) => {
+    const release = (token: string, by: number) =>
+      beforeDeadline(store.releaseVoice(audioHash, token), by).catch((err: unknown) => {
         console.error("report store unreachable on release:", err instanceof Error ? err.message : err);
       });
 
@@ -163,7 +163,7 @@ export function makeVoiceReportHandler(deps: {
     if (claim === "late") {
       void claiming.then(
         async (c) => {
-          if (c.state === "claimed") await release(Infinity);
+          if (c.state === "claimed") await release(c.token, Infinity);
         },
         () => {},
       );
@@ -171,6 +171,7 @@ export function makeVoiceReportHandler(deps: {
     }
     if (claim.state === "duplicate") return Response.json({ duplicate: true, stored: true, report: viewOf(claim.report, receivedAt, true) });
     if (claim.state === "in_flight") return fail(409, "Lusong is already reading this voice note.");
+    const { token } = claim;
 
     const admitting = admit(budget(), { clientIp: clientIp(request), reserveMicros: VOICE_RESERVE_MICROS, now: receivedAt });
     const admission = await beforeDeadline(admitting, admitBy);
@@ -182,11 +183,11 @@ export function makeVoiceReportHandler(deps: {
         },
         () => {},
       );
-      await release(releaseBy);
+      await release(token, releaseBy);
       return fail(503, OUT_OF_TIME);
     }
     if (!admission.ok) {
-      await release(releaseBy);
+      await release(token, releaseBy);
       return admission.response();
     }
 
@@ -194,7 +195,7 @@ export function makeVoiceReportHandler(deps: {
     let succeeded = false;
     try {
       if (Date.now() > admitBy) {
-        await release(releaseBy);
+        await release(token, releaseBy);
         succeeded = true;
         return fail(503, OUT_OF_TIME);
       }
@@ -203,12 +204,12 @@ export function makeVoiceReportHandler(deps: {
         words = await transcribe(wavFromPcm(clip.pcm), { languages: TRANSCRIBE_LANGUAGES, deadline: transcribeBy, meter: run.meter });
       } catch (err) {
         console.error("voice transcribe failed:", err instanceof MetaApiError ? err.message : err);
-        await release(releaseBy);
+        await release(token, releaseBy);
         return fail(502, "The transcribing service didn't answer. Try again in a minute.");
       }
       if (words.trim() === "") {
         succeeded = true;
-        await release(releaseBy);
+        await release(token, releaseBy);
         return fail(422, "Lusong couldn't hear any words in that note. Record it again closer to the phone.");
       }
 
@@ -217,7 +218,7 @@ export function makeVoiceReportHandler(deps: {
         said = await readVoiceClaim(words, { language, meter: run.meter, deadline: finishBy });
       } catch (err) {
         console.error("voice claim failed:", err instanceof MetaApiError ? err.message : err);
-        await release(releaseBy);
+        await release(token, releaseBy);
         return fail(502, "Lusong couldn't make out the report. Try again in a minute.");
       }
       succeeded = true;
@@ -236,18 +237,23 @@ export function makeVoiceReportHandler(deps: {
         claim: said,
         audioHash,
       };
-      let saved: void | "late";
+      let saved: Saved | "late";
       try {
-        saved = await beforeDeadline(store.save(report), saveBy);
+        saved = await beforeDeadline(store.save(report, token), saveBy);
       } catch (err) {
         console.error("report store unreachable on save:", err instanceof Error ? err.message : err);
         saved = "late";
       }
       if (saved === "late") {
-        await release(releaseBy);
+        await release(token, releaseBy);
         return Response.json({ duplicate: false, stored: false, report: viewOf(report, receivedAt, false) });
       }
-      return Response.json({ duplicate: false, stored: true, report: viewOf(report, receivedAt, true) });
+      if (saved.state === "duplicate" && saved.report.kind === "voice") {
+        return Response.json({ duplicate: true, stored: true, report: viewOf(saved.report, receivedAt, true) });
+      }
+      // not_owner: the claim lapsed and the store says it wrote nothing.
+      const stored = saved.state === "saved";
+      return Response.json({ duplicate: false, stored, report: viewOf(report, receivedAt, stored) });
     } finally {
       // A settle cut off here keeps the whole reservation charged: the safe side.
       await beforeDeadline(run.settle(succeeded), settleBy);

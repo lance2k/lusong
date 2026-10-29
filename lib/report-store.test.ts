@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { REPORT_LIFETIME_MS } from "./answer";
+import { seedReport } from "../test/seed-report";
 import {
   MemoryReportStore,
   PHOTO_CLAIM_MS,
@@ -63,82 +64,177 @@ async function upstash(command: (string | number)[]): Promise<unknown> {
   return ((await res.json()) as { result: unknown }).result;
 }
 
-const stores: [string, () => ReportStore][] = [
-  ["memory store", () => new MemoryReportStore()],
+/** A store, and how many entries its index holds: a second entry for one note is what the duplicate guard prevents. */
+type Made = { store: ReportStore; indexEntries: () => Promise<number> };
+
+const stores: [string, (opts?: { claimMs?: number }) => Made][] = [
+  [
+    "memory store",
+    (opts) => {
+      const store = new MemoryReportStore(opts);
+      return { store, indexEntries: async () => (store.dump()["lusong:reports"] ?? []).length };
+    },
+  ],
   ...(upstashUrl
-    ? [["Upstash store", () => new UpstashReportStore(upstashUrl, upstashToken, `lusong-test-${randomUUID()}`)] as [
-        string,
-        () => ReportStore,
-      ]]
+    ? [
+        [
+          "Upstash store",
+          (opts?: { claimMs?: number }) => {
+            const prefix = `lusong-test-${randomUUID()}`;
+            return {
+              store: new UpstashReportStore(upstashUrl, upstashToken, prefix, opts),
+              indexEntries: async () => Number(await upstash(["ZCARD", `${prefix}:reports`])),
+            };
+          },
+        ] as [string, (opts?: { claimMs?: number }) => Made],
+      ]
     : []),
 ];
 
+const CLAIMED = { state: "claimed", token: expect.any(String) };
+
+/** The claim's token, failing the test if the note couldn't be claimed. */
+async function owned(claiming: Promise<{ state: string; token?: string }>): Promise<string> {
+  const claim = await claiming;
+  if (claim.state !== "claimed" || !claim.token) throw new Error(`expected a claim, got ${claim.state}`);
+  return claim.token;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 describe.each(stores)("%s", (_name, makeStore) => {
   it("a saved report is read back as it was saved", async () => {
-    const store = makeStore();
+    const { store } = makeStore();
     const saved = report();
-    await store.save(saved);
+    expect(await seedReport(store, saved)).toEqual({ state: "saved" });
     expect(await store.recent(new Date(T0.getTime() + 60_000))).toEqual([saved]);
   });
 
   it("a report 3 h old is not read back, though its record outlives it by the margin", async () => {
-    const store = makeStore();
-    await store.save(report());
+    const { store } = makeStore();
+    await seedReport(store, report());
     expect(await store.recent(new Date(T0.getTime() + REPORT_LIFETIME_MS - 1))).toHaveLength(1);
     expect(await store.recent(new Date(T0.getTime() + REPORT_LIFETIME_MS))).toEqual([]);
   });
 
   it("a photo is claimed once; a second claim while it is read is told it is in flight", async () => {
-    const store = makeStore();
-    expect(await store.claimPhoto("abc")).toEqual({ state: "claimed" });
+    const { store } = makeStore();
+    expect(await store.claimPhoto("abc")).toEqual(CLAIMED);
     expect(await store.claimPhoto("abc")).toEqual({ state: "in_flight" });
-    expect(await store.claimPhoto("def")).toEqual({ state: "claimed" });
+    expect(await store.claimPhoto("def")).toEqual(CLAIMED);
   });
 
   it("once its report is saved, the same photo is a duplicate of that report", async () => {
-    const store = makeStore();
+    const { store } = makeStore();
     const saved = report({ photoHash: "abc" });
-    expect(await store.claimPhoto("abc")).toEqual({ state: "claimed" });
-    await store.save(saved);
+    const token = await owned(store.claimPhoto("abc"));
+    expect(await store.save(saved, token)).toEqual({ state: "saved" });
     expect(await store.claimPhoto("abc")).toEqual({ state: "duplicate", report: saved });
-    await store.releasePhoto("abc");
+    await store.releasePhoto("abc", token);
     expect(await store.claimPhoto("abc")).toEqual({ state: "duplicate", report: saved });
   });
 
   it("a released claim lets the photo be sent again", async () => {
-    const store = makeStore();
-    await store.claimPhoto("abc");
-    await store.releasePhoto("abc");
-    expect(await store.claimPhoto("abc")).toEqual({ state: "claimed" });
+    const { store } = makeStore();
+    await store.releasePhoto("abc", await owned(store.claimPhoto("abc")));
+    expect(await store.claimPhoto("abc")).toEqual(CLAIMED);
   });
 
   it("a voice report is read back with its claim beside the photo reports", async () => {
-    const store = makeStore();
+    const { store } = makeStore();
     const photo = report();
     const voice = voiceReport({ receivedAt: new Date(T0.getTime() + 1_000).toISOString() });
-    await store.save(photo);
-    await store.save(voice);
+    await seedReport(store, photo);
+    await seedReport(store, voice);
     expect(await store.recent(new Date(T0.getTime() + 60_000))).toEqual([photo, voice]);
   });
 
   it("a voice note is claimed by its audio's hash: once, then in flight, then a duplicate of its report", async () => {
-    const store = makeStore();
+    const { store } = makeStore();
     const saved = voiceReport({ audioHash: "abc" });
-    expect(await store.claimVoice("abc")).toEqual({ state: "claimed" });
+    const token = await owned(store.claimVoice("abc"));
     expect(await store.claimVoice("abc")).toEqual({ state: "in_flight" });
-    await store.save(saved);
+    await store.save(saved, token);
     expect(await store.claimVoice("abc")).toEqual({ state: "duplicate", report: saved });
-    await store.releaseVoice("abc");
+    await store.releaseVoice("abc", token);
     expect(await store.claimVoice("abc")).toEqual({ state: "duplicate", report: saved });
   });
 
   it("a photo and a voice note with the same hash never stand for each other", async () => {
-    const store = makeStore();
-    await store.claimVoice("abc");
-    await store.save(voiceReport({ audioHash: "abc" }));
-    expect(await store.claimPhoto("abc")).toEqual({ state: "claimed" });
-    await store.releaseVoice("def");
-    expect(await store.claimVoice("def")).toEqual({ state: "claimed" });
+    const { store } = makeStore();
+    await seedReport(store, voiceReport({ audioHash: "abc" }));
+    expect(await store.claimPhoto("abc")).toEqual(CLAIMED);
+    await store.releaseVoice("def", "no-such-claim");
+    expect(await store.claimVoice("def")).toEqual(CLAIMED);
+  });
+});
+
+describe.each(stores)("the duplicate guard on the %s: one note, one report, one index entry", (_name, makeStore) => {
+  it("two claims on two notes carry different tokens", async () => {
+    const { store } = makeStore();
+    expect(await owned(store.claimVoice("abc"))).not.toBe(await owned(store.claimVoice("def")));
+  });
+
+  it("a second save for the same audio hands back the first report and writes nothing", async () => {
+    const { store, indexEntries } = makeStore();
+    const first = voiceReport({ audioHash: "abc" });
+    const token = await owned(store.claimVoice("abc"));
+    expect(await store.save(first, token)).toEqual({ state: "saved" });
+    expect(await store.save(voiceReport({ audioHash: "abc" }), token)).toEqual({ state: "duplicate", report: first });
+    expect(await store.recent(new Date(T0.getTime() + 60_000))).toEqual([first]);
+    expect(await indexEntries()).toBe(1);
+  });
+
+  it("a save from a claim that was given up and taken by a resend writes nothing; the resend's save is the report", async () => {
+    const { store, indexEntries } = makeStore();
+    const gaveUp = await owned(store.claimVoice("abc"));
+    await store.releaseVoice("abc", gaveUp);
+    const resend = await owned(store.claimVoice("abc"));
+    expect(await store.save(voiceReport({ audioHash: "abc" }), gaveUp)).toEqual({ state: "not_owner" });
+    const theReport = voiceReport({ audioHash: "abc" });
+    expect(await store.save(theReport, resend)).toEqual({ state: "saved" });
+    expect(await store.recent(new Date(T0.getTime() + 60_000))).toEqual([theReport]);
+    expect(await indexEntries()).toBe(1);
+  });
+
+  it("an original save that lands after its lapsed claim's resend was saved hands back the resend's report", async () => {
+    const { store, indexEntries } = makeStore({ claimMs: 300 });
+    const original = await owned(store.claimVoice("abc"));
+    await sleep(400);
+    const resend = await owned(store.claimVoice("abc"));
+    const theReport = voiceReport({ audioHash: "abc" });
+    expect(await store.save(theReport, resend)).toEqual({ state: "saved" });
+    expect(await store.save(voiceReport({ audioHash: "abc" }), original)).toEqual({ state: "duplicate", report: theReport });
+    expect(await store.recent(new Date(T0.getTime() + 60_000))).toEqual([theReport]);
+    expect(await indexEntries()).toBe(1);
+  });
+
+  it("a save with no claim behind it writes nothing", async () => {
+    const { store, indexEntries } = makeStore();
+    expect(await store.save(voiceReport({ audioHash: "abc" }), "no-such-claim")).toEqual({ state: "not_owner" });
+    expect(await store.recent(new Date(T0.getTime() + 60_000))).toEqual([]);
+    expect(await indexEntries()).toBe(0);
+  });
+
+  it("a release from a claim that was given up leaves the resend's claim in place", async () => {
+    const { store } = makeStore();
+    const gaveUp = await owned(store.claimVoice("abc"));
+    await store.releaseVoice("abc", gaveUp);
+    await owned(store.claimVoice("abc"));
+    await store.releaseVoice("abc", gaveUp);
+    expect(await store.claimVoice("abc")).toEqual({ state: "in_flight" });
+  });
+
+  it("a photo's save is held to its claim the same way", async () => {
+    const { store, indexEntries } = makeStore();
+    const gaveUp = await owned(store.claimPhoto("abc"));
+    await store.releasePhoto("abc", gaveUp);
+    const resend = await owned(store.claimPhoto("abc"));
+    expect(await store.save(report({ photoHash: "abc" }), gaveUp)).toEqual({ state: "not_owner" });
+    const theReport = report({ photoHash: "abc" });
+    expect(await store.save(theReport, resend)).toEqual({ state: "saved" });
+    expect(await store.save(report({ photoHash: "abc" }), resend)).toEqual({ state: "duplicate", report: theReport });
+    expect(await indexEntries()).toBe(1);
   });
 });
 
@@ -155,14 +251,13 @@ describe("expiry in the memory store (🟡P15)", () => {
   it("the record, the index and the photo's hash all go at 3 h plus the margin, not before", async () => {
     const clock = steppedClock();
     const store = new MemoryReportStore({ now: clock.now });
-    await store.claimPhoto("abc");
     const saved = report({ photoHash: "abc" });
-    await store.save(saved);
+    await seedReport(store, saved);
     clock.advance(REPORT_TTL_MS - 1);
     expect(store.keys().sort()).toEqual([`lusong:report:${saved.id}`, "lusong:report-photo:abc", "lusong:reports"].sort());
     clock.advance(1);
     expect(store.keys()).toEqual([]);
-    expect(await store.claimPhoto("abc")).toEqual({ state: "claimed" });
+    expect(await store.claimPhoto("abc")).toEqual(CLAIMED);
   });
 
   it("an unfinished claim lapses, so a read that died mid-way doesn't hold the photo for 3 h", async () => {
@@ -170,7 +265,7 @@ describe("expiry in the memory store (🟡P15)", () => {
     const store = new MemoryReportStore({ now: clock.now });
     await store.claimPhoto("abc");
     clock.advance(PHOTO_CLAIM_MS);
-    expect(await store.claimPhoto("abc")).toEqual({ state: "claimed" });
+    expect(await store.claimPhoto("abc")).toEqual(CLAIMED);
   });
 
   it("the margin is named and positive", () => {
@@ -185,8 +280,7 @@ describe.runIf(upstashUrl)("expiry on the Upstash stand-in (🟡P15)", () => {
     const ttlMs = 1_200;
     const store = new UpstashReportStore(upstashUrl!, upstashToken, prefix, { ttlMs });
     const saved = report({ photoHash: "abc", receivedAt: new Date().toISOString() });
-    await store.claimPhoto("abc");
-    await store.save(saved);
+    await seedReport(store, saved);
     const keys = [`${prefix}:report:${saved.id}`, `${prefix}:report-photo:abc`, `${prefix}:reports`];
     const ttls = (await Promise.all(keys.map((k) => upstash(["PTTL", k])))) as number[];
     for (const ttl of ttls) expect(ttl).toBeGreaterThan(ttlMs - 300);

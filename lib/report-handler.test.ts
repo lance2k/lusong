@@ -488,7 +488,7 @@ describe("one deadline for the whole request (route maxDuration 120 s)", () => {
       throw new Error("Upstash HTTP 500");
     };
     const release = store.releasePhoto.bind(store);
-    store.releasePhoto = async (hash) => (await sleep(140), release(hash));
+    store.releasePhoto = async (hash, token) => (await sleep(140), release(hash, token));
     const started = Date.now();
     const res = await handlerWith({ store, settleDelayMs: 140, timing })(post("192.0.2.1"));
     expect(res.status).toBe(200);
