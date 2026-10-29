@@ -344,12 +344,14 @@ const KEEP_ATTEMPTS = 3;
  * this one failed. The write only lands on the value that was read, so a search that outlived its lease can't overwrite
  * one stored between its read and its write; it reads again and decides again.
  */
-async function keep(store: KvStore, record: Stored, now: Date): Promise<void> {
+async function keep(store: KvStore, record: Stored, now: Date, deadline: number): Promise<void> {
   for (let attempt = 0; attempt < KEEP_ATTEMPTS; attempt++) {
+    if (Date.now() >= deadline) return;
     const text = await store.get(WEB_SEARCH_KEY);
     const current = text === null ? null : readStored(text);
     if (current && current.startedAt > record.startedAt) return;
     if (current && current.evidence.state === "searched" && current.expiresAt > now.getTime() && record.evidence.state !== "searched") return;
+    if (Date.now() >= deadline) return;
     if (await store.compareAndSet(WEB_SEARCH_KEY, text, JSON.stringify(record), record.expiresAt - now.getTime())) return;
   }
   console.error(`couldn't store the web search: the stored result changed under it ${KEEP_ATTEMPTS} times`);
@@ -467,10 +469,14 @@ function findingsIn(text: string, pages: readonly string[]): WebFinding[] | null
   return findings.slice(0, MAX_WEB_FINDINGS);
 }
 
-/** Runs the plan: the stored result, no search, or the one search, stored for every check after it. */
+/**
+ * Runs the plan: the stored result, no search, or the one search, stored for every check after it. Every step ends by
+ * `deadline` (epoch ms), the model call by `searchBy` when given: a settle or a store call still running then is left
+ * to finish in the background, nothing more is stored, and the lease is given back.
+ */
 export async function runWebSearch(
   plan: WebPlan,
-  deps: { store: KvStore | null; now: Date; deadline: number; meter: Meter },
+  deps: { store: KvStore | null; now: Date; deadline: number; searchBy?: number; meter: Meter },
 ): Promise<WebEvidence> {
   if (plan.kind === "cached") return plan.evidence;
   if (plan.kind === "off") return { state: "not_run", why: plan.why, searchedAt: null, findings: [] };
@@ -485,7 +491,7 @@ export async function runWebSearch(
       tools: [{ type: "web_search" }],
       maxOutputTokens: SEARCH_MAX_OUTPUT_TOKENS,
       attemptTimeoutMs: SEARCH_ATTEMPT_MS,
-      deadline: deps.deadline,
+      deadline: deps.searchBy ?? deps.deadline,
       meter: plan.run.meter,
     });
     pages = toolPages(reply);
@@ -497,13 +503,17 @@ export async function runWebSearch(
     evidence = failed("search failed");
   }
   deps.meter.include(plan.run.meter);
-  await plan.run.settle(true);
+  const { store, deadline } = deps;
   const ttl = evidence.state === "searched" ? WEB_SEARCH_CACHE_MS : WEB_SEARCH_FAILED_CACHE_MS;
-  try {
-    if (deps.store) await keep(deps.store, { expiresAt: deps.now.getTime() + ttl, startedAt: plan.startedAt, evidence, pages }, deps.now);
-  } catch (err) {
-    console.error("couldn't store the web search:", err instanceof Error ? err.message : err);
+  const record: Stored = { expiresAt: deps.now.getTime() + ttl, startedAt: plan.startedAt, evidence, pages };
+  const settledAndStored = (async () => {
+    await plan.run.settle(true);
+    if (store) await keep(store, record, deps.now, deadline);
+  })().catch((err) => console.error("couldn't store the web search:", err instanceof Error ? err.message : err));
+  if ((await beforeDeadline(settledAndStored, deadline)) === "late") {
+    void giveBack(plan.lease);
+    return evidence;
   }
-  await giveBack(plan.lease);
+  await beforeDeadline(giveBack(plan.lease), deadline);
   return evidence;
 }

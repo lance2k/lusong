@@ -1449,4 +1449,39 @@ describe("the web search runs under the check's one deadline (review ðŸ”´C-1, ðŸ
     await vi.waitFor(() => expect(search.settles).toEqual([false]), { timeout: 2_000 });
     expect(await inner.get(WEB_SEARCH_LEASE_KEY)).toBeNull();
   }, 10_000);
+
+  describe("a search that ran, then stalls storing or giving back: the check answers by the deadline and settles", () => {
+    // Planning reads the cache twice (before and after the lease), so the third read is the one before the write.
+    it.each([
+      ["its search reservation's settle never answers", () => slowKv({}), () => slowSearchBudget({ settle: "stalls" })],
+      ["the cache read before the write never answers", () => slowKv({ stallFrom: { get: 2 } }), () => slowSearchBudget({})],
+      ["the cache write never answers", () => slowKv({ stallFrom: { compareAndSet: 0 } }), () => slowSearchBudget({})],
+      ["giving back the lease never answers", () => slowKv({ stallFrom: { deleteIfEquals: 0 } }), () => slowSearchBudget({})],
+    ] as const)("%s", async (_name, kvOf, searchBudgetOf) => {
+      const { kv } = kvOf();
+      const { handler, meta, admits, settles } = checkWith(kv, searchBudgetOf().budget);
+
+      const { res, elapsed } = await timed(handler);
+
+      expect(elapsed).toBeLessThan(limit);
+      expect(meta.searchRequests).toHaveLength(1);
+      expect(res.status).toBe(200);
+      expect((await res.json()).muse.web.findings.map((f: { place: string }) => f.place)).toEqual(["Colon St"]);
+      expect(admits).toHaveLength(1);
+      expect(settles).toEqual([true]);
+    }, 10_000);
+
+    it("past the deadline the search isn't stored, and its lease is still given back", async () => {
+      const { kv, inner, calls } = slowKv({});
+      const { handler } = checkWith(kv, slowSearchBudget({ settle: "stalls" }).budget);
+
+      const { res, elapsed } = await timed(handler);
+
+      expect(elapsed).toBeLessThan(limit);
+      expect(res.status).toBe(200);
+      await vi.waitFor(async () => expect(await inner.get(WEB_SEARCH_LEASE_KEY)).toBeNull(), { timeout: 2_000 });
+      expect(calls.compareAndSet).toBe(0);
+      expect(calls.get).toBe(2);
+    }, 10_000);
+  });
 });

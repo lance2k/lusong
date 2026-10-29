@@ -407,7 +407,7 @@ export function makeCommuteHandler(deps: {
     const [advisory, routed, web] = await Promise.all([
       beforeDeadline(advisoryAt(at), run.deadline),
       check.plain(),
-      runWebSearch(run.plan, { store: run.store, now: at, deadline: searchDeadline, meter: run.meter }),
+      runWebSearch(run.plan, { store: run.store, now: at, deadline: run.deadline, searchBy: searchDeadline, meter: run.meter }),
     ]);
     if (advisory === "late") return fail(503, OUT_OF_TIME);
     if (!routed.ok) return Response.json({ error: ROUTE_ERRORS[routed.reason], routing: routed.reason }, { status: 503 });
