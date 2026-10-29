@@ -1,7 +1,9 @@
 # Lusong
 
-Send a photo of a flooded street and find out how deep the water is and whether it is too deep for cars,
-on the MMDA flood gauge, with the waterline drawn on the photo as the evidence.
+Before you ride to work in Cebu, Lusong answers "should I leave now, and which way?": **Go**, **Go another way**,
+**Wait** or **No one knows**, with the evidence under the answer. The evidence is PAGASA's flood advisory for Cebu and
+photo reports from people at the water, each read by Lusong's depth reader: send a photo of a flooded street and it
+reads how deep the water is on the MMDA flood gauge, with the waterline drawn on the photo.
 
 **Try it:** https://lusong-mocha.vercel.app (10 checks per address per day; when the day's budget runs out it
 shows sample results).
@@ -15,6 +17,25 @@ knee, tire, waist and chest deep, each with whether light vehicles or any vehicl
 edge of a flooded street still have to guess which one they are looking at. Someone on the street can take a photo;
 Lusong reads the depth from the people and cars already standing in the water, and says whether that is too
 deep for cars on the same gauge.
+
+## The commute check
+
+Pick a trip (a preset one such as Banilad → IT Park, or your own two points on the map) and tap Check.
+
+- **The answer comes from fixed rules**, tested in `lib/answer.ts`. A photo report counts for 3 hours. A reading of
+  "not passable to light vehicles" or deeper blocks its spot. Only a photo taken within the hour that shows no flood
+  water clears one. Voice notes and web findings can warn, never clear.
+- **Which way:** the plain route and a way around a blocked spot come from the public Valhalla router (motorcycle
+  costing, the blocked spots excluded). Lusong checks the way around against the reports too. Plain route clear ⇒ Go.
+  Plain blocked and the way around clear ⇒ Go another way. No way around, or it is blocked too ⇒ Wait.
+- **Under an advisory or rain**, a Go needs clear reports every 500 m of the route. Without them the answer is No one
+  knows, because nobody has looked yet. An advisory Lusong can't read counts as active.
+- **Muse Spark investigates** through the Responses API: it calls Lusong's tools (read the advisory, list the reports
+  near a route) and its own web search for road closures in Cebu today. It returns which evidence matters, as ids.
+  Lusong writes every sentence on the page from those ids, so the model can't change the answer or put its own words
+  in front of the rider. A closure it finds blocks a way only when it is dated today and placed on that way.
+- **The demo trips** are recorded routes with sample reports. Every sample says it is a sample and where the photo was
+  really taken (Metro Manila, from the MMDA-labelled test set), so it is never mistaken for a report from Cebu.
 
 ## Built during the hackathon
 
@@ -114,6 +135,14 @@ against 6 on the previous run. The tyre estimate appeared on 4 of the 30 draws a
 
 
 ## Limits
+
+- The commute check knows only what was reported in the last 3 hours, what PAGASA's advisory says and what the
+  web search found today. A street nobody photographed is unknown, which is why rain with no reports gives
+  No one knows rather than Go.
+- Routes come from the public FOSSGIS Valhalla server, shared by everyone and limited to one request a second.
+  When it can't be reached, the check gives no answer rather than a guess.
+- Map tiles come from OpenStreetMap's servers, which see the area you view. The map opens on all of Metro Cebu
+  and moves to your trip only when you check it.
 
 - It measures only where a person or car stands in the water. The deepest part of the street may be
   elsewhere, which is why it never says "passable to all vehicles".
