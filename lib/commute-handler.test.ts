@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FEED_URL } from "./advisory";
-import { createBudget, MemoryBudgetStore, type Budget } from "./budget";
+import { createBudget, MemoryBudgetStore, type Budget, type BudgetStore } from "./budget";
 import {
   ADVISORY_CACHE_MS,
   COMMUTE_DEADLINE_MS,
@@ -640,6 +640,33 @@ describe("Muse Spark in the demo check (#7)", () => {
       { queries: 11, complete: true, ok: true },
       { queries: 0, complete: true, ok: true },
     ]);
+  });
+
+  describe("settles through the shared admission at what Meta's replies report", () => {
+    function charging() {
+      const charged: number[] = [];
+      const store: BudgetStore = { admit: async () => "admitted", settle: async (x) => (charged.push(x.chargeMicros), true) };
+      return { budget: createBudget({ store, budgetUsd: 10, ipLimit: 10 }), charged };
+    }
+    const COLD = COMMUTE_RESERVE_MICROS + investigationReserveMicros({ kind: "search" });
+
+    it.each([
+      // 90,257 × 1.25 + 3,000 × 4.25 + 11 × 2,500 + 2 × (679 × 1.25 + 327 × 4.25) = 157,548.25 µ$
+      ["success: the search's tokens and queries and the loop's tokens", () => ({ search: [searchReply(closures)], turns: loop() }), 157_549],
+      ["retry: a retried call keeps the whole reservation", () => ({ search: [searchReply(closures)], turns: [new Response("{}", { status: 503 }), ...loop()] }), COLD],
+      ["partial: usage without output tokens keeps it", () => ({ search: [searchReply(closures)], turns: [loop()[0], { ...loop()[1], usage: { input_tokens: 679 } }] }), COLD],
+      ["usage missing: a search reply without usage keeps it", () => ({ search: [searchReply(closures, 11, null)], turns: loop() }), COLD],
+      // 400,000 × 1.25 + 4,000 × 4.25 + 1,000 × 2,500 + 4,477 = 3,021,477 µ$, past the 849,126 µ$ reserved
+      ["search overrun: charged in full past the reservation", () => ({ search: [searchReply(closures, 1_000, { input_tokens: 400_000, output_tokens: 4_000 })], turns: loop() }), 3_021_477],
+    ] as const)("%s", async (_name, script, expected) => {
+      const { budget, charged } = charging();
+      fakeMeta(script());
+      const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), budget, museOn());
+
+      expect((await handler(demo("banilad-itpark", "flooded"))).status).toBe(200);
+
+      expect(charged).toEqual([expected]);
+    });
   });
 
   it("a check the daily budget refuses makes no Meta call and gives its search reservation back", async () => {
