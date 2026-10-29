@@ -7,6 +7,8 @@ import { scenariosFor, type DemoTripId } from "./samples";
 import { cutEnd, cutStart, derivedReply } from "../test/valhalla-derived";
 import { CAP_EDITS, CV_GFA5, FEED, feedWith, SAVED } from "../test/pagasa-fixtures";
 import { makeValhallaGate, MemorySlotStore, VALHALLA_URL, type SlotStore } from "./router";
+import { MemoryReportStore, UpstashReportStore, type ReportStore, type StoredReport } from "./report-store";
+import { randomUUID } from "node:crypto";
 
 const read = (path: string) => readFileSync(path, "utf8");
 const ROUTES: Record<string, string> = {
@@ -84,10 +86,16 @@ function network(opts: Options = {}) {
 
 const openBudget = () => createBudget({ store: new MemoryBudgetStore(), budgetUsd: 10, ipLimit: 100 });
 
-function handlerAt(now: Date, opts: Options = {}, store: SlotStore = new MemorySlotStore(), budget: Budget = openBudget()) {
+function handlerAt(
+  now: Date,
+  opts: Options = {},
+  store: SlotStore = new MemorySlotStore(),
+  budget: Budget = openBudget(),
+  reports: ReportStore | null = new MemoryReportStore(),
+) {
   const net = network(opts);
   const gate = makeValhallaGate(store);
-  const handler = makeCommuteHandler({ fetch: net.fetch, now: () => now, gate: () => gate, budget: () => budget });
+  const handler = makeCommuteHandler({ fetch: net.fetch, now: () => now, gate: () => gate, budget: () => budget, reports: () => reports });
   return { handler, ...net };
 }
 
@@ -322,7 +330,7 @@ describe("the demo commute check", () => {
     expect(settles).toEqual([false]);
   });
 
-  it("only demo checks are taken: anything else is refused before any request, so samples never reach a real check", async () => {
+  it("a malformed check is refused before any request", async () => {
     const { handler, calls } = handlerAt(NO_ADVISORY);
     for (const body of [
       { mode: "real", trip: "banilad-itpark", scenario: "flooded" },
@@ -523,5 +531,183 @@ describe("a route must reach the trip's own start and end (🔴1)", () => {
     const body = await (await handler(demo("banilad-itpark", "no_way_around"))).json();
     expect(body.answer.kind).toBe("wait");
     expect(body.reports[0]).toMatchObject({ onRoute: true, role: "block" });
+  });
+});
+
+/** The demo Banilad → IT Park trip's ends, sent as a real trip: the saved Valhalla replies answer for them. */
+const BANILAD = { lat: 10.346, lon: 123.911 };
+const IT_PARK = { lat: 10.3307, lon: 123.9058 };
+const real = (from = BANILAD, to = IT_PARK, rainingHere = false) => check({ mode: "real", from, to, rainingHere });
+
+/** A real photo report, NPLV, 40 min old, at the same spot as the demo's flooded sample (so the saved detour answers). */
+function storedReport(at: Date, overrides: Partial<StoredReport> = {}): StoredReport {
+  return {
+    id: randomUUID(),
+    kind: "photo",
+    at: { lat: 10.335398, lon: 123.910908 },
+    wayId: null,
+    place: "Governor M. Cuenco Avenue",
+    receivedAt: new Date(at.getTime() - 40 * 60_000).toISOString(),
+    capturedAt: null,
+    verdict: {
+      kind: "measured",
+      rangeCm: { low: 27, high: 39 },
+      passability: "NPLV",
+      confidence: "low",
+      readingsComplete: true,
+      decidedBy: { label: "C1", landmark: "tyre_half", interval: { low: 27, high: 39 } },
+      readingsUsed: ["C1"],
+    },
+    photoHash: "a".repeat(64),
+    ...overrides,
+  };
+}
+
+describe("a real commute check (#6)", () => {
+  it("a real commute check uses a stored real report and never a sample", async () => {
+    const store = new MemoryReportStore();
+    const flooded = storedReport(NO_ADVISORY);
+    await store.save(flooded);
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
+    const res = await handler(real());
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.demo).toBe(false);
+    expect(body.answer.kind).toBe("go_another_way");
+    expect(body.reports).toEqual([expect.objectContaining({ id: flooded.id, sample: false, role: "block", counts: true, onRoute: true })]);
+    expect(body.reports.some((r: { id: string }) => r.id.startsWith("sample-"))).toBe(false);
+    expect(body.detour).not.toBeNull();
+  });
+
+  it("with no stored reports, the same trip is Go: no sample stands in for a report", async () => {
+    const { handler } = handlerAt(NO_ADVISORY);
+    const body = await (await handler(real())).json();
+    expect(body.answer.kind).toBe("go");
+    expect(body.reports).toEqual([]);
+  });
+
+  it("a report on a road the trip doesn't take is gathered but not on the route", async () => {
+    const store = new MemoryReportStore();
+    await store.save(storedReport(NO_ADVISORY, { at: { lat: 10.3143, lon: 123.9147 } }));
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
+    const body = await (await handler(real())).json();
+    expect(body.answer.kind).toBe("go");
+    expect(body.reports).toEqual([expect.objectContaining({ onRoute: false })]);
+  });
+
+  it("a demo check never uses a real report, and never reads the store", async () => {
+    const store = new MemoryReportStore();
+    await store.save(storedReport(NO_ADVISORY));
+    const recent = vi.spyOn(store, "recent");
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
+    const body = await (await handler(demo("banilad-itpark", "none"))).json();
+    expect(body.answer.kind).toBe("go");
+    expect(body.reports).toEqual([]);
+    expect(recent).not.toHaveBeenCalled();
+  });
+
+  it("a failed report-store read gives no answer, never an empty one", async () => {
+    const store = new MemoryReportStore();
+    store.recent = async () => {
+      throw new Error("Upstash HTTP 500");
+    };
+    const { handler, valhallaCalls } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
+    const res = await handler(real());
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.answer).toBeUndefined();
+    expect(body.error).toMatch(/reports/);
+    expect(valhallaCalls()).toHaveLength(0);
+  });
+
+  it("no report store configured gives no answer", async () => {
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), null);
+    const res = await handler(real());
+    expect(res.status).toBe(503);
+    expect((await res.json()).answer).toBeUndefined();
+  });
+
+  it("goes through the daily admission with the client's address, before any request", async () => {
+    const budget = createBudget({ store: new MemoryBudgetStore(), budgetUsd: 10, ipLimit: 1 });
+    const store = new MemoryReportStore();
+    const recent = vi.spyOn(store, "recent");
+    const { handler, calls } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), budget, store);
+    expect((await handler(real())).status).toBe(200);
+    const before = calls.length;
+    const refused = await handler(real());
+    expect(refused.status).toBe(429);
+    expect(await refused.json()).toMatchObject({ reason: "ip" });
+    expect(calls).toHaveLength(before);
+    expect(recent).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["no start", { mode: "real", to: IT_PARK }],
+    ["a start that isn't a number", { mode: "real", from: { lat: "10.3", lon: 123.9 }, to: IT_PARK }],
+    ["an end outside the Philippines", { mode: "real", from: BANILAD, to: { lat: 35.68, lon: 139.76 } }],
+    ["a trip over 50 km", { mode: "real", from: BANILAD, to: { lat: 10.95, lon: 124.0 } }],
+    ["a rain tap that isn't true or false", { mode: "real", from: BANILAD, to: IT_PARK, rainingHere: "yes" }],
+  ])("%s is refused before any request", async (_why, body) => {
+    const store = new MemoryReportStore();
+    const recent = vi.spyOn(store, "recent");
+    const { handler, calls } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
+    expect((await handler(check(body))).status).toBe(400);
+    expect(calls).toHaveLength(0);
+    expect(recent).not.toHaveBeenCalled();
+  });
+
+  it("asks Valhalla for the trip as sent", async () => {
+    const { handler, valhallaCalls } = handlerAt(NO_ADVISORY);
+    await handler(real());
+    expect(JSON.parse(valhallaCalls()[0].body!).locations).toEqual([BANILAD, IT_PARK]);
+  });
+});
+
+const upstashUrl = process.env.LUSONG_TEST_UPSTASH_URL;
+const upstashToken = process.env.LUSONG_TEST_UPSTASH_TOKEN ?? "";
+
+/** Every key under the prefix with its value (a string, or a sorted set's members), read with SCAN. */
+async function upstashHeld(prefix: string): Promise<Record<string, unknown>> {
+  const call = async (command: string[]) => {
+    const res = await fetch(upstashUrl!, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${upstashToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify(command),
+    });
+    return ((await res.json()) as { result: unknown }).result;
+  };
+  const out: Record<string, unknown> = {};
+  let cursor = "0";
+  do {
+    const [next, keys] = (await call(["SCAN", cursor, "MATCH", `${prefix}:*`, "COUNT", "1000"])) as [string, string[]];
+    for (const key of keys) out[key] = (await call(["TYPE", key])) === "zset" ? await call(["ZRANGE", key, "0", "-1"]) : await call(["GET", key]);
+    cursor = next;
+  } while (cursor !== "0");
+  return out;
+}
+
+describe.each([
+  ["memory store", () => {
+    const store = new MemoryReportStore();
+    return { store, held: async () => store.dump() as Record<string, unknown> };
+  }],
+  ...(upstashUrl
+    ? [["Upstash store", () => {
+        const prefix = `lusong-test-${randomUUID()}`;
+        return { store: new UpstashReportStore(upstashUrl, upstashToken, prefix) as ReportStore, held: () => upstashHeld(prefix) };
+      }] as const]
+    : []),
+] as [string, () => { store: ReportStore; held: () => Promise<Record<string, unknown>> }][])("after a real check, the %s", (_name, make) => {
+  it("holds nothing about the trip: every key and value is as it was", async () => {
+    const { store, held } = make();
+    await store.save(storedReport(new Date(), { receivedAt: new Date(Date.now() - 40 * 60_000).toISOString() }));
+    const before = await held();
+    expect(Object.keys(before)).toHaveLength(3);
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
+    expect((await handler(real())).status).toBe(200);
+    const after = await held();
+    expect(after).toEqual(before);
+    const everything = JSON.stringify(after);
+    for (const coordinate of ["10.346", "123.911", "10.3307", "123.9058"]) expect(everything).not.toContain(coordinate);
   });
 });

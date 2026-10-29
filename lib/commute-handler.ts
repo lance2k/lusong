@@ -1,14 +1,15 @@
 import { admit } from "./admission";
 import { readAdvisory, type AdvisoryReading } from "./advisory";
-import { decideAnswer, placeOnRoute, ROUTE_CORRIDOR_M, type AnswerKind, type Report } from "./answer";
+import { decideAnswer, distanceM, placeOnRoute, ROUTE_CORRIDOR_M, type AnswerKind, type Point, type Report } from "./answer";
 import { budgetFromEnv, type Budget } from "./budget";
 import { clientIp } from "./check-handler";
 import { boxAround, detourAvoids, lineForTrip } from "./detour";
 import { ageWords, depthWords, MMDA_CREDIT, passabilityLine, phtTime } from "./commute-words";
 import { fetchRoute, type Route, type RouteResult, type ValhallaGate } from "./router";
-import { DEMO_TRIPS, sampleReports, scenariosFor, type DemoTripId, type ScenarioId } from "./samples";
+import { reportStoreFromEnv, toReport, type ReportStore } from "./report-store";
+import { DEMO_TRIPS, sampleReports, scenariosFor, type DemoTripId, type SampleReport, type ScenarioId } from "./samples";
 
-/** The demo check makes no Meta call, so it reserves 1 µ$: enough to pass through the daily admission and its per-address limit. */
+/** A commute check makes no Meta call, so it reserves 1 µ$: enough to pass through the daily admission and its per-address limit. */
 export const COMMUTE_RESERVE_MICROS = 1;
 
 /** A demo trip's plain route, or its detour around a set of spots, is reused this long: the roads don't change, and Valhalla is a shared free server. */
@@ -56,6 +57,39 @@ function parseDemo(body: unknown): DemoRequest | null {
   return { trip: b.trip as DemoTripId, scenario: b.scenario as ScenarioId, rainingHere: b.rainingHere === true };
 }
 
+/** Real trips are Philippine streets; a pin outside this box is refused before anything is asked of anyone. */
+const PHILIPPINES = { south: 4.5, north: 21.5, west: 116, east: 127 };
+/** A commute is one city's worth of road; a longer trip is refused rather than sent to the shared free router. */
+export const MAX_TRIP_M = 50_000;
+
+interface RealRequest {
+  from: Point;
+  to: Point;
+  rainingHere: boolean;
+}
+
+function pointFrom(value: unknown): Point | null {
+  if (typeof value !== "object" || value === null) return null;
+  const { lat, lon } = value as Record<string, unknown>;
+  if (typeof lat !== "number" || typeof lon !== "number" || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  const inside = lat >= PHILIPPINES.south && lat <= PHILIPPINES.north && lon >= PHILIPPINES.west && lon <= PHILIPPINES.east;
+  return inside ? { lat, lon } : null;
+}
+
+function parseReal(body: unknown): RealRequest | null {
+  if (typeof body !== "object" || body === null) return null;
+  const b = body as Record<string, unknown>;
+  if (b.mode !== "real") return null;
+  const from = pointFrom(b.from);
+  const to = pointFrom(b.to);
+  if (!from || !to || distanceM(from, to) > MAX_TRIP_M) return null;
+  if (b.rainingHere !== undefined && typeof b.rainingHere !== "boolean") return null;
+  return { from, to, rainingHere: b.rainingHere === true };
+}
+
+/** A report as the answer sees it, with what the page shows about where it came from. */
+type CheckedReport = SampleReport | (Report & { sample: false; origin: null; credit: null; sourceUrl: null });
+
 function advisoryForPage(reading: AdvisoryReading) {
   switch (reading.state) {
     case "active": {
@@ -91,16 +125,19 @@ function thinNote(kind: AnswerKind, reportCount: number, voiceOnly: boolean): st
 }
 
 /**
- * POST /api/commute: the demo commute check. Real trips and real reports arrive in later tickets; until then only
- * demo requests are taken, so sample reports can never reach a real check.
+ * POST /api/commute. A demo check uses its trip's sample reports and never reads the report store; a real check uses
+ * the stored real reports and never a sample. A real trip is used for this answer only: nothing about it is cached
+ * or stored.
  */
 export function makeCommuteHandler(deps: {
   fetch?: typeof fetch;
   now?: () => Date;
   gate: () => ValhallaGate;
   budget?: () => Budget;
+  reports?: () => ReportStore | null;
 }) {
   const budget = deps.budget ?? budgetFromEnv;
+  const reportStore = deps.reports ?? reportStoreFromEnv;
   const doFetch: typeof fetch = (...args) => (deps.fetch ?? fetch)(...args);
   const now = deps.now ?? (() => new Date());
   const routes = new Map<DemoTripId, { route: Route; at: number }>();
@@ -147,14 +184,15 @@ export function makeCommuteHandler(deps: {
       return fail(400, "Send the check as JSON.");
     }
     const demo = parseDemo(parsed);
-    if (!demo) return fail(400, "Only the demo trips can be checked so far.");
+    const realTrip = demo ? null : parseReal(parsed);
+    if (!demo && !realTrip) return fail(400, "Send a demo trip, or a real trip's start and end in the Philippines, up to 50 km apart.");
 
     const at = now();
     const admission = await admit(budget(), { clientIp: clientIp(request), reserveMicros: COMMUTE_RESERVE_MICROS, now: at });
     if (!admission.ok) return admission.response();
     let answered = false;
     try {
-      const response = await answerDemo(demo, at);
+      const response = demo ? await answerDemo(demo, at) : await answerReal(realTrip!, at);
       answered = response.ok;
       return response;
     } finally {
@@ -162,21 +200,70 @@ export function makeCommuteHandler(deps: {
     }
   };
 
-  async function answerDemo(demo: DemoRequest, at: Date): Promise<Response> {
-    const [advisory, routed] = await Promise.all([advisoryAt(at), routeFor(demo.trip, at.getTime())]);
+  function answerDemo(demo: DemoRequest, at: Date): Promise<Response> {
+    return answerTrip({
+      demo: true,
+      trip: { ...DEMO_TRIPS[demo.trip], id: demo.trip },
+      rainingHere: demo.rainingHere,
+      at,
+      reports: async () => sampleReports(demo.trip, demo.scenario, at),
+      plain: () => routeFor(demo.trip, at.getTime()),
+      around: (blockers) => detourFor(demo.trip, blockers, at.getTime()),
+    });
+  }
+
+  /** Not cached, unlike a demo trip's routes: a real trip's ends are the rider's, and the server keeps nothing of them. */
+  function answerReal(trip: RealRequest, at: Date): Promise<Response> {
+    const ends = { from: trip.from, to: trip.to };
+    return answerTrip({
+      demo: false,
+      trip: { ...ends, id: null, label: "Your trip" },
+      rainingHere: trip.rainingHere,
+      at,
+      reports: async () => {
+        const store = reportStore();
+        if (!store) throw new Error("no report store configured");
+        return (await store.recent(at)).map((r) => ({ ...toReport(r), sample: false, origin: null, credit: null, sourceUrl: null }) as const);
+      },
+      plain: async () => {
+        const result = await fetchRoute(ends, { fetch: doFetch, gate: deps.gate() });
+        return result.ok && !lineForTrip(result.route.line, ends) ? { ok: false, reason: "off_trip" } : result;
+      },
+      around: (blockers) =>
+        fetchRoute({ ...ends, excludePolygons: blockers.map((b) => boxAround(b.at)) }, { fetch: doFetch, gate: deps.gate() }),
+    });
+  }
+
+  async function answerTrip(check: {
+    demo: boolean;
+    trip: { id: DemoTripId | null; label: string; from: Point; to: Point };
+    rainingHere: boolean;
+    at: Date;
+    reports: () => Promise<CheckedReport[]>;
+    plain: () => Promise<PlainResult>;
+    around: (blockers: readonly Report[]) => Promise<RouteResult>;
+  }): Promise<Response> {
+    const { at, trip } = check;
+    // Reports first: if they can't be read there is no answer, so the routing server isn't asked at all.
+    let reports: CheckedReport[];
+    try {
+      reports = await check.reports();
+    } catch (err) {
+      console.error("report store unreadable:", err instanceof Error ? err.message : err);
+      return fail(503, "Lusong couldn't read the reports from the street, so it can't give an answer. Try again in a minute.");
+    }
+    const [advisory, routed] = await Promise.all([advisoryAt(at), check.plain()]);
     if (!routed.ok) return Response.json({ error: ROUTE_ERRORS[routed.reason], routing: routed.reason }, { status: 503 });
 
     const route = routed.route;
-    const trip = DEMO_TRIPS[demo.trip];
     const plainLine = lineForTrip(route.line, trip)!;
-    const reports = sampleReports(demo.trip, demo.scenario, at);
     const judge = (detourLine: Route["line"] | null) =>
       decideAnswer({
         plain: { id: "plain", line: plainLine },
         detours: detourLine ? [{ id: "detour", line: detourLine }] : [],
         reports,
         advisory: advisory.state,
-        rainingHere: demo.rainingHere,
+        rainingHere: check.rainingHere,
         now: at,
       });
     let answer = judge(null);
@@ -185,7 +272,7 @@ export function makeCommuteHandler(deps: {
     const plainJudged = answer.routes[0];
     if (plainJudged.state === "blocked") {
       const blockers = reports.filter((r) => plainJudged.blockedBy.includes(r.id));
-      const around = await detourFor(demo.trip, blockers, at.getTime());
+      const around = await check.around(blockers);
       if (!around.ok && around.reason !== "no_route") {
         return Response.json({ error: ROUTE_ERRORS[around.reason], routing: around.reason }, { status: 503 });
       }
@@ -201,9 +288,9 @@ export function makeCommuteHandler(deps: {
     const used = reports.filter((r) => answer.decidedBy.includes(r.id));
 
     return Response.json({
-      demo: true,
-      trip: { id: demo.trip, label: DEMO_TRIPS[demo.trip].label },
-      rainingHere: demo.rainingHere,
+      demo: check.demo,
+      trip: { id: trip.id, label: trip.label },
+      rainingHere: check.rainingHere,
       answer: {
         kind: answer.answer,
         title: TITLES[answer.answer],
