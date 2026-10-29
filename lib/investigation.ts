@@ -1,10 +1,10 @@
 import type { AdvisoryReading } from "./advisory";
 import { decideAnswer, type Answer, type AnswerKind, type Point, type Report, type RouteCandidate } from "./answer";
-import { ATTEMPTS_PER_CALL, MUSE_INPUT_MICROS_PER_TOKEN, MUSE_OUTPUT_MICROS_PER_TOKEN, WEB_SEARCH_QUERY_MICROS } from "./budget";
+import { ATTEMPTS_PER_CALL, MUSE_INPUT_MICROS_PER_TOKEN, MUSE_OUTPUT_MICROS_PER_TOKEN } from "./budget";
 import { detourAvoids } from "./detour";
 import type { Meter } from "./meta";
 import { respond, type FunctionCall, type FunctionTool, type SparkReply } from "./spark-responses";
-import { inMetroCebu, SEARCH_MAX_OUTPUT_TOKENS, type WebEvidence, type WebFinding, type WebPlan } from "./web-search";
+import { inMetroCebu, SEARCH_RESERVE_MICROS, type WebEvidence, type WebFinding, type WebPlan } from "./web-search";
 
 export type { WebEvidence, WebFinding } from "./web-search";
 
@@ -183,14 +183,6 @@ export const PROMPT_MAX_BYTES = 4_000;
 export const FRAMING_TOKENS_PER_CALL = 1_000;
 /** Each function_call_output's framing beyond its text. Not measured; the probe's one output added about 10 tokens. */
 export const ITEM_FRAMING_TOKENS = 50;
-/** 2.2 × the probe search's 90,257 input tokens, which ran 11 actions at a 3,000-token output cap (1 draw). */
-export const SEARCH_INPUT_TOKEN_BOUND = 200_000;
-/**
- * The API showed no max_tool_calls in its reply, so the number of search actions isn't capped: twice the probe's 11 are
- * reserved, every action counted as a query, and any beyond are charged when the reply's usage is settled.
- */
-export const SEARCH_QUERIES_RESERVED = 22;
-
 const LAST_TURN_NOTE = "No more tool calls: write the summary now.";
 
 /**
@@ -530,21 +522,14 @@ export async function investigate(input: InvestigationInput): Promise<Investigat
  * token covers at least one byte of UTF-8 (true of byte-level BPE; Muse Spark's tokenizer is not documented).
  * Turn k reads the first turn's input plus every earlier turn's output and tool results: P + (k − 1) × G.
  */
-export function investigationReserveMicros(plan: WebPlan): number {
+export function investigationReserveMicros(plan: { kind: WebPlan["kind"] }): number {
   const firstTurn = FRAMING_TOKENS_PER_CALL + PROMPT_MAX_BYTES + CONTEXT_MAX_BYTES;
   const growth = LOOP_MAX_OUTPUT_TOKENS + TOOL_CALLS_PER_TURN * (TOOL_RESULT_MAX_BYTES + ITEM_FRAMING_TOKENS);
   const turns = LOOP_TURN_CAP;
   const loopInput = turns * firstTurn + (growth * turns * (turns - 1)) / 2;
   const loopOutput = turns * LOOP_MAX_OUTPUT_TOKENS;
   const loop = ATTEMPTS_PER_CALL * (loopInput * MUSE_INPUT_MICROS_PER_TOKEN + loopOutput * MUSE_OUTPUT_MICROS_PER_TOKEN);
-  const search =
-    plan.kind === "search"
-      ? ATTEMPTS_PER_CALL *
-        (SEARCH_INPUT_TOKEN_BOUND * MUSE_INPUT_MICROS_PER_TOKEN +
-          SEARCH_MAX_OUTPUT_TOKENS * MUSE_OUTPUT_MICROS_PER_TOKEN +
-          SEARCH_QUERIES_RESERVED * WEB_SEARCH_QUERY_MICROS)
-      : 0;
-  return Math.ceil(loop) + Math.ceil(search);
+  return Math.ceil(loop) + (plan.kind === "search" ? SEARCH_RESERVE_MICROS : 0);
 }
 
 function contextOf(evidence: Evidence, web: WebEvidence) {

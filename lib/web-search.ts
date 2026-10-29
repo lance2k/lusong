@@ -1,4 +1,14 @@
+import { admit, type AdmittedRun } from "./admission";
 import type { Point } from "./answer";
+import {
+  ATTEMPTS_PER_CALL,
+  budgetStoreFromEnv,
+  createBudget,
+  MUSE_INPUT_MICROS_PER_TOKEN,
+  MUSE_OUTPUT_MICROS_PER_TOKEN,
+  WEB_SEARCH_QUERY_MICROS,
+  type Budget,
+} from "./budget";
 import type { Meter } from "./meta";
 import { respond } from "./spark-responses";
 
@@ -10,7 +20,7 @@ import { respond } from "./spark-responses";
  */
 
 export const WEB_SEARCH_KEY = "lusong:muse:road-closures";
-export const WEB_SEARCH_CACHE_MS = 30 * 60_000;
+export const WEB_SEARCH_CACHE_MS = 60 * 60_000;
 /** A failed search is not retried for this long, so a failing search isn't paid for on every check. */
 export const WEB_SEARCH_FAILED_CACHE_MS = 5 * 60_000;
 /** Above the probe's 3,000, which ran out before any answer. Not yet measured. */
@@ -18,6 +28,30 @@ export const SEARCH_MAX_OUTPUT_TOKENS = 4_000;
 /** The probe took 23 s at 3,000 output tokens (1 draw). */
 export const SEARCH_ATTEMPT_MS = 35_000;
 export const MAX_WEB_FINDINGS = 8;
+
+/** 2.2 × the probe search's 90,257 input tokens, which ran 11 actions at a 3,000-token output cap (1 draw). */
+export const SEARCH_INPUT_TOKEN_BOUND = 200_000;
+/**
+ * The API showed no max_tool_calls in its reply, so the number of search actions isn't capped: twice the probe's 11 are
+ * reserved, every action counted as a query, and any beyond are charged when the reply's usage is settled.
+ */
+export const SEARCH_QUERIES_RESERVED = 22;
+/** One search's worst case with its retry, in µ$: an estimate from one draw, which is why searches have their own cap. */
+export const SEARCH_RESERVE_MICROS = Math.ceil(
+  ATTEMPTS_PER_CALL *
+    (SEARCH_INPUT_TOKEN_BOUND * MUSE_INPUT_MICROS_PER_TOKEN +
+      SEARCH_MAX_OUTPUT_TOKENS * MUSE_OUTPUT_MICROS_PER_TOKEN +
+      SEARCH_QUERIES_RESERVED * WEB_SEARCH_QUERY_MICROS),
+);
+
+/** Web search spend per UTC day, apart from (and inside) the daily budget. */
+export const SEARCH_DAILY_BUDGET_USD = 3;
+/** The search cap's ledger keys: `lusong:search:spent:<day>` and `lusong:search:res:<id>`. */
+export const SEARCH_BUDGET_PREFIX = "lusong:search";
+
+export function searchBudgetFromEnv(env: Record<string, string | undefined> = process.env): Budget {
+  return createBudget({ store: budgetStoreFromEnv(env, SEARCH_BUDGET_PREFIX), budgetUsd: SEARCH_DAILY_BUDGET_USD, ipLimit: 1 });
+}
 
 /**
  * Metro Cebu, drawn generously by hand from Danao in the north to Carcar in the south and Mactan in the east (not an
@@ -120,7 +154,8 @@ export function searchStoreFromEnv(env: Record<string, string | undefined> = pro
   return null;
 }
 
-export type WebPlan = { kind: "cached"; evidence: WebEvidence } | { kind: "search" } | { kind: "off"; why: string };
+/** A planned search holds its reservation against the daily search cap until it runs or is released. */
+export type WebPlan = { kind: "cached"; evidence: WebEvidence } | { kind: "search"; run: AdmittedRun } | { kind: "off"; why: string };
 
 interface Stored {
   expiresAt: number;
@@ -139,7 +174,7 @@ function readStored(text: string): Stored | null {
 }
 
 /** Decided before admission, since a search changes what the check must reserve. */
-export async function planWebSearch(store: KvStore | null, now: Date): Promise<WebPlan> {
+export async function planWebSearch(store: KvStore | null, now: Date, searchBudget: Budget): Promise<WebPlan> {
   if (!store) return { kind: "off", why: "no shared store" };
   let text: string | null;
   try {
@@ -148,8 +183,17 @@ export async function planWebSearch(store: KvStore | null, now: Date): Promise<W
     return { kind: "off", why: "store unreachable" };
   }
   const stored = text === null ? null : readStored(text);
-  if (!stored || stored.expiresAt <= now.getTime()) return { kind: "search" };
-  return { kind: "cached", evidence: stored.evidence };
+  if (stored && stored.expiresAt > now.getTime()) return { kind: "cached", evidence: stored.evidence };
+  const admission = await admit(searchBudget, { clientIp: null, reserveMicros: SEARCH_RESERVE_MICROS, now });
+  if (!admission.ok) {
+    return { kind: "off", why: admission.reason === "budget" ? "today's web search budget is used up" : "the web search budget can't be read" };
+  }
+  return { kind: "search", run: admission.run };
+}
+
+/** Gives back a planned search's reservation when the check is refused before it runs. */
+export async function releaseWebSearch(plan: WebPlan): Promise<void> {
+  if (plan.kind === "search") await plan.run.settle(true);
 }
 
 function phtDay(t: Date): string {
@@ -230,7 +274,7 @@ export async function runWebSearch(
       maxOutputTokens: SEARCH_MAX_OUTPUT_TOKENS,
       attemptTimeoutMs: SEARCH_ATTEMPT_MS,
       deadline: deps.deadline,
-      meter: deps.meter,
+      meter: plan.run.meter,
     });
     const findings = reply.status === "completed" ? findingsIn(reply.answerText) : null;
     if (reply.status !== "completed") evidence = failed("search cut off");
@@ -239,6 +283,8 @@ export async function runWebSearch(
   } catch {
     evidence = failed("search failed");
   }
+  deps.meter.include(plan.run.meter);
+  await plan.run.settle(true);
   const ttl = evidence.state === "searched" ? WEB_SEARCH_CACHE_MS : WEB_SEARCH_FAILED_CACHE_MS;
   try {
     await deps.store?.set(WEB_SEARCH_KEY, JSON.stringify({ expiresAt: deps.now.getTime() + ttl, evidence } satisfies Stored), ttl);

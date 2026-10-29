@@ -100,6 +100,16 @@ export class Meter {
     this.webSearchQueries += reading.webSearchQueries ?? 0;
   }
 
+  /** Adds another meter's counts, such as a web search metered against its own daily cap. */
+  include(other: Meter): void {
+    const u = other.usage();
+    this.samImages += u.samImages;
+    this.museInputTokens += u.museInputTokens;
+    this.museOutputTokens += u.museOutputTokens;
+    this.webSearchQueries += u.webSearchQueries;
+    if (!u.complete) this.complete = false;
+  }
+
   usage(): MeteredUsage {
     const { samImages, museInputTokens, museOutputTokens, webSearchQueries, complete } = this;
     return { samImages, museInputTokens, museOutputTokens, webSearchQueries, complete };

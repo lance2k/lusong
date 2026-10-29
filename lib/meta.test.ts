@@ -120,6 +120,19 @@ describe("the meter reads each operation's usage", () => {
     });
   });
 
+  it("a meter can take in another run's counts, and is only as complete as both", () => {
+    const check = new Meter();
+    check.reply("spark-responses", sparkResponse({ input_tokens: 10, output_tokens: 20 }));
+    const search = new Meter();
+    search.reply("spark-responses", sparkResponse({ input_tokens: 2_000, output_tokens: 3_000 }, [{ type: "web_search_call" }, { type: "message" }]));
+    check.include(search);
+    expect(check.usage()).toEqual({ samImages: 0, museInputTokens: 2_010, museOutputTokens: 3_020, webSearchQueries: 1, complete: true });
+    const failed = new Meter();
+    failed.failedAttempt();
+    check.include(failed);
+    expect(check.usage().complete).toBe(false);
+  });
+
   it("a Spark reply holding an output item with no known price is not a complete count", () => {
     const meter = new Meter();
     meter.reply(

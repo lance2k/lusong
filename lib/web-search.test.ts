@@ -1,11 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createBudget, MemoryBudgetStore } from "./budget";
 import { Meter } from "./meta";
 import {
   MAX_WEB_FINDINGS,
   MemoryKvStore,
   planWebSearch,
+  releaseWebSearch,
+  SEARCH_BUDGET_PREFIX,
+  SEARCH_DAILY_BUDGET_USD,
+  SEARCH_RESERVE_MICROS,
   runWebSearch,
   searchStoreFromEnv,
   SEARCH_MAX_OUTPUT_TOKENS,
@@ -18,11 +23,13 @@ import {
 import { fakeMeta, searchReply } from "../test/muse-derived";
 
 const NOW = new Date("2026-10-30T02:00:00Z"); // 10:00 PHT, 2026-10-30
+/** A search budget with room for many searches. */
+const roomy = () => createBudget({ store: new MemoryBudgetStore(), budgetUsd: 100, ipLimit: 1 });
 const closures = (items: object[]) => JSON.stringify({ closures: items });
 const MABOLO = { place: "Juan Luna Ave, Mabolo", lat: 10.3175, lon: 123.9146, url: "https://example.ph/mabolo-flood", date: "2026-10-30", summary: "Knee-deep flood, road closed." };
 
 async function searchOnce(store: KvStore | null, at: Date = NOW, deadline = Date.now() + 40_000) {
-  return runWebSearch(await planWebSearch(store, at), { store, now: at, deadline, meter: new Meter() });
+  return runWebSearch(await planWebSearch(store, at, roomy()), { store, now: at, deadline, meter: new Meter() });
 }
 
 beforeEach(() => {
@@ -131,12 +138,12 @@ describe("one search is shared by every check for a while", () => {
 
     const first = await searchOnce(store, now);
     now = new Date(NOW.getTime() + WEB_SEARCH_CACHE_MS - 1);
-    expect(await planWebSearch(store, now)).toEqual({ kind: "cached", evidence: first });
+    expect(await planWebSearch(store, now, roomy())).toEqual({ kind: "cached", evidence: first });
     expect(await searchOnce(store, now)).toEqual(first);
     expect(meta.searchRequests).toHaveLength(1);
 
     now = new Date(NOW.getTime() + WEB_SEARCH_CACHE_MS);
-    expect(await planWebSearch(store, now)).toEqual({ kind: "search" });
+    expect(await planWebSearch(store, now, roomy())).toMatchObject({ kind: "search" });
     await searchOnce(store, now);
     expect(meta.searchRequests).toHaveLength(2);
   });
@@ -148,9 +155,9 @@ describe("one search is shared by every check for a while", () => {
 
     await searchOnce(store, now);
     now = new Date(NOW.getTime() + WEB_SEARCH_FAILED_CACHE_MS - 1);
-    expect(await planWebSearch(store, now)).toMatchObject({ kind: "cached", evidence: { state: "failed" } });
+    expect(await planWebSearch(store, now, roomy())).toMatchObject({ kind: "cached", evidence: { state: "failed" } });
     now = new Date(NOW.getTime() + WEB_SEARCH_FAILED_CACHE_MS);
-    expect(await planWebSearch(store, now)).toEqual({ kind: "search" });
+    expect(await planWebSearch(store, now, roomy())).toMatchObject({ kind: "search" });
   });
 
   it("with no shared store, or one that can't be read, there is no search: each check would pay for its own", async () => {
@@ -160,8 +167,8 @@ describe("one search is shared by every check for a while", () => {
       set: () => Promise.reject(new Error("down")),
     };
 
-    expect(await planWebSearch(null, NOW)).toEqual({ kind: "off", why: "no shared store" });
-    expect(await planWebSearch(broken, NOW)).toEqual({ kind: "off", why: "store unreachable" });
+    expect(await planWebSearch(null, NOW, roomy())).toEqual({ kind: "off", why: "no shared store" });
+    expect(await planWebSearch(broken, NOW, roomy())).toEqual({ kind: "off", why: "store unreachable" });
     expect(await searchOnce(null)).toEqual({ state: "not_run", why: "no shared store", searchedAt: null, findings: [] });
     expect(meta.searchRequests).toHaveLength(0);
   });
@@ -171,14 +178,14 @@ describe("one search is shared by every check for a while", () => {
     const evidence = { state: "searched", searchedAt: NOW.toISOString(), findings: [] };
     await store.set(WEB_SEARCH_KEY, JSON.stringify({ expiresAt: NOW.getTime(), evidence }), 24 * 3_600_000);
 
-    expect(await planWebSearch(store, NOW)).toEqual({ kind: "search" });
+    expect(await planWebSearch(store, NOW, roomy())).toMatchObject({ kind: "search" });
   });
 
   it("a stored record that can't be read is searched again", async () => {
     const store = new MemoryKvStore();
     await store.set(WEB_SEARCH_KEY, "{not json", 60_000);
 
-    expect(await planWebSearch(store, NOW)).toEqual({ kind: "search" });
+    expect(await planWebSearch(store, NOW, roomy())).toMatchObject({ kind: "search" });
   });
 
   it("a search whose result can't be stored still answers this check", async () => {
@@ -212,5 +219,67 @@ describe("the shared search store from the environment: the budget's store and s
   ])("$name ⇒ $kind", ({ env, kind }) => {
     const store = searchStoreFromEnv(env);
     expect(store ? store.constructor.name : null).toBe(kind);
+  });
+});
+
+describe(`today's web search spend is capped at $${SEARCH_DAILY_BUDGET_USD}, apart from the daily budget`, () => {
+  const capped = (micros: number) => createBudget({ store: new MemoryBudgetStore(), budgetUsd: micros / 1e6, ipLimit: 1 });
+  /** The probe search's usage: 90,257 × 1.25 + 3,000 × 4.25 + 11 × 2,500 = 153,071.25, charged as 153,072 µ$. */
+  const PROBE_SEARCH_COST = 153_072;
+
+  it("keeps its ledger in the budget's store under lusong:", () => {
+    expect(SEARCH_BUDGET_PREFIX.startsWith("lusong:")).toBe(true);
+  });
+
+  it("past the cap, no search request is made and the check says why", async () => {
+    const meta = fakeMeta({ search: [] });
+    const store = new MemoryKvStore();
+
+    const plan = await planWebSearch(store, NOW, capped(SEARCH_RESERVE_MICROS - 1));
+    const web = await runWebSearch(plan, { store, now: NOW, deadline: Date.now() + 40_000, meter: new Meter() });
+
+    expect(plan).toEqual({ kind: "off", why: "today's web search budget is used up" });
+    expect(web).toEqual({ state: "not_run", why: "today's web search budget is used up", searchedAt: null, findings: [] });
+    expect(meta.searchRequests).toHaveLength(0);
+  });
+
+  it("a search settles at its metered cost, so the next fits only if that cost plus a reservation does", async () => {
+    for (const [room, searches] of [[0, 2], [-1, 1]] as const) {
+      const budget = capped(SEARCH_RESERVE_MICROS + PROBE_SEARCH_COST + room);
+      const meta = fakeMeta({ search: [searchReply(closures([])), searchReply(closures([]))] });
+      const meter = new Meter();
+      const first = await planWebSearch(new MemoryKvStore(), NOW, budget);
+      await runWebSearch(first, { store: null, now: NOW, deadline: Date.now() + 40_000, meter });
+      const second = await planWebSearch(new MemoryKvStore(), NOW, budget);
+      await runWebSearch(second, { store: null, now: NOW, deadline: Date.now() + 40_000, meter });
+
+      expect(meta.searchRequests).toHaveLength(searches);
+      expect(meter.usage().webSearchQueries).toBe(11 * searches);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("a search that never runs, because the check was refused, gives its reservation back", async () => {
+    const budget = capped(SEARCH_RESERVE_MICROS);
+
+    const plan = await planWebSearch(new MemoryKvStore(), NOW, budget);
+    expect(plan).toMatchObject({ kind: "search" });
+    await releaseWebSearch(plan);
+
+    expect(await planWebSearch(new MemoryKvStore(), NOW, budget)).toMatchObject({ kind: "search" });
+  });
+
+  it("a cached search touches no budget", async () => {
+    const store = new MemoryKvStore();
+    fakeMeta({ search: [searchReply(closures([]))] });
+    await runWebSearch(await planWebSearch(store, NOW, roomy()), { store, now: NOW, deadline: Date.now() + 40_000, meter: new Meter() });
+
+    expect(await planWebSearch(store, NOW, capped(1))).toMatchObject({ kind: "cached" });
+  });
+
+  it("a search budget that can't be reached means no search", async () => {
+    const unreachable = createBudget({ store: null, budgetUsd: 3, ipLimit: 1 });
+
+    expect(await planWebSearch(new MemoryKvStore(), NOW, unreachable)).toEqual({ kind: "off", why: "the web search budget can't be read" });
   });
 });

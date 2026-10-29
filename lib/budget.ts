@@ -130,22 +130,25 @@ export function createBudget(options: { store: BudgetStore | null; budgetUsd: nu
   };
 }
 
-const sharedMemoryStore = (() => {
-  let store: MemoryBudgetStore | null = null;
-  return () => (store ??= new MemoryBudgetStore());
-})();
+const sharedMemoryStores = new Map<string, MemoryBudgetStore>();
 
-function storeFromEnv(env: Record<string, string | undefined>): BudgetStore | null {
+/**
+ * The budget store from the environment, its keys under `prefix`; null when none is configured. A second ledger, such
+ * as the daily web search cap, uses the same database under its own prefix.
+ */
+export function budgetStoreFromEnv(env: Record<string, string | undefined>, prefix = "lusong"): BudgetStore | null {
   if (env.LUSONG_BUDGET_STORE === "memory") {
     const deployed = Boolean(env.VERCEL) || env.NODE_ENV === "production";
-    return deployed ? null : sharedMemoryStore();
+    if (deployed) return null;
+    if (!sharedMemoryStores.has(prefix)) sharedMemoryStores.set(prefix, new MemoryBudgetStore());
+    return sharedMemoryStores.get(prefix)!;
   }
   if (env.UPSTASH_REDIS_REST_URL && env.UPSTASH_REDIS_REST_TOKEN) {
-    return new UpstashBudgetStore(env.UPSTASH_REDIS_REST_URL, env.UPSTASH_REDIS_REST_TOKEN);
+    return new UpstashBudgetStore(env.UPSTASH_REDIS_REST_URL, env.UPSTASH_REDIS_REST_TOKEN, prefix);
   }
   /** The names Vercel's Upstash integration sets when a database is connected to the project. */
   if (env.KV_REST_API_URL && env.KV_REST_API_TOKEN) {
-    return new UpstashBudgetStore(env.KV_REST_API_URL, env.KV_REST_API_TOKEN);
+    return new UpstashBudgetStore(env.KV_REST_API_URL, env.KV_REST_API_TOKEN, prefix);
   }
   return null;
 }
@@ -155,7 +158,7 @@ export function budgetFromEnv(env: Record<string, string | undefined> = process.
   const budgetUsd = Number(env.DAILY_BUDGET_USD ?? "10");
   const ipLimit = Number(env.PER_IP_DAILY ?? "10");
   const readable = Number.isFinite(budgetUsd) && budgetUsd > 0 && Number.isInteger(ipLimit) && ipLimit > 0;
-  return createBudget({ store: readable ? storeFromEnv(env) : null, budgetUsd, ipLimit });
+  return createBudget({ store: readable ? budgetStoreFromEnv(env) : null, budgetUsd, ipLimit });
 }
 
 /** For local development and tests only: each server instance would keep its own ledger. */

@@ -21,11 +21,11 @@ import {
   SUMMARY_MAX_SENTENCES,
   type AroundResult, type InvestigationSources, type WebEvidence } from "./investigation";
 import { admit } from "./admission";
-import { createBudget, type BudgetStore } from "./budget";
+import { createBudget, MemoryBudgetStore, type BudgetStore } from "./budget";
 import { Meter } from "./meta";
 import { decodePolyline6 } from "./router";
 import { DEMO_TRIPS } from "./samples";
-import { MemoryKvStore, planWebSearch, runWebSearch, type WebFinding, type WebPlan } from "./web-search";
+import { MemoryKvStore, planWebSearch, runWebSearch, SEARCH_RESERVE_MICROS, WEB_SEARCH_CACHE_MS, type WebFinding, type WebPlan } from "./web-search";
 import { callsReply, fakeMeta, hangs, searchReply, textReply } from "../test/muse-derived";
 
 const read = (path: string) => readFileSync(path, "utf8");
@@ -659,10 +659,14 @@ describe("web findings: they can block a way, never clear one (criterion 3, 🔴
 describe("the investigation's reservation", () => {
   const cost = (u: { input: number; output: number; queries?: number }) => u.input * 1.25 + u.output * 4.25 + (u.queries ?? 0) * 2_500;
 
+  it("reuses one search for an hour", () => {
+    expect(WEB_SEARCH_CACHE_MS).toBe(60 * 60_000);
+  });
+
   it("is the worked figure: the loop's bound alone, plus the search's when this check will search", () => {
     // Worked by hand in the commit that set the caps; a change to any cap must change these on purpose.
-    expect(investigationReserveMicros({ kind: "cached", evidence: NO_WEB })).toBe(LOOP_RESERVE_LITERAL);
-    expect(investigationReserveMicros({ kind: "off", why: "no shared store" })).toBe(LOOP_RESERVE_LITERAL);
+    expect(investigationReserveMicros({ kind: "cached" })).toBe(LOOP_RESERVE_LITERAL);
+    expect(investigationReserveMicros({ kind: "off" })).toBe(LOOP_RESERVE_LITERAL);
     expect(investigationReserveMicros({ kind: "search" })).toBe(LOOP_RESERVE_LITERAL + SEARCH_RESERVE_LITERAL);
   });
 
@@ -707,17 +711,17 @@ describe("settling an investigation through the shared admission", () => {
   async function check(meta: Parameters<typeof fakeMeta>[0], plan?: WebPlan) {
     const { budget, charged } = recordingBudget();
     const kv = new MemoryKvStore();
-    const thePlan = plan ?? (await planWebSearch(kv, NOW));
+    const thePlan = plan ?? (await planWebSearch(kv, NOW, createBudget({ store: new MemoryBudgetStore(), budgetUsd: 100, ipLimit: 1 })));
     const reserved = investigationReserveMicros(thePlan);
     const admission = await admit(budget, { clientIp: "192.0.2.1", reserveMicros: reserved, now: NOW });
     if (!admission.ok) throw new Error("expected an admission");
-    fakeMeta(meta);
+    const { searchRequests } = fakeMeta(meta);
     const deadline = Date.now() + 40_000;
     const web = await runWebSearch(thePlan, { store: kv, now: NOW, deadline, meter: admission.run.meter });
     const { sources } = sourcesOf();
     const result = await investigate(inputOf(sources, { web, meter: admission.run.meter, deadline }));
     await admission.run.settle(result.ok);
-    return { reserved, charged: charged[0], result };
+    return { reserved, charged: charged[0], result, searchRequests };
   }
 
   const loop = [callsReply("resp_1", [{ name: "read_advisory", args: {} }]), textReply("resp_2", "Nobody has reported your way.")];
@@ -737,6 +741,19 @@ describe("settling an investigation through the shared admission", () => {
 
     expect(reserved).toBe(LOOP_RESERVE_LITERAL);
     expect(charged).toBe(4_477);
+  });
+
+  it("past today's search cap: no search request, only the loop reserved, and the answer from the rules", async () => {
+    const used = createBudget({ store: new MemoryBudgetStore(), budgetUsd: (SEARCH_RESERVE_MICROS - 1) / 1e6, ipLimit: 1 });
+    const plan = await planWebSearch(new MemoryKvStore(), NOW, used);
+    const { charged, reserved, result, searchRequests } = await check({ turns: loop }, plan);
+
+    expect(searchRequests).toHaveLength(0);
+    expect(reserved).toBe(LOOP_RESERVE_LITERAL);
+    expect(charged).toBe(4_477);
+    if (!result.ok) throw new Error("expected an answer");
+    expect(result.web).toEqual({ state: "not_run", why: "today's web search budget is used up", searchedAt: null, findings: [] });
+    expect(result.answer.answer).toBe("go");
   });
 
   it("retry: a call that was retried keeps the whole reservation", async () => {
