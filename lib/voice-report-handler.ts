@@ -11,15 +11,10 @@ import { inMetroCebu } from "./metro-cebu";
 import { reportStoreFromEnv, toReport, type ReportStore, type StoredVoiceReport } from "./report-store";
 import { durationWords, type Timing } from "./report-handler";
 import type { ValhallaGate } from "./router";
+import { voiceLanguageFrom } from "./voice-language";
 import { readVoiceClaim, VOICE_CLAIM_INPUT_TOKEN_BOUND, VOICE_CLAIM_MAX_COMPLETION_TOKENS, type VoiceClaim } from "./voice-claim";
 import { MAX_VOICE_FILE_BYTES, MAX_VOICE_MS, parseVoiceWav, wavFromPcm } from "./wav";
 
-/**
- * Bisaya (Cebuano) is not among Voice Transcribe's 25 languages, so it would go through Muse Spark's own audio input
- * instead. Out until the owner's 10 s clip probe passes (lance2k/lusong#9); no Spark audio call is written, and a
- * Bisaya note is refused before anything is spent.
- */
-export const BISAYA_VOICE_ENABLED = false;
 /** Voice Transcribe's language hint (dev.meta.ai/docs/speech-to-text: a list of language names). */
 const TRANSCRIBE_LANGUAGES = ["Tagalog", "English"] as const;
 
@@ -132,9 +127,9 @@ export function makeVoiceReportHandler(deps: {
     const at = pinFrom(form);
     if (!at) return fail(400, "Lusong needs your phone's location to place the report.");
     if (!inMetroCebu(at)) return fail(400, "Lusong takes reports from streets in Metro Cebu only.");
-    const language = form.get("language") ?? "tl-en";
-    if (language === "ceb" && !BISAYA_VOICE_ENABLED) return fail(400, "Lusong takes voice notes in Tagalog or English for now.");
-    if (language !== "tl-en") return fail(400, "Lusong takes voice notes in Tagalog or English for now.");
+    // Bisaya is refused here too while it is out: voiceLanguageFrom only knows the languages the page offers.
+    const language = voiceLanguageFrom(form.get("language"));
+    if (!language) return fail(400, "Pick Tagalog or English for your voice note, then record it.");
     const audio = form.get("audio");
     if (!(audio instanceof File)) return fail(400, "No voice note was attached.");
     if (audio.size > MAX_VOICE_FILE_BYTES) return fail(413, TOO_LONG);

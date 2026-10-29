@@ -24,12 +24,14 @@ function note(seconds = 5, pitch = 440): Uint8Array<ArrayBuffer> {
   return encodeWav(samples, VOICE_SAMPLE_RATE);
 }
 
-function post(opts: { audio?: Uint8Array; lat?: unknown; lon?: unknown; language?: string; ip?: string } = {}): Request {
+/** `language` is what the rider picked on the page; Tagalog unless a test says otherwise, and null sends none. */
+function post(opts: { audio?: Uint8Array; lat?: unknown; lon?: unknown; language?: string | null; ip?: string } = {}): Request {
   const form = new FormData();
   form.set("audio", new File([new Uint8Array(opts.audio ?? note())], "note.wav", { type: "audio/wav" }));
   form.set("lat", String(opts.lat ?? PIN.lat));
   form.set("lon", String(opts.lon ?? PIN.lon));
-  if (opts.language) form.set("language", opts.language);
+  const language = opts.language === undefined ? "tl" : opts.language;
+  if (language !== null) form.set("language", language);
   return new Request("http://localhost/api/report/voice", { method: "POST", body: form, headers: { "x-forwarded-for": opts.ip ?? "192.0.2.1" } });
 }
 
@@ -272,6 +274,23 @@ describe("refused before anything is spent: no reservation, no Meta call, nothin
     expect((await res.json()).error).toContain("Tagalog or English");
     expect(admits).toEqual([]);
     expect(calls).toEqual([]);
+  });
+
+  it.each([
+    ["no language picked", null],
+    ["an empty language", ""],
+    ["a language Lusong doesn't offer", "fr"],
+    ["the old two-language default", "tl-en"],
+  ])("%s: refused before admission, nothing stored", async (_why, language) => {
+    const calls = stubMeta();
+    const store = new MemoryReportStore();
+    const { budget, admits } = meteredBudget();
+    const res = await handlerWith({ store, budget })(post({ language }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain("Tagalog or English");
+    expect(admits).toEqual([]);
+    expect(calls).toEqual([]);
+    expect(store.dump()).toEqual({});
   });
 
   it("no report store: refused, nothing reserved", async () => {
