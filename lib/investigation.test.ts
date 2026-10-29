@@ -16,6 +16,7 @@ import {
 import { Meter } from "./meta";
 import { decodePolyline6 } from "./router";
 import { DEMO_TRIPS } from "./samples";
+import type { WebFinding } from "./web-search";
 import { callsReply, fakeMeta, hangs, textReply } from "../test/muse-derived";
 
 const read = (path: string) => readFileSync(path, "utf8");
@@ -469,5 +470,121 @@ describe("the investigation's cost is bounded", () => {
     const shown = JSON.parse(output);
     expect(shown.reports.length).toBeGreaterThan(0);
     expect(shown.reports.length + shown.omitted_reports).toBe(300);
+  });
+});
+
+describe("web findings: they can block a way, never clear one (criterion 3, 🔴P8)", () => {
+  const TODAY = "2026-10-30"; // NOW in PHT
+  const finding = (overrides: Partial<WebFinding> = {}): WebFinding => ({
+    id: "web-0",
+    place: "Banilad",
+    at: BLOCKED_SPOT,
+    url: "https://example.ph/banilad-closed",
+    sourceDate: TODAY,
+    summary: "Road closed by flooding.",
+    ...overrides,
+  });
+  const searched = (...findings: WebFinding[]) => ({ state: "searched" as const, searchedAt: minutesAgo(5).toISOString(), findings });
+  const quiet = () => fakeMeta({ turns: [textReply("resp_1", "Here is what Lusong found.")] });
+  const plainState = (result: Awaited<ReturnType<typeof investigate>>) => {
+    if (!result.ok) throw new Error("expected an answer");
+    return result.answer.routes[0];
+  };
+
+  it("a closure on your way dated today blocks it, and shows with its link", async () => {
+    const { sources } = sourcesOf();
+    const meta = fakeMeta({ turns: [callsReply("resp_1", [{ name: "reports_near_route", args: { route: "plain" } }]), textReply("resp_2", "A news page reports Banilad closed today.")] });
+
+    const result = await investigate(inputOf(sources, { web: searched(finding()) }));
+
+    expect(plainState(result)).toMatchObject({ state: "blocked", blockedBy: ["web-0"] });
+    if (!result.ok) throw new Error("expected an answer");
+    expect(result.answer.answer).toBe("go_another_way");
+    const told = JSON.parse((meta.requests[1].input as { output: string }[])[0].output);
+    expect(told.reports).toEqual([expect.objectContaining({ kind: "web", role: "block", url: "https://example.ph/banilad-closed" })]);
+  });
+
+  it("an undated closure on your way does not block it: it is neutral, so the way is unknown, never Go", async () => {
+    const { sources, asked } = sourcesOf();
+    quiet();
+
+    const result = await investigate(inputOf(sources, { web: searched(finding({ sourceDate: null })) }));
+
+    expect(plainState(result)).toMatchObject({ state: "unknown", blockedBy: [] });
+    expect(asked.routeAround).toEqual([]);
+  });
+
+  it("a closure dated yesterday does not block either", async () => {
+    const { sources } = sourcesOf();
+    quiet();
+
+    const result = await investigate(inputOf(sources, { web: searched(finding({ sourceDate: "2026-10-29" })) }));
+
+    expect(plainState(result)).toMatchObject({ state: "unknown", blockedBy: [] });
+  });
+
+  it("a closure with no location is shown and never given to the rules", async () => {
+    const { sources } = sourcesOf();
+    quiet();
+
+    const result = await investigate(inputOf(sources, { web: searched(finding({ at: null })) }));
+
+    if (!result.ok) throw new Error("expected an answer");
+    expect(result.web.findings).toHaveLength(1);
+    expect(result.reports).toEqual([]);
+    expect(result.answer.answer).toBe("go");
+  });
+
+  it("a web finding never makes a way passable, whatever its date or place", async () => {
+    const variants = [finding(), finding({ sourceDate: null }), finding({ sourceDate: "2026-10-29" }), finding({ at: null }), finding({ at: DETOUR[5] })];
+    const scenarios = [
+      { name: "blocked by a voice report", reports: [voice("v1", BLOCKED_SPOT, "not_passable")], advisory: NO_ADVISORY, around: () => ({ ok: false, reason: "no_route" }) as AroundResult },
+      { name: "unknown under rain", reports: [], advisory: ACTIVE_ADVISORY },
+      { name: "unknown with a neutral report", reports: [voice("v1", BLOCKED_SPOT, "passable")], advisory: NO_ADVISORY },
+    ];
+    const run = async (scenario: (typeof scenarios)[number], web: WebFinding | null) => {
+      const { sources } = sourcesOf({ reports: scenario.reports, around: scenario.around });
+      quiet();
+      const result = await investigate(inputOf(sources, { advisory: scenario.advisory, web: web ? searched(web) : NO_WEB }));
+      if (!result.ok) throw new Error("expected an answer");
+      return result.answer;
+    };
+    let checked = 0;
+    for (const scenario of scenarios) {
+      const without = await run(scenario, null);
+      expect(without.routes[0].state, scenario.name).not.toBe("passable");
+      for (const web of variants) {
+        const withIt = await run(scenario, web);
+        // A route judged both ways is passable with the finding only if it was without it.
+        for (const route of withIt.routes) {
+          const before = without.routes.find((r) => r.routeId === route.routeId);
+          if (before && before.state !== "passable") expect(route.state, `${scenario.name}, ${route.routeId}, ${JSON.stringify(web)}`).not.toBe("passable");
+        }
+        expect(withIt.answer).not.toBe("go");
+        checked++;
+      }
+    }
+    expect(checked).toBe(15);
+  });
+
+  it("the model is told what the web search found, places with no location included", async () => {
+    const { sources } = sourcesOf();
+    const meta = quiet();
+
+    await investigate(inputOf(sources, { web: searched(finding({ at: null, place: "Osmeña Blvd" })) }));
+
+    const summary = JSON.parse((meta.requests[0].input as string).split("This check: ")[1]);
+    expect(summary.web).toEqual({ state: "searched", closures: [{ place: "Osmeña Blvd", source_date: TODAY, placed_on_map: false }] });
+  });
+
+  it("a failed search is said so in the result and the rules answer from the rest", async () => {
+    const { sources } = sourcesOf();
+    quiet();
+
+    const result = await investigate(inputOf(sources, { web: { state: "failed", why: "search failed", searchedAt: NOW.toISOString(), findings: [] } }));
+
+    if (!result.ok) throw new Error("expected an answer");
+    expect(result.web).toMatchObject({ state: "failed" });
+    expect(result.answer.answer).toBe("go");
   });
 });

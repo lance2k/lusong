@@ -3,6 +3,9 @@ import { decideAnswer, type Answer, type AnswerKind, type Point, type Report, ty
 import { detourAvoids } from "./detour";
 import type { Meter } from "./meta";
 import { respond, type FunctionCall, type FunctionTool, type SparkReply } from "./spark-responses";
+import { inMetroCebu, type WebEvidence, type WebFinding } from "./web-search";
+
+export type { WebEvidence, WebFinding } from "./web-search";
 
 /**
  * Muse Spark's investigation of one commute check (lance2k/lusong#7, plan review 🔴P5/P6/P8).
@@ -22,21 +25,6 @@ export interface InvestigationSources {
   /** The trip routed around a box at each spot, joined to the trip's ends; a route that misses them is no_route. */
   routeAround(spots: readonly Point[]): Promise<AroundResult>;
 }
-
-export interface WebFinding {
-  id: string;
-  place: string;
-  /** Null when the model gave no location, or one outside Metro Cebu: shown, never placed on a route. */
-  at: Point | null;
-  url: string;
-  /** YYYY-MM-DD as the source dates it, or null when undated. */
-  sourceDate: string | null;
-  summary: string;
-}
-
-export type WebEvidence =
-  | { state: "searched"; searchedAt: string; findings: WebFinding[] }
-  | { state: "failed" | "not_run"; why: string; searchedAt: string | null; findings: WebFinding[] };
 
 export type Explanation =
   | { by: "muse_spark"; text: string }
@@ -126,23 +114,6 @@ const LAST_TURN_NOTE = "No more tool calls: write the explanation now.";
 /** At most this many ways around the model may ask for in one check: each is a request to the shared Valhalla server. */
 export const ROUTE_AROUND_CAP = 1;
 export const ROUTE_AROUND_MAX_SPOTS = 3;
-
-/**
- * Metro Cebu, drawn generously by hand from Danao in the north to Carcar in the south and Mactan in the east (not an
- * official boundary). A location the model gives outside it is not used.
- */
-export const METRO_CEBU = { south: 10.05, north: 10.6, west: 123.65, east: 124.1 } as const;
-
-export function inMetroCebu(p: { lat: unknown; lon: unknown }): p is Point {
-  return (
-    typeof p.lat === "number" &&
-    typeof p.lon === "number" &&
-    p.lat >= METRO_CEBU.south &&
-    p.lat <= METRO_CEBU.north &&
-    p.lon >= METRO_CEBU.west &&
-    p.lon <= METRO_CEBU.east
-  );
-}
 
 class SourceFailed extends Error {
   constructor(readonly source: "reports" | "routing") {
@@ -436,12 +407,16 @@ export async function investigate(input: InvestigationInput): Promise<Investigat
   };
 }
 
-function contextOf(evidence: Evidence) {
+function contextOf(evidence: Evidence, web: WebEvidence) {
   const answer = evidence.answer();
   return {
     answer: ANSWER_WORDS[answer.answer],
     reason: answer.reason,
     routes: answer.routes.map((r) => ({ id: r.routeId, state: r.state })),
+    web: {
+      state: web.state,
+      closures: web.findings.map((f) => ({ place: f.place, source_date: f.sourceDate, placed_on_map: f.at !== null })),
+    },
   };
 }
 
@@ -449,7 +424,7 @@ type Written = { text: string } | { unavailable: string };
 
 /** The model's final text, or why there is none. */
 async function explain(input: InvestigationInput, evidence: Evidence, runTool: (call: FunctionCall) => Promise<Record<string, unknown>>): Promise<Written> {
-  let turnInput: Parameters<typeof respond>[0]["input"] = `${INSTRUCTIONS}${CONTEXT_LEAD}${cappedJson(contextOf(evidence), CONTEXT_MAX_BYTES)}`;
+  let turnInput: Parameters<typeof respond>[0]["input"] = `${INSTRUCTIONS}${CONTEXT_LEAD}${cappedJson(contextOf(evidence, input.web), CONTEXT_MAX_BYTES)}`;
   let previousResponseId: string | undefined;
   let callsSoFar = 0;
   for (let turn = 1; turn <= LOOP_TURN_CAP; turn++) {
