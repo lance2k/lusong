@@ -1,5 +1,6 @@
 import type { Point } from "../lib/answer";
 import type { MapPin, TripMapProps } from "./map";
+import { PHOTO_ALT } from "./report-evidence";
 import type { TripDraft } from "./trip";
 
 interface Answered {
@@ -38,4 +39,17 @@ export function tripMapProps(input: { demo: { from: Point; to: Point } | null; d
     pins: result?.reports ?? [],
     frame,
   };
+}
+
+/** A report pin's popup: its blurred photo when one was published, then its lines of text. */
+export function pinPopup(pin: MapPin): { photo: { src: string; alt: string } | null; lines: string[] } {
+  const lines = [
+    pin.sample ? "Sample: a labelled test photo from elsewhere, pinned here for the demo." : null,
+    pin.place,
+    pin.age,
+    pin.depth && `Water ${pin.depth}.`,
+    pin.passability && `${pin.passability}.`,
+    pin.counts ? null : "Older than 3 hours: shown, not counted.",
+  ].filter((line): line is string => Boolean(line));
+  return { photo: pin.photoUrl ? { src: pin.photoUrl, alt: PHOTO_ALT } : null, lines };
 }

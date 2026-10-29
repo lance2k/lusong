@@ -5,7 +5,7 @@ import "leaflet/dist/leaflet.css";
 import "./map.css";
 import { useEffect, useRef } from "react";
 import type { Point } from "../lib/answer";
-import { METRO_CEBU_VIEW } from "./map-props";
+import { METRO_CEBU_VIEW, pinPopup } from "./map-props";
 
 export interface MapPin {
   id: string;
@@ -17,6 +17,8 @@ export interface MapPin {
   passability: string | null;
   counts: boolean;
   role: "clear" | "block" | "neutral";
+  /** The blurred copy of the report's photo, when one was published. */
+  photoUrl?: string | null;
 }
 
 export interface TripMapProps {
@@ -46,11 +48,20 @@ const DETOUR_STYLE: L.PolylineOptions = { color: "#059669", weight: 5, opacity: 
 
 const latLng = (p: Point): L.LatLngTuple => [p.lat, p.lon];
 
-/** Text nodes, not HTML strings: a report's place name comes from a third-party lookup. */
-function lines(...texts: (string | null)[]): HTMLElement {
+/** Text nodes and attributes, not HTML strings: a report's place name comes from a third-party lookup. */
+function popupElement(pin: MapPin): HTMLElement {
+  const { lines, photo } = pinPopup(pin);
   const box = document.createElement("div");
-  for (const text of texts) {
-    if (!text) continue;
+  if (photo) {
+    const img = document.createElement("img");
+    img.src = photo.src;
+    img.alt = photo.alt;
+    img.loading = "lazy";
+    img.referrerPolicy = "no-referrer";
+    img.style.cssText = "display:block;width:100%;max-height:160px;object-fit:cover;border-radius:6px;margin-bottom:4px";
+    box.append(img);
+  }
+  for (const text of lines) {
     const p = document.createElement("p");
     p.textContent = text;
     box.append(p);
@@ -70,14 +81,7 @@ function pinLayer(pin: MapPin): L.Layer {
   });
   marker.bindTooltip(`${pin.sample ? "Sample · " : ""}${pin.age}`, { permanent: true, direction: "right", offset: [10, 0] });
   marker.bindPopup(
-    lines(
-      pin.sample ? "Sample: a labelled test photo from elsewhere, pinned here for the demo." : null,
-      pin.place,
-      pin.age,
-      pin.depth && `Water ${pin.depth}.`,
-      pin.passability && `${pin.passability}.`,
-      pin.counts ? null : "Older than 3 hours: shown, not counted.",
-    ),
+    popupElement(pin),
     // Leaflet's controls sit above its popups, so the popup is panned clear of the 44 px zoom buttons.
     { maxWidth: 240, autoPanPaddingTopLeft: [64, 12] },
   );
