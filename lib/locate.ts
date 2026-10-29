@@ -16,6 +16,18 @@ interface LocateEdge {
 
 const NOWHERE: Spot = { wayId: null, place: null };
 
+/** The gate's answer, or "late" once the deadline (epoch ms) passes first. */
+async function beforeDeadline<T>(work: Promise<T>, deadline: number): Promise<T | "late"> {
+  if (deadline === Infinity) return work;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<"late">((resolve) => (timer = setTimeout(() => resolve("late"), Math.max(0, deadline - Date.now()))));
+  try {
+    return await Promise.race([work, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** The first name of each way at the nearest distance: one street, or a corner's two. */
 function placeOf(edges: LocateEdge[]): string | null {
   const named = edges.filter((e) => typeof e.distance === "number" && typeof e.edge_info?.way_id === "number");
@@ -33,14 +45,21 @@ function placeOf(edges: LocateEdge[]): string | null {
  * One /locate request through the shared Valhalla gate, never retried: a report is stored whether or not its road is
  * found, and a missing way id only means it can never retire a blocker.
  */
-export async function locateSpot(at: Point, deps: { fetch: typeof fetch; gate: ValhallaGate }): Promise<Spot> {
-  if ((await deps.gate.acquire()) !== "ok") return NOWHERE;
+export async function locateSpot(
+  at: Point,
+  deps: { fetch: typeof fetch; gate: ValhallaGate },
+  opts: { deadline?: number } = {},
+): Promise<Spot> {
+  const deadline = opts.deadline ?? Infinity;
+  if ((await beforeDeadline(deps.gate.acquire(), deadline)) !== "ok") return NOWHERE;
+  const timeoutMs = Math.min(REQUEST_TIMEOUT_MS, deadline - Date.now());
+  if (timeoutMs <= 0) return NOWHERE;
   try {
     const res = await deps.fetch(`${VALHALLA_URL}/locate`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT, "X-Client-Id": VALHALLA_CLIENT_ID },
       body: JSON.stringify({ locations: [{ lat: at.lat, lon: at.lon }], costing: "motorcycle", verbose: true }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) return NOWHERE;
     const body = (await res.json().catch(() => null)) as { edges?: LocateEdge[] | null }[] | null;

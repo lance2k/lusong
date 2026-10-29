@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { samEmpty, samFixture, serverError, stubMeta } from "../test/meta-stub";
 import { withExifTime } from "./exif";
-import { createBudget, MemoryBudgetStore, RESERVE_MICROS as R } from "./budget";
+import { createBudget, MemoryBudgetStore, RESERVE_MICROS as R, type Budget } from "./budget";
 import { makeReportHandler } from "./report-handler";
 import { MemoryReportStore, UpstashReportStore, type ReportStore } from "./report-store";
 import type { ValhallaGate } from "./router";
@@ -82,12 +82,40 @@ function locate(reply: () => Response | Promise<Response> = () => Response.json(
 }
 const open: ValhallaGate = { acquire: async () => "ok" };
 
-function handlerWith(opts: { store?: ReportStore | null; ipLimit?: number; budgetMicros?: number; valhalla?: ReturnType<typeof locate>; now?: () => Date } = {}) {
+function handlerWith(
+  opts: {
+    store?: ReportStore | null;
+    ipLimit?: number;
+    budgetMicros?: number;
+    valhalla?: ReturnType<typeof locate>;
+    now?: () => Date;
+    gate?: ValhallaGate;
+    admitDelayMs?: number;
+    timing?: Parameters<typeof makeReportHandler>[0]["timing"];
+  } = {},
+) {
   const budget = createBudget({ store: new MemoryBudgetStore(), budgetUsd: (opts.budgetMicros ?? 10 * R) / 1e6, ipLimit: opts.ipLimit ?? 10 });
+  const slowBudget: Budget = {
+    admit: async (...args) => (await sleep(opts.admitDelayMs ?? 0), budget.admit(...args)),
+    settle: (...args) => budget.settle(...args),
+  };
   const store = opts.store === undefined ? new MemoryReportStore() : opts.store;
   const valhalla = opts.valhalla ?? locate();
-  return makeReportHandler({ budget: () => budget, store: () => store, gate: () => open, fetch: valhalla.fetch, now: opts.now ?? (() => NOW) });
+  return makeReportHandler({
+    budget: () => slowBudget,
+    store: () => store,
+    gate: () => opts.gate ?? open,
+    fetch: valhalla.fetch,
+    now: opts.now ?? (() => NOW),
+    timing: opts.timing,
+  });
 }
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** A reply that never comes: the call ends only when its own timeout aborts it. */
+const hangs = (signal?: AbortSignal | null) =>
+  new Promise<Response>((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason)));
 
 beforeEach(() => {
   process.env.MODEL_API_KEY = "test-key";
@@ -312,5 +340,74 @@ describe("refused before anything is paid for", () => {
     };
     expect((await handlerWith({ store: broken })(post("192.0.2.1"))).status).toBe(503);
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("one deadline for the whole request (route maxDuration 120 s)", () => {
+  /** Scaled down from 110 s, 12 s and 3 s so the test runs in seconds; the handler logic is the same. */
+  const timing = { budgetMs: 3_000, finishReserveMs: 600, locateMinMs: 800 };
+
+  /** A store whose claim is slow, as an Upstash call near its 5 s timeout would be. */
+  function slowClaimStore(delayMs: number) {
+    const store = new MemoryReportStore();
+    const claim = store.claimPhoto.bind(store);
+    store.claimPhoto = async (hash) => (await sleep(delayMs), claim(hash));
+    return store;
+  }
+
+  it("slow claim and admission, then a Meta call that never answers: answered within the budget, the claim freed", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => hangs(init.signal)));
+    const store = slowClaimStore(500);
+    const started = Date.now();
+    const res = await handlerWith({ store, admitDelayMs: 500, timing })(post("192.0.2.1"));
+    expect(res.status).toBe(502);
+    expect(Date.now() - started).toBeLessThan(timing.budgetMs);
+    expect(store.dump()).toEqual({});
+  }, 10_000);
+
+  it("a read that leaves too little time for /locate: stored without a way id, no /locate, answered within the budget", async () => {
+    const calls = stubMeta({ sam: { "flood water": async () => (await sleep(1_900), samEmpty()()) } });
+    const store = new MemoryReportStore();
+    const valhalla = locate();
+    const started = Date.now();
+    const res = await handlerWith({ store, valhalla, timing })(post("192.0.2.1"));
+    expect(res.status).toBe(200);
+    expect(Date.now() - started).toBeLessThan(timing.budgetMs);
+    expect(calls).toHaveLength(4);
+    expect(valhalla.requests).toHaveLength(0);
+    expect(await store.recent(NOW)).toEqual([expect.objectContaining({ wayId: null, verdict: { kind: "no_flood" } })]);
+  }, 10_000);
+
+  it("a Valhalla gate that never grants is given up in time: stored and answered within the budget", async () => {
+    stubMeta();
+    const store = new MemoryReportStore();
+    const started = Date.now();
+    const never: ValhallaGate = { acquire: () => new Promise(() => {}) };
+    const res = await handlerWith({ store, gate: never, timing })(post("192.0.2.1"));
+    expect(res.status).toBe(200);
+    expect(Date.now() - started).toBeLessThan(timing.budgetMs);
+    expect(await store.recent(NOW)).toEqual([expect.objectContaining({ wayId: null })]);
+  }, 20_000);
+
+  it("a /locate that never answers is cut off in time: stored and answered within the budget", async () => {
+    stubMeta();
+    const store = new MemoryReportStore();
+    const valhalla = { requests: [] as string[], fetch: (async (url: string, init?: RequestInit) => (valhalla.requests.push(String(url)), hangs(init?.signal))) as unknown as typeof fetch };
+    const started = Date.now();
+    const res = await handlerWith({ store, valhalla, timing })(post("192.0.2.1"));
+    expect(res.status).toBe(200);
+    expect(Date.now() - started).toBeLessThan(timing.budgetMs);
+    expect(valhalla.requests).toHaveLength(1);
+    expect(await store.recent(NOW)).toEqual([expect.objectContaining({ wayId: null })]);
+  }, 20_000);
+
+  it("the real budget leaves the route's 120 s limit room past the reserve for saving and settling", async () => {
+    const { REQUEST_BUDGET_MS, FINISH_RESERVE_MS } = await import("./report-handler");
+    // The route module imports through the "@/" alias, which vitest doesn't resolve, so its limit is read from source.
+    const maxDuration = Number(/export const maxDuration = (\d+);/.exec(readFileSync("app/api/report/route.ts", "utf8"))?.[1]);
+    expect(maxDuration).toBe(120);
+    expect(REQUEST_BUDGET_MS).toBeLessThan(maxDuration * 1_000);
+    // Save and settle are each one Upstash call bounded at 5 s.
+    expect(FINISH_RESERVE_MS).toBeGreaterThanOrEqual(2 * 5_000);
   });
 });

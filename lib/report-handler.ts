@@ -16,6 +16,19 @@ const MAX_BYTES = 3 * 1024 * 1024;
 /** The page shrinks every photo to this; the budget's input-token bound was measured at this size. */
 const MAX_SIDE = 1600;
 
+/** One deadline for the whole request, under the route's 120 s maxDuration, so a paid read is always saved and answered. */
+export const REQUEST_BUDGET_MS = 110_000;
+/** Kept back from every step for saving the report and settling the reservation, each one Upstash call bounded at 5 s. */
+export const FINISH_RESERVE_MS = 12_000;
+/** Below this much time to spare, /locate is skipped and the report is stored without a way id. */
+export const LOCATE_MIN_MS = 3_000;
+
+export interface Timing {
+  budgetMs: number;
+  finishReserveMs: number;
+  locateMinMs: number;
+}
+
 /** Lusong's reports are for Philippine streets; a pin outside this box is refused before anything is paid for. */
 const PHILIPPINES = { south: 4.5, north: 21.5, west: 116, east: 127 };
 
@@ -80,7 +93,9 @@ export function makeReportHandler(deps: {
   store?: () => ReportStore | null;
   fetch?: typeof fetch;
   now?: () => Date;
+  timing?: Timing;
 }) {
+  const timing = deps.timing ?? { budgetMs: REQUEST_BUDGET_MS, finishReserveMs: FINISH_RESERVE_MS, locateMinMs: LOCATE_MIN_MS };
   const budget = deps.budget ?? budgetFromEnv;
   const reportStore = deps.store ?? reportStoreFromEnv;
   const doFetch: typeof fetch = (...args) => (deps.fetch ?? fetch)(...args);
@@ -88,6 +103,8 @@ export function makeReportHandler(deps: {
 
   return async function POST(request: Request): Promise<Response> {
     const receivedAt = now();
+    // Epoch ms, like lib/meta.ts's deadlines; everything after the read must still fit before `finishBy`.
+    const finishBy = Date.now() + timing.budgetMs - timing.finishReserveMs;
     let form: FormData;
     try {
       form = await request.formData();
@@ -143,7 +160,7 @@ export function makeReportHandler(deps: {
       const imageDataUrl = `data:image/jpeg;base64,${Buffer.from(jpeg.bytes).toString("base64")}`;
       let verdict: StoredReport["verdict"];
       try {
-        verdict = (await checkPhoto(imageDataUrl, { width: jpeg.width, height: jpeg.height }, run.meter)).verdict;
+        verdict = (await checkPhoto(imageDataUrl, { width: jpeg.width, height: jpeg.height }, run.meter, { deadline: finishBy })).verdict;
       } catch (err) {
         console.error("report read failed:", err instanceof MetaApiError ? err.message : err);
         await release();
@@ -151,7 +168,10 @@ export function makeReportHandler(deps: {
       }
       succeeded = true;
 
-      const spot = await locateSpot(at, { fetch: doFetch, gate: deps.gate() });
+      const spot =
+        finishBy - Date.now() >= timing.locateMinMs
+          ? await locateSpot(at, { fetch: doFetch, gate: deps.gate() }, { deadline: finishBy })
+          : { wayId: null, place: null };
       const report: StoredReport = {
         id: randomUUID(),
         kind: "photo",
