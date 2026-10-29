@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<alert xmlns="urn:oasis:names:tc:emergency:cap:1.2"><identifier>f1ef7728-3f16-4522-843f-db5d951a5baa</identifier><sender>PAGASA-DOST</sender><sent>2026-10-25T05:22:00+08:00</sent><status>Actual</status><msgType>Update</msgType><scope>Public</scope><references>PAGASA-DOST,bd6359e0-9d35-4f44-a6bf-4749653df92d,2026-10-24T17:13:21+08:00</references><info><category>Met</category><event>General Flood Advisory (Final)</event><responseType>AllClear</responseType><urgency>Past</urgency><severity>Minor</severity><certainty>Unlikely</certainty><expires>2026-10-25T17:22:00+08:00</expires><senderName>PAGASA-DOST</senderName><headline>General Flood Advisory (Final)</headline><description>Under present weather conditions, Intertropical Convergence Zone (ITCZ) affecting Palawan, Visayas and Mindanao.  
+The 12-hour rainfall forecast is light rains and thunderstorms.  
+WATERCOURSES NO LONGER TO BE AFFECTED :  
+
+ + **Batanes** - All rivers and its tributaries  
+</description><instruction>With this development and unless significant rain occurs, this is the final general flood advisory for this event.</instruction><web>http://www.pagasa.dost.gov.ph/index.php/26-hydromet/1582-flood-forecast-terms-and-symbols</web><contact>PAGASA-DOST</contact><parameter><valueName>layer:Google:Region:0.1</valueName><value>Region 2 (Cagayan Valley)</value></parameter><area><areaDesc>Batanes</areaDesc><polygon>20.482878224317,122.02360572053 20.452643576969,122.02629775526 20.408589155683,121.96347148931 20.366095173456,121.97386873411 20.348038630495,121.91849970251 20.404843493649,121.92863582449 20.488478973437,122.00314244964 20.482878224317,122.02360572053</polygon><geocode><valueName>SAME</valueName><value>020900000</value></geocode></area></info><Signature xmlns="http://www.w3.org/2000/09/xmldsig#"><SignedInfo><CanonicalizationMethod Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"/><SignatureMethod Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1"/><Reference URI=""><Transforms><Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/></Transforms><DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"/><DigestValue>sAWkx2xjTnsgHGE8dbFbvhvhG9k=</DigestValue></Reference></SignedInfo><SignatureValue>byenv+6Tu0+VPAPayqyYUG/rPbeF0yRWdmJsaZ+olppsfXMrvKgMCmrS/AmqUjkO
+e9gMMZn9iEFNvVmg7zzPn6NB0I0JnQoyHxaLEzyKtg8vM0WkP7fkLrKvpinZ6zaQ
+lcQ+jzSfodY/HY6E2UgICASQzOcXenbrkC4EtlOm3OljsoRdBSDmv8jBmtQYmhpr
+s6sgab37bxKMPS63XWdZxRR4srs12Oin9/OJOsAxcnB2/vxkjPhnSMh4GquoF1PC
+wXeic8M3soGT4yRZCt7fXzoQy0V75hqhY90kcJCo8uh0g2TOrv950evzF1QIvNNd
+ym4pcc+MDEkhhGD0NZpqTq5PTpLmqt2rIVJnsgv5RTDB3FiUvDTLJ5sWJUtjDutN
+9D8XO9r6O16oTBx+WzcXFmVWYQ1zPZ9xRMbx0RRCzxu0F7Hv+DZ70JcEHDHbet0A
+5TxniwzH5cSiciRIuPO2LLSfP168jG+Y9csTzMLZXDTaKRJ1Mbo3kBwyvQpCySdC
+fYiwI6WbbVuElTwxH7wwYCa5FFzSevvdbQrAIcaxAx2lStgyyv3Vy6iizcDmNXcl
+4vRX/VXPHecyG+Rbh38Fvw5x6NoY2kU9Zxn0ELyznMoUYgqLZFKdpPeWORYzw/Jj
+P3ymYQ4+NwkGP5d6EHwEth7Ss/Ho0EAHPVNC97/9krw=</SignatureValue><KeyInfo><KeyValue>
+<RSAKeyValue>
+<Modulus>
+1pm7X28TTIESx7uWklHbVIlO0Y+fUBZ7LynhaRQ9w1rMsMhF0dNEvUdYBKVF1xPz
+SGD0IrbU6Uemw8Xb/sOy263ZOkSxqWIh3UEluOW7s6J3Hgv8UMDZkWDgj3+m2qWT
+UTgbNO3drHGvlRBg6liD15iNusSdSMw/kqmHxe/9tnStpsHo/u57rsH3/ROTvuz2
+yHD2t7I7zo0Kv7mfAAHodU4QoL8/7c3u29szxRu13M4SRkiLKwbgrwlsMCvXhkys
+oEKlX8/SnXDL8iSPExAiP7xVpfbmh8TNiGvtbjH7Ro2EYjUsEcv9qC7G5jLu7Klt
+8TkTobHqES26/F5/u42Ra3rIDunTxczbIHF1qoumAzdsJmFCBc9D1IKTTWKR3D2J
+eAZfpuvMeOEcpRxBayYf2jOBx8iD8gag5cIZWl2/62IfUxTk92A00M5QrzTocNkg
+0U5K1gN5WmhObUN/3fa/Ob5uriELGzRdzXJ+3QE8FpPmSPJZFA//UWmpJqsboO7p
+AhbB8efPIV42nxjwQEbJdkxUOlfAyPMRGcp4RhmaAnX7KmB33j4klYeNktH+OeV8
+S9q/nMJoA/d76K1hCbo9PJTa/UxwZJYh0LEs1YnHP/5wgydZJcyNjmcu7P5ur90L
+qyr2FB0fZYAmWi6SEaA0F7yi2Y0uqV4FP7dfcbfOf+E=
+</Modulus>
+<Exponent>
+AQAB
+</Exponent>
+</RSAKeyValue>
+</KeyValue></KeyInfo></Signature></alert>

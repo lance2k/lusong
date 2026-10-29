@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<alert xmlns="urn:oasis:names:tc:emergency:cap:1.2"><identifier>b83d7200-67eb-44a1-9d73-da74b3634b9f</identifier><sender>PAGASA-DOST</sender><sent>2026-10-26T05:20:59+08:00</sent><status>Actual</status><msgType>Update</msgType><scope>Public</scope><references>PAGASA-DOST,f56beee1-6dbb-4341-a8e0-069ccc29d6a0,2026-10-25T17:25:57+08:00</references><info><category>Met</category><event>General Flood Advisory (Final)</event><responseType>AllClear</responseType><urgency>Past</urgency><severity>Minor</severity><certainty>Unlikely</certainty><expires>2026-10-26T17:20:59+08:00</expires><senderName>PAGASA-DOST</senderName><headline>General Flood Advisory (Final)</headline><description>Under present weather conditions, Intertropical Convergence Zone (ITCZ) is affecting the western section of Mindanao.  
+The 12-hour rainfall forecast is Isolated rainshowers or thunderstorms.  
+WATERCOURSES NO LONGER TO BE AFFECTED :  
+
+ + **Capiz** - Rivers and its tributaries particularly Panay, Mambusao, Panay Malinao, Alingon and Balantian.  
+ + **Iloilo** - Rivers and its tributaries particularly Pinantan, Barotac, Akalaygan, Jalaud, Jalano, Jagdong, Jalaur, Lamunan, Jaro-Aganan, Sibalom and Guimbal.  
+ + **Guimaras** - All rivers and its tributaries  
+ + **Antique** - Rivers and its tributaries particularly Sibalom, Ipayo, Cagaranan, Palawan, Cairauan, Dalanas and Tibiao.  
+</description><instruction>With this development and unless significant rain occurs, this is the final general flood advisory for this event.</instruction><web>http://www.pagasa.dost.gov.ph/index.php/26-hydromet/1582-flood-forecast-terms-and-symbols</web><contact>PAGASA-DOST</contact><parameter><valueName>layer:Google:Region:0.1</valueName><value>Region 6 (Western Visayas)</value></parameter><area><areaDesc>Capiz</areaDesc><polygon>11.534762481425,122.69846483218 11.577387890587,122.72847507143 11.430607602608,122.88025263177 11.542088357125,123.09590281238 11.2029398871,122.86903879862 11.241610175331,122.58054670519 11.241763776988,122.57983704918 11.242308442539,122.57929861127 11.181355949966,122.49981785513 11.225374199121,122.32318437573 11.151770473734,122.25367494555 11.316337330011,122.18366740652 11.332471340081,122.32195643705 11.452741638066,122.37494795755 11.546767908654,122.57702659198 11.534762481425,122.69846483218</polygon><geocode><valueName>SAME</valueName><value>061900000</value></geocode></area><area><areaDesc>Iloilo</areaDesc><polygon>10.462590429144,122.03194684952 10.63318157786,122.03598404728 10.759966107195,122.18339322447 11.056937753405,122.33849345713 11.151770473734,122.25367494555 11.225374199121,122.32318437573 11.181355949966,122.49981785513 11.242308442539,122.57929861127 11.241763776988,122.57983704918 11.241610175331,122.58054670519 11.2029398871,122.86903879862 11.542088357125,123.09590281238 11.376159255927,123.15084627803 11.078610742135,122.99840566171 10.94250878343,122.76800765078 10.686693359215,122.58060724636 10.637983293674,122.21046567114 10.462590429144,122.03194684952</polygon><geocode><valueName>SAME</valueName><value>063000000</value></geocode></area><area><areaDesc>Guimaras</areaDesc><polygon>10.752122600303,122.6615715545 10.612442267458,122.7248574081 10.471584249065,122.66599826878 10.580902029032,122.51249568919 10.752122600303,122.6615715545</polygon><geocode><valueName>SAME</valueName><value>067900000</value></geocode></area><area><areaDesc>Antique</areaDesc><polygon>11.316337330011,122.18366740652 11.151770473734,122.25367494555 11.056937753405,122.33849345713 10.759966107195,122.18339322447 10.63318157786,122.03598404728 10.462590429144,122.03194684952 10.759050722088,121.92407195607 11.002028098646,122.04282572994 11.291239864778,122.02932229411 11.707849545063,122.09929058406 11.762626818869,121.85402017906 11.817816773302,121.94605797039 11.748624532192,122.14402247521 11.476460343554,122.12718179451 11.316337330011,122.18366740652</polygon><polygon>11.850185351326,121.32432514053 11.853836837436,121.31983435569 11.854493746617,121.3196731858 11.856886244655,121.31665006174 11.857529959859,121.31594901409 11.858602740552,121.31536221731 11.858765197048,121.31589024279 11.857814626794,121.31821424697 11.857278328874,121.31904799339 11.856625383321,121.31969656593 11.856615937266,121.31970499377 11.85618369267,121.3197648058 11.853844906144,121.32130370687 11.853189246366,121.3224971282 11.851855760865,121.32462845231 11.850657934215,121.32507236106 11.850185351326,121.32432514053</polygon><geocode><valueName>SAME</valueName><value>060600000</value></geocode></area></info><Signature xmlns="http://www.w3.org/2000/09/xmldsig#"><SignedInfo><CanonicalizationMethod Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"/><SignatureMethod Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1"/><Reference URI=""><Transforms><Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/></Transforms><DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"/><DigestValue>HGpYcuci9kd5QB42CfCgRZxxKlk=</DigestValue></Reference></SignedInfo><SignatureValue>DMgeEFOb6nA+LaUBcsWEY9eWA4+suBuMMI6AC5vIjRkPTAYX/UabfwafexHK/86F
+tk59PGKcf5XqLa79u8bxaQMBZEX8V0BuJ8Tay7AL+ZkJz9PWyzG3m3GMFGuwJc4P
+eaktAjY7BGGFDm3cpY0DjIBDS0D7MnXc8JBG3VaUG/vAlfFJCQ0HzEJ3c0w98vsB
+C/Im/j3x5PCgpgFly39G0nI7nkuYBQz9iflu5CQeoLCJ7/ArzkWe5LVBhe1LugjD
+naFsDRcNRD3mnjfum/MCUN5UOe0EozoQ+OxH5Ja5J5sb/kXhPSXmwRKSEWnDTZbU
+fxlY2EtiyHdTkOlvXjkckfPKc9+gJbYQhCdiTuHRp+na4MdBAVsFZc59AF6YwQZH
+6yMl7CQn66bVt5wQZFcAIzsjrA+6EUud4BFNNX9vNqLQJgBPwyaGI4w29F3uQlOW
++Cg3IEaTae+q4Gmw25MflV+Lq8ZIInvH0t6E7cJqmHclUWB2A9IULXzAWFfhZgR9
+48O+o6MFuhf7JyOsNg2MlATtlcX4cJdeUQgzqBruxSLgVbBao5wy3YtuKsh4XZVI
+9qyDs2iDQTlLhYxYktfDLXJ+TgpIeNs6ijlVQjhVUMtXrIGGAcydQMmDCyZon8wj
+wouuMNzKQkA8ilfo2rx7zg9CV0PXNy7abIozxD+Ozbw=</SignatureValue><KeyInfo><KeyValue>
+<RSAKeyValue>
+<Modulus>
+1pm7X28TTIESx7uWklHbVIlO0Y+fUBZ7LynhaRQ9w1rMsMhF0dNEvUdYBKVF1xPz
+SGD0IrbU6Uemw8Xb/sOy263ZOkSxqWIh3UEluOW7s6J3Hgv8UMDZkWDgj3+m2qWT
+UTgbNO3drHGvlRBg6liD15iNusSdSMw/kqmHxe/9tnStpsHo/u57rsH3/ROTvuz2
+yHD2t7I7zo0Kv7mfAAHodU4QoL8/7c3u29szxRu13M4SRkiLKwbgrwlsMCvXhkys
+oEKlX8/SnXDL8iSPExAiP7xVpfbmh8TNiGvtbjH7Ro2EYjUsEcv9qC7G5jLu7Klt
+8TkTobHqES26/F5/u42Ra3rIDunTxczbIHF1qoumAzdsJmFCBc9D1IKTTWKR3D2J
+eAZfpuvMeOEcpRxBayYf2jOBx8iD8gag5cIZWl2/62IfUxTk92A00M5QrzTocNkg
+0U5K1gN5WmhObUN/3fa/Ob5uriELGzRdzXJ+3QE8FpPmSPJZFA//UWmpJqsboO7p
+AhbB8efPIV42nxjwQEbJdkxUOlfAyPMRGcp4RhmaAnX7KmB33j4klYeNktH+OeV8
+S9q/nMJoA/d76K1hCbo9PJTa/UxwZJYh0LEs1YnHP/5wgydZJcyNjmcu7P5ur90L
+qyr2FB0fZYAmWi6SEaA0F7yi2Y0uqV4FP7dfcbfOf+E=
+</Modulus>
+<Exponent>
+AQAB
+</Exponent>
+</RSAKeyValue>
+</KeyValue></KeyInfo></Signature></alert>

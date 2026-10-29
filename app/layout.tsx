@@ -13,8 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Lusong: how deep is the flood?",
-  description: "Send a photo of a flooded street and get the MMDA flood level and whether cars can pass.",
+  title: "Lusong: ride now, or wait?",
+  description:
+    "A commute check for Cebu motorbike riders from PAGASA's flood advisory and reports along the route, and a depth check for one photo of a flooded street.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

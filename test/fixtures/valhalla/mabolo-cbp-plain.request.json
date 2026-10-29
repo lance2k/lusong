@@ -1,0 +1,16 @@
+{
+ "locations": [
+  {
+   "lat": 10.3143,
+   "lon": 123.9147
+  },
+  {
+   "lat": 10.3162,
+   "lon": 123.9059
+  }
+ ],
+ "costing": "motorcycle",
+ "directions_options": {
+  "units": "kilometers"
+ }
+}
