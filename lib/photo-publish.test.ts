@@ -14,6 +14,8 @@ const done = (text: string) => ({ ok: true, text, status: "completed" }) as cons
 const personText = samText("quiapo-1__person");
 /** A recorded reply with 12 masks, standing in for plates; the fake blur below never looks at the pixels. */
 const twelveMasks = samText("shah-alam-2021__car");
+/** A plate reply whose one object has a canonical 2×2 one_bit mask with no pixel set: it parses with no diagnostic. */
+const emptyMaskPlate = "<0f>0<|box;x1=100;y1=200;x2=101;y2=201;w=1280;h=960|><|mask;x=0;y=0;data=2,2,!!!!!&!!!!!|>\n";
 /** The recorded person reply cut straight after its first complete object, before the comma that starts the next. */
 const personsCutBetweenObjects = personText.slice(0, personText.indexOf("|>,") + 2);
 const photo = new Uint8Array(readFileSync("test/fixtures/photos/quiapo-1-exif.jpg"));
@@ -87,6 +89,15 @@ describe("publishPhoto", () => {
     const store = new MemoryBlobStore();
     const given = input({ blur, store, ...overrides } as Partial<PhotoInput>);
     expect(await publishPhoto(given)).toEqual({ published: false, reason });
+    expect(seen).toHaveLength(0);
+    expect(store.size).toBe(0);
+  });
+
+  it("shows no photo when a plate SAM found has a mask with no pixel set, and neither blurs nor stores", async () => {
+    expect(parseSamText(emptyMaskPlate)).toHaveLength(1);
+    const { blur, seen } = fakeBlur();
+    const store = new MemoryBlobStore();
+    expect(await publishPhoto(input({ blur, store, plates: done(emptyMaskPlate) }))).toEqual({ published: false, reason: "unreadable_masks" });
     expect(seen).toHaveLength(0);
     expect(store.size).toBe(0);
   });

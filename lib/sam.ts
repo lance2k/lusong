@@ -88,13 +88,14 @@ export function placeRaster(mask: SegmentationMaskRecord): PlacedRaster {
 
 export type StrictReading =
   | { ok: true; objects: (SamObject & { placed: PlacedRaster })[] }
-  | { ok: false; problem: "not_completed" | "unterminated" | "parse_error" | "stray_text" | "unpaired" };
+  | { ok: false; problem: "not_completed" | "unterminated" | "parse_error" | "stray_text" | "unpaired" | "empty_mask" };
 
 /**
  * Reads a SAM reply only when nothing in it can hide an object: Meta says the response completed, the text ends on
  * a line break (every recorded non-empty reply does, and a reply cut between two objects parses with no error but
- * no final break), no parse error or stray text line, and every box paired with exactly one mask. Empty text from a
- * completed response is zero objects.
+ * no final break), no parse error or stray text line, every box paired with exactly one mask, and every mask with at
+ * least one pixel set (an empty mask blurs nothing, so its object would stay visible). Empty text from a completed
+ * response is zero objects.
  */
 export function readSamReplyStrict(reply: SamReply): StrictReading {
   const fail = (problem: Extract<StrictReading, { ok: false }>["problem"]): StrictReading => ({ ok: false, problem });
@@ -123,6 +124,7 @@ export function readSamReplyStrict(reply: SamReply): StrictReading {
     } catch {
       return fail("parse_error");
     }
+    if (!placed.raster.includes(1)) return fail("empty_mask");
     const box = boxOf.get(mask.objectId)!;
     objects.push({ id: mask.objectId, box: { left: box.left, top: box.top, right: box.right, bottom: box.bottom }, mask, placed });
   }
