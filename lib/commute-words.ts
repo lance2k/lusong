@@ -1,4 +1,5 @@
 import type { Verdict } from "./verdict";
+import type { VoiceClaim, VoiceSays } from "./voice-claim";
 
 /**
  * Depth by body part, the way Cebu news describes floods. Each word covers depths up to its bound in cm, set from
@@ -78,4 +79,36 @@ export function detourWords(extra: { extraKm: number; extraMin: number }): strin
   if (extra.extraKm === 0) return `${min} ${longer(extra.extraMin)} ${usual}, about the same distance`;
   if (Math.sign(extra.extraKm) === Math.sign(extra.extraMin)) return `${km} and ${min} ${longer(extra.extraKm)} ${usual}`;
   return `${km} ${longer(extra.extraKm)} and ${min} ${longer(extra.extraMin)} ${usual}`;
+}
+
+const VOICE_DEPTH_WORDS: Record<VoiceClaim["depth"], string | null> = {
+  dry: "no flood water",
+  below_knee: "below the knee",
+  knee_or_deeper: "knee-deep or deeper",
+  not_said: null,
+};
+
+export function voiceDepthWords(depth: VoiceClaim["depth"]): string | null {
+  return VOICE_DEPTH_WORDS[depth];
+}
+
+export function voicePassabilityLine(says: VoiceSays): string {
+  switch (says) {
+    case "knee_deep_or_deeper":
+    case "not_passable":
+      return "Not passable, says a voice report";
+    case "passable":
+      return "Passable, says a voice report, but only a recent photo can mark a street clear";
+    case "unsure":
+      return "A voice report that doesn't say whether vehicles can pass";
+  }
+}
+
+/** What Lusong understood from the reporter's own note, as one fixed sentence. */
+export function voiceHeard(claim: VoiceClaim): string {
+  const depth = { dry: "there is no flood water", below_knee: "the water is below the knee", knee_or_deeper: "the water is knee-deep or deeper", not_said: null }[claim.depth];
+  const pass = { yes: "vehicles can pass", no: "vehicles can't pass", not_said: null }[claim.passable];
+  const parts = [depth, pass].filter((p) => p !== null);
+  if (parts.length === 0) return "Lusong couldn't tell from your note how deep the water is or whether vehicles can pass.";
+  return `Lusong heard that ${parts.join(" and ")}.`;
 }

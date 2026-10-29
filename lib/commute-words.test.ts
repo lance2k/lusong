@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ageWords, depthWords, detourWords, passabilityLine, phtTime } from "./commute-words";
+import { ageWords, depthWords, detourWords, passabilityLine, phtTime, voiceDepthWords, voiceHeard, voicePassabilityLine } from "./commute-words";
 import type { Verdict } from "./verdict";
 
 const measured = (low: number, high: number, passability: "NPLV" | "NPATV" | "shallow" | "unsure"): Verdict => ({
@@ -71,5 +71,35 @@ describe("the other way, against the usual one", () => {
   it("says when it is no slower or shorter", () => {
     expect(detourWords({ extraKm: 0.3, extraMin: 0 })).toBe("0.3 km longer than your usual way, about the same time");
     expect(detourWords({ extraKm: -0.2, extraMin: -1 })).toBe("0.2 km and 1 min shorter than your usual way");
+  });
+});
+
+describe("a voice report in fixed sentences built from its claim's choices, never the speaker's or the model's wording", () => {
+  it.each([
+    ["dry", "no flood water"],
+    ["below_knee", "below the knee"],
+    ["knee_or_deeper", "knee-deep or deeper"],
+    ["not_said", null],
+  ] as const)("depth %s ⇒ %s", (depth, words) => {
+    expect(voiceDepthWords(depth)).toBe(words);
+  });
+
+  it.each([
+    ["knee_deep_or_deeper", "Not passable, says a voice report"],
+    ["not_passable", "Not passable, says a voice report"],
+    ["passable", "Passable, says a voice report, but only a recent photo can mark a street clear"],
+    ["unsure", "A voice report that doesn't say whether vehicles can pass"],
+  ] as const)("%s ⇒ %s", (says, line) => {
+    expect(voicePassabilityLine(says)).toBe(line);
+  });
+
+  it.each([
+    [{ depth: "knee_or_deeper", passable: "no" }, "Lusong heard that the water is knee-deep or deeper and vehicles can't pass."],
+    [{ depth: "dry", passable: "yes" }, "Lusong heard that there is no flood water and vehicles can pass."],
+    [{ depth: "below_knee", passable: "not_said" }, "Lusong heard that the water is below the knee."],
+    [{ depth: "not_said", passable: "no" }, "Lusong heard that vehicles can't pass."],
+    [{ depth: "not_said", passable: "not_said" }, "Lusong couldn't tell from your note how deep the water is or whether vehicles can pass."],
+  ] as const)("the reporter is told what was heard: %o", (claim, sentence) => {
+    expect(voiceHeard({ place: null, ...claim })).toBe(sentence);
   });
 });

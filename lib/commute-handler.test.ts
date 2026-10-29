@@ -7,7 +7,7 @@ import { scenariosFor, type DemoTripId } from "./samples";
 import { cutEnd, cutStart, derivedReply } from "../test/valhalla-derived";
 import { CAP_EDITS, CV_GFA5, FEED, feedWith, SAVED } from "../test/pagasa-fixtures";
 import { makeValhallaGate, MemorySlotStore, VALHALLA_URL, type SlotStore } from "./router";
-import { MemoryReportStore, UpstashReportStore, type ReportStore, type StoredPhotoReport } from "./report-store";
+import { MemoryReportStore, UpstashReportStore, type ReportStore, type StoredPhotoReport, type StoredVoiceReport } from "./report-store";
 import { randomUUID } from "node:crypto";
 
 const read = (path: string) => readFileSync(path, "utf8");
@@ -695,6 +695,61 @@ describe("a real commute check (#6)", () => {
     const { handler, valhallaCalls } = handlerAt(NO_ADVISORY);
     await handler(real());
     expect(JSON.parse(valhallaCalls()[0].body!).locations).toEqual([BANILAD, IT_PARK]);
+  });
+});
+
+/** A real voice report at the same spot as storedReport's photo, `ageMin` old. */
+function storedVoice(at: Date, claim: StoredVoiceReport["claim"], ageMin = 5): StoredVoiceReport {
+  return {
+    id: randomUUID(),
+    kind: "voice",
+    at: { lat: 10.335398, lon: 123.910908 },
+    wayId: null,
+    place: "Governor M. Cuenco Avenue",
+    receivedAt: new Date(at.getTime() - ageMin * 60_000).toISOString(),
+    claim,
+    audioHash: "c".repeat(64),
+  };
+}
+
+describe("voice reports in a real commute check, through the answer rules on the saved Banilad → IT Park route (#9)", () => {
+  const PASSABLE = { place: null, depth: "below_knee", passable: "yes" } as const;
+  const KNEE_DEEP = { place: "Cuenco", depth: "knee_or_deeper", passable: "not_said" } as const;
+
+  async function answerWith(...reports: (StoredPhotoReport | StoredVoiceReport)[]) {
+    const store = new MemoryReportStore();
+    for (const r of reports) await store.save(r);
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
+    const res = await handler(real());
+    expect(res.status).toBe(200);
+    return res.json();
+  }
+
+  it("a voice report saying the street is passable doesn't clear it: a blocking photo there still blocks", async () => {
+    const photo = storedReport(NO_ADVISORY);
+    const voice = storedVoice(NO_ADVISORY, PASSABLE);
+    const body = await answerWith(photo, voice);
+    expect(body.answer.kind).toBe("go_another_way");
+    expect(body.reports).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: photo.id, role: "block" }),
+        expect.objectContaining({ id: voice.id, role: "neutral", onRoute: true }),
+      ]),
+    );
+  });
+
+  it("a voice report saying passable, alone on the way, is not a Go: the same trip with nothing reported is", async () => {
+    expect((await answerWith()).answer.kind).toBe("go");
+    expect((await answerWith(storedVoice(NO_ADVISORY, PASSABLE))).answer.kind).toBe("no_one_knows");
+  });
+
+  it("a voice report saying knee-deep blocks the way, and the detour is taken", async () => {
+    const voice = storedVoice(NO_ADVISORY, KNEE_DEEP);
+    const body = await answerWith(voice);
+    expect(body.answer.kind).toBe("go_another_way");
+    expect(body.reports).toEqual([
+      expect.objectContaining({ id: voice.id, role: "block", onRoute: true, counts: true, depth: "knee-deep or deeper", passability: "Not passable, says a voice report" }),
+    ]);
   });
 });
 
