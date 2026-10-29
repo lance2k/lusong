@@ -13,7 +13,7 @@ import {
   UNREADABLE_RETRY_MS,
   type MuseDeps,
 } from "./commute-handler";
-import { investigationReserveMicros, SUMMARY_UNAVAILABLE } from "./investigation";
+import { investigationReserveMicros, PICK_UNAVAILABLE } from "./investigation";
 import { sampleReports, scenariosFor, type DemoTripId } from "./samples";
 import { MemoryKvStore, planWebSearch, SEARCH_RESERVE_MICROS } from "./web-search";
 import { callsReply, fakeMeta, hangs, searchReply, textReply } from "../test/muse-derived";
@@ -565,14 +565,14 @@ describe("Muse Spark in the demo check (#7)", () => {
       { place: "Colon St", lat: null, lon: null, url: "https://example.ph/colon", date: null, summary: "Flooded." },
     ],
   });
-  const summaryOf = (answer: string, ...sentences: [string, string[]][]) =>
-    JSON.stringify({ answer, sentences: sentences.map(([text, evidence]) => ({ text, evidence })) });
+  const pickOf = (answer: string, evidence: unknown[], extra: Record<string, unknown> = {}) => JSON.stringify({ answer, evidence, ...extra });
   const loop = () => [
     callsReply("resp_1", [{ name: "reports_near_route", args: { route: "plain" } }]),
-    textReply("resp_2", summaryOf("go_another_way", ["A photo shows deep water on your usual way.", [FLOODED()]], ["Lusong found a way around it.", ["detour"]])),
+    textReply("resp_2", pickOf("go_another_way", [FLOODED(), "detour"])),
   ];
+  const LABEL = "Muse Spark picked this evidence";
 
-  it("shows the rules' reason, Muse Spark's labelled summary below it, and the web findings with their links and search time", async () => {
+  it("shows the rules' reason, then the evidence Muse Spark picked in Lusong's words, and the web findings with their links and search time", async () => {
     const meta = fakeMeta({ search: [searchReply(closures)], turns: loop() });
     const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), museOn());
 
@@ -582,10 +582,13 @@ describe("Muse Spark in the demo check (#7)", () => {
     const body = await res.json();
     expect(body.answer.kind).toBe("go_another_way");
     expect(body.answer.reason).toMatch(/^Your usual way is blocked at /);
-    expect(body.muse.summary).toEqual({
+    expect(body.muse.pick).toEqual({
       shown: true,
-      label: "Muse Spark's summary",
-      sentences: ["A photo shows deep water on your usual way.", "Lusong found a way around it."],
+      label: LABEL,
+      sentences: [
+        "A sample report 40 min ago on Governor M. Cuenco Avenue at Jose Maria Del Mar Avenue reads half-knee- to knee-deep (27–39 cm): not passable to light vehicles (MMDA gauge, Metro Manila).",
+        "Nothing reported blocks the other way.",
+      ],
       note: null,
     });
     expect(body.muse.web.line).toBe("Searched the web at 29 Oct, 12:00 p.m. PHT");
@@ -605,16 +608,62 @@ describe("Muse Spark in the demo check (#7)", () => {
 
     expect(body.answer.kind).toBe("go_another_way");
     expect(body.reports.length).toBeGreaterThan(0);
-    expect(body.muse.summary).toEqual({ shown: false, label: "Muse Spark's summary", sentences: [], note: SUMMARY_UNAVAILABLE });
+    expect(body.muse.pick).toEqual({ shown: false, label: LABEL, sentences: [], note: PICK_UNAVAILABLE });
   });
 
-  it("a summary that fails its checks is just not shown", async () => {
-    fakeMeta({ search: [searchReply(closures)], turns: [textReply("resp_1", summaryOf("go_another_way", ["It is safe now.", [FLOODED()]]))] });
+  it("a pick that fails its checks is just not shown", async () => {
+    fakeMeta({ search: [searchReply(closures)], turns: [textReply("resp_1", pickOf("wait", [FLOODED()]))] });
     const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), museOn());
 
     const body = await (await handler(demo("banilad-itpark", "flooded"))).json();
 
-    expect(body.muse.summary).toEqual({ shown: false, label: "Muse Spark's summary", sentences: [], note: null });
+    expect(body.muse.pick).toEqual({ shown: false, label: LABEL, sentences: [], note: null });
+  });
+
+  describe("no word Muse Spark writes reaches the response (review 🔴1)", () => {
+    // Each passed a phrase check under Wait in an earlier round (gpt-6-astra, two review rounds).
+    const PHRASES = [
+      "Start your trip now.",
+      "The road is open to every vehicle.",
+      "Wala nang baha. Bumiyahe ka na.",
+      "Pwede na, walang baha.",
+      "Proceed with your trip.",
+      "There is no need to wait.",
+      "The road is passable to all types of vehicles.",
+    ];
+    const saying = (reply: { output: Record<string, unknown>[] }, words: string) => ({
+      ...reply,
+      output: reply.output.map((item) =>
+        item.type === "message" && item.phase === "commentary"
+          ? { ...item, content: (item.content as Record<string, unknown>[]).map((c) => ({ ...c, text: words })) }
+          : item,
+      ),
+    });
+    const scripts = (p: string) => [
+      // A pick that passes, with the words in every other field, in the commentary and in a tool call's arguments.
+      [
+        saying(callsReply("resp_1", [{ name: "reports_near_route", args: { route: "plain" } }, { name: "reports_near_route", args: { route: p } }]), p),
+        textReply("resp_2", pickOf("go_another_way", [FLOODED(), "detour"], { sentences: [{ text: p, evidence: [FLOODED()] }], note: p, [p]: p })),
+      ],
+      [textReply("resp_1", pickOf("go_another_way", [p]))],
+      [textReply("resp_1", pickOf(p, [FLOODED()]))],
+      [textReply("resp_1", p)],
+    ];
+
+    it.each(PHRASES)("%s", async (p) => {
+      const shown: boolean[] = [];
+      for (const turns of scripts(p)) {
+        fakeMeta({ search: [searchReply(closures)], turns });
+        const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), museOn());
+
+        const text = await (await handler(demo("banilad-itpark", "flooded"))).text();
+
+        expect(text.toLowerCase()).not.toContain(p.toLowerCase());
+        shown.push(JSON.parse(text).muse.pick.shown);
+        vi.unstubAllGlobals();
+      }
+      expect(shown).toEqual([true, false, false, false]);
+    }, 20_000);
   });
 
   it("a cold check reserves the search and the loop on top of its 1 µ$, a warm one only the loop; both settle at the metered cost", async () => {
@@ -701,7 +750,7 @@ describe("Muse Spark in the demo check (#7)", () => {
     const body = await (await handler(demo("banilad-itpark", "flooded"))).json();
 
     expect(meta.fetchMock).not.toHaveBeenCalled();
-    expect(body.muse.summary.note).toBe(SUMMARY_UNAVAILABLE);
+    expect(body.muse.pick.note).toBe(PICK_UNAVAILABLE);
     expect(body.muse.web.line).toBe("Web search skipped: Muse Spark is off.");
   });
 });
@@ -750,7 +799,7 @@ describe("one deadline for the whole commute check", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.answer.kind).toBe("go_another_way");
-    expect(body.muse.summary.note).toBe(SUMMARY_UNAVAILABLE);
+    expect(body.muse.pick.note).toBe(PICK_UNAVAILABLE);
     expect(body.muse.web.line).toBe("Web search skipped: the search failed.");
   });
 });

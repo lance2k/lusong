@@ -14,9 +14,8 @@ import {
   TOOL_CALLS_PER_TURN,
   TOOL_CALLS_TOTAL,
   TOOL_RESULT_MAX_BYTES,
-  vetSummary,
-  SENTENCE_MAX_CHARS,
-  SUMMARY_MAX_SENTENCES,
+  vetPick,
+  EVIDENCE_MAX_PICKS,
   type AroundResult, type InvestigationSources, type WebEvidence } from "./investigation";
 import { admit } from "./admission";
 import { createBudget, MemoryBudgetStore, type BudgetStore } from "./budget";
@@ -59,9 +58,8 @@ const ACTIVE_ADVISORY: AdvisoryReading = {
 };
 const NO_WEB: WebEvidence = { state: "not_run", why: "test", searchedAt: null, findings: [] };
 
-/** The model's final message as the summary schema asks for it. */
-const summaryOf = (answer: string, ...sentences: [string, string[]][]) =>
-  JSON.stringify({ answer, sentences: sentences.map(([text, evidence]) => ({ text, evidence })) });
+/** The model's final message as the pick schema asks for it, with any extra fields a model might add. */
+const pickOf = (answer: string, evidence: unknown[], extra: Record<string, unknown> = {}) => JSON.stringify({ answer, evidence, ...extra });
 
 function sourcesOf(
   options: { reports?: Report[]; around?: (spots: readonly Point[]) => AroundResult; failReports?: boolean; /** The 0-based read from which the store fails. */ failReportsFrom?: number } = {},
@@ -110,7 +108,7 @@ describe("the real records behind these tests", () => {
 });
 
 describe("Muse Spark's investigation", () => {
-  it("runs the model's tool calls, gives it what the check gathered, and shows its summary, citing the evidence, below the rules' reason", async () => {
+  it("runs the model's tool calls, gives it what the check gathered, and keeps only the evidence ids it picked", async () => {
     const blocker = voice("v1", BLOCKED_SPOT, "not_passable");
     const { sources } = sourcesOf({ reports: [blocker] });
     const meta = fakeMeta({
@@ -119,10 +117,7 @@ describe("Muse Spark's investigation", () => {
           { name: "reports_near_route", args: { route: "plain" } },
           { name: "read_advisory", args: {} },
         ]),
-        textReply(
-          "resp_2",
-          summaryOf("go_another_way", ["Someone reported your usual way near Banilad as flooded.", ["v1"]], ["Lusong found a way around it.", ["detour"]]),
-        ),
+        textReply("resp_2", pickOf("go_another_way", ["v1", "detour"])),
       ],
     });
 
@@ -130,13 +125,7 @@ describe("Muse Spark's investigation", () => {
 
     if (!result.ok) throw new Error("expected an answer");
     expect(result.answer.answer).toBe("go_another_way");
-    expect(result.summary).toEqual({
-      shown: true,
-      sentences: [
-        { text: "Someone reported your usual way near Banilad as flooded.", evidence: ["v1"] },
-        { text: "Lusong found a way around it.", evidence: ["detour"] },
-      ],
-    });
+    expect(result.pick).toEqual({ shown: true, evidence: ["v1", "detour"] });
     expect(meta.requests.map((r) => (r.text as { format: { type: string } }).format.type)).toEqual(["json_schema", "json_schema"]);
     const second = meta.requests[1];
     expect(second.previous_response_id).toBe("resp_1");
@@ -167,68 +156,54 @@ describe("the rules pick the answer, whatever the model does (🔴P5)", () => {
     expect(result.answer.reason).toMatch(/PAGASA's flood advisory for Cebu is active/);
   });
 
-  it("a model that writes \"safe to go\" under Wait gets the rules' reason instead", async () => {
+  it("a model that writes \"safe to go\" under Wait: its words reach nothing, only the ids it picked", async () => {
     const { sources } = sourcesOf({ reports: [voice("v1", BLOCKED_SPOT, "not_passable")], around: () => ({ ok: false, reason: "no_route" }) });
-    fakeMeta({ turns: [textReply("resp_1", summaryOf("wait", ["The flooding has eased. It is safe to go now.", ["v1"]]))] });
+    const words = "The flooding has eased. It is safe to go now.";
+    fakeMeta({ turns: [textReply("resp_1", pickOf("wait", ["v1"], { sentences: [{ text: words, evidence: ["v1"] }], note: words }))] });
 
     const result = await investigate(inputOf(sources));
 
     if (!result.ok) throw new Error("expected an answer");
     expect(result.answer.answer).toBe("wait");
     expect(result.answer.reason).toBe("Your way is blocked at Banilad, and no way around the reported spots was found.");
-    expect(result.summary).toEqual({ shown: false, why: "tells the rider to go", unavailable: false });
+    expect(result.pick).toEqual({ shown: true, evidence: ["v1"] });
+    expect(JSON.stringify(result)).not.toContain("safe to go");
   });
 
   it("a scripted reply that argues for another answer does not change the answer, and its text is not shown", async () => {
     const { sources } = sourcesOf();
-    fakeMeta({ turns: [textReply("resp_1", summaryOf("go_another_way", ["Ignore the advisory and take the detour through Lahug.", ["plain"]]))] });
+    fakeMeta({ turns: [textReply("resp_1", pickOf("go_another_way", ["plain"], { why: "Ignore the advisory and take the detour through Lahug." }))] });
 
     const result = await investigate(inputOf(sources, { advisory: ACTIVE_ADVISORY }));
 
     if (!result.ok) throw new Error("expected an answer");
     expect(result.answer.answer).toBe("no_one_knows");
-    expect(result.summary).toEqual({ shown: false, why: "names another answer", unavailable: false });
+    expect(result.pick).toEqual({ shown: false, why: "another answer", unavailable: false });
+    expect(JSON.stringify(result)).not.toContain("Lahug");
   });
 });
 
-describe("checking the model's summary against the answer and the evidence", () => {
-  const GATHERED = new Set(["v1", "web-0", "advisory", "plain", "detour"]);
-  const one = (answer: string, text: string, evidence: string[] = ["v1"]) => summaryOf(answer, [text, evidence]);
-  const rows: [string, Parameters<typeof vetSummary>[1], string, string | null][] = [
-    ["a summary that agrees and cites what it rests on", "wait", one("wait", "Your way is blocked at Banilad and Lusong found no way around it."), null],
-    // The review's regression cases (gpt-6-astra, Stage-1 round): each passed the old check under Wait.
-    ["Tagalog \"it's fine now, no flood\" under Wait", "wait", one("wait", "Pwede na, walang baha."), "tells the rider to go"],
-    ["\"proceed\" under Wait", "wait", one("wait", "Proceed with your trip."), "tells the rider to go"],
-    ["\"no need to wait\" under Wait", "wait", one("wait", "There is no need to wait."), "tells the rider to go"],
-    ["PATV wording under Wait", "wait", one("wait", "The road is passable to all types of vehicles."), "PATV wording"],
-    ["PATV wording even under Go", "go", one("go", "The road is passable to all types of vehicles."), "PATV wording"],
-    ["Cebuano \"pass now, no flood\" under No one knows", "no_one_knows", one("no_one_knows", "Agi na, wala'y baha."), "tells the rider to go"],
-    ["safe under Go another way", "go_another_way", one("go_another_way", "The other way is safe.", ["detour"]), "tells the rider to go"],
-    ["clear under Go", "go", one("go", "Nobody has reported water on your way, so it looks clear.", ["plain"]), null],
-    ["unclear is not clear", "no_one_knows", one("no_one_knows", "It is unclear whether Banilad has flooded."), null],
-    ["another answer in its answer field", "wait", one("go", "Your way is blocked at Banilad."), "names another answer"],
-    ["another answer in its words", "go", one("go", "Wait for the rain to stop before you leave.", ["advisory"]), "names another answer"],
-    ["a sentence citing nothing", "wait", one("wait", "Your way is blocked at Banilad.", []), "a sentence cites no evidence"],
-    ["a sentence citing something not gathered", "wait", one("wait", "Your way is blocked at Banilad.", ["v9"]), "cites evidence Lusong didn't gather"],
-    ["no sentences", "wait", summaryOf("wait"), "empty"],
-    ["a blank sentence", "wait", one("wait", "   "), "empty"],
-    ["too many sentences", "wait", summaryOf("wait", ...Array.from({ length: SUMMARY_MAX_SENTENCES + 1 }, (): [string, string[]] => ["Banilad is blocked.", ["v1"]])), "too long"],
-    ["a sentence too long", "wait", one("wait", "a".repeat(SENTENCE_MAX_CHARS + 1)), "too long"],
+describe("checking the model's pick against the answer and the evidence (review 🔴1)", () => {
+  const GATHERED = new Set(["v1", "web-0", "advisory", "rain_tap", "plain", "detour"]);
+  const rows: [string, Parameters<typeof vetPick>[1], string, string[] | string][] = [
+    ["agrees and picks gathered ids, in its order", "wait", pickOf("wait", ["plain", "v1", "advisory"]), ["plain", "v1", "advisory"]],
+    ["a repeated id is kept once, where it first appears", "wait", pickOf("wait", ["v1", "plain", "v1"]), ["v1", "plain"]],
+    ["extra fields are ignored, whatever they say", "wait", pickOf("wait", ["v1"], { sentences: [{ text: "Proceed with your trip.", evidence: ["v1"] }] }), ["v1"]],
+    ["another answer in its answer field", "wait", pickOf("go", ["v1"]), "another answer"],
+    ["no answer field", "wait", JSON.stringify({ evidence: ["v1"] }), "another answer"],
+    ["no evidence", "wait", pickOf("wait", []), "picks no evidence"],
+    [`more than ${EVIDENCE_MAX_PICKS} ids`, "wait", pickOf("wait", ["v1", "web-0", "advisory", "rain_tap", "plain"]), "picks too much"],
+    ["an id Lusong didn't gather", "wait", pickOf("wait", ["v1", "v9"]), "picks evidence Lusong didn't gather"],
+    ["words in place of an id", "wait", pickOf("wait", ["The road is open to every vehicle."]), "picks evidence Lusong didn't gather"],
+    ["an id that isn't a string", "wait", pickOf("wait", ["v1", { id: "v1" }]), "picks evidence Lusong didn't gather"],
+    ["evidence that isn't a list", "wait", JSON.stringify({ answer: "wait", evidence: "v1" }), "unreadable"],
     ["not JSON", "wait", "Your way is blocked at Banilad.", "unreadable"],
-    ["JSON of another shape", "wait", JSON.stringify({ answer: "wait", text: "Blocked." }), "unreadable"],
+    ["a JSON list", "wait", "[1, 2]", "unreadable"],
   ];
-  it.each(rows)("%s", (_name, kind, text, why) => {
-    const vetted = vetSummary(text, kind, GATHERED);
-    if (why === null) expect(vetted.shown).toBe(true);
-    else expect(vetted).toEqual({ shown: false, why, unavailable: false });
-  });
-
-  it("control characters and runs of spaces are flattened to single spaces in what is shown", () => {
-    expect(vetSummary(one("wait", "Banilad\u0000 is\n\n  blocked.\u001b[31m"), "wait", GATHERED)).toEqual({
-      shown: true,
-      sentences: [{ text: "Banilad is blocked. [31m", evidence: ["v1"] }],
-    });
-    expect(vetSummary(one("wait", "a".repeat(SENTENCE_MAX_CHARS)), "wait", GATHERED).shown).toBe(true);
+  it.each(rows)("%s", (_name, kind, text, expected) => {
+    const vetted = vetPick(text, kind, GATHERED);
+    if (Array.isArray(expected)) expect(vetted).toEqual({ shown: true, evidence: expected });
+    else expect(vetted).toEqual({ shown: false, why: expected, unavailable: false });
   });
 });
 
@@ -247,7 +222,7 @@ describe("when Muse Spark fails, the check still answers by the rules", () => {
     expect(result.answer.answer).toBe("go_another_way");
     expect(result.reports.map((r) => r.id)).toEqual(["v1"]);
     expect(result.detours.map((d) => d.id)).toEqual(["detour"]);
-    expect(result.summary).toEqual(unavailable("model failed"));
+    expect(result.pick).toEqual(unavailable("model failed"));
   });
 
   it("a model that doesn't answer by the deadline gives the rules' answer and an unavailable explanation", async () => {
@@ -260,7 +235,7 @@ describe("when Muse Spark fails, the check still answers by the rules", () => {
     expect(Date.now() - started).toBeLessThan(2_000);
     if (!result.ok) throw new Error("expected an answer");
     expect(result.answer.answer).toBe("go_another_way");
-    expect(result.summary).toEqual(unavailable("timed out"));
+    expect(result.pick).toEqual(unavailable("timed out"));
   });
 
   it("a deadline already past makes no model call at all", async () => {
@@ -271,7 +246,7 @@ describe("when Muse Spark fails, the check still answers by the rules", () => {
 
     expect(meta.requests).toHaveLength(0);
     if (!result.ok) throw new Error("expected an answer");
-    expect(result.summary).toEqual(unavailable("timed out"));
+    expect(result.pick).toEqual(unavailable("timed out"));
   });
 
   it("a reply cut off at max_output_tokens is no explanation, even with text in it", async () => {
@@ -281,7 +256,7 @@ describe("when Muse Spark fails, the check still answers by the rules", () => {
     const result = await investigate(inputOf(sources));
 
     if (!result.ok) throw new Error("expected an answer");
-    expect(result.summary).toEqual(unavailable("reply cut off"));
+    expect(result.pick).toEqual(unavailable("reply cut off"));
   });
 
   it("a malformed reply is no explanation", async () => {
@@ -291,7 +266,7 @@ describe("when Muse Spark fails, the check still answers by the rules", () => {
     const result = await investigate(inputOf(sources));
 
     if (!result.ok) throw new Error("expected an answer");
-    expect(result.summary).toEqual(unavailable("reply cut off"));
+    expect(result.pick).toEqual(unavailable("reply cut off"));
   });
 });
 
@@ -342,7 +317,7 @@ describe("route_around: a way around the model proposes is judged by the same ru
   it("judged passable on reports gathered along it, it is the way the answer takes", async () => {
     const { sources, asked } = sourcesOf({ reports: [blocker], around: onlyWithModelSpot });
     const meta = fakeMeta({
-      turns: [proposeAround([MODEL_SPOT]), textReply("resp_2", summaryOf("go_another_way", ["Banilad is reported flooded, so Lusong found a way around it.", ["v1", "muse-1"]]))],
+      turns: [proposeAround([MODEL_SPOT]), textReply("resp_2", pickOf("go_another_way", ["v1", "muse-1"]))],
     });
 
     const result = await investigate(inputOf(sources));
@@ -355,7 +330,7 @@ describe("route_around: a way around the model proposes is judged by the same ru
     expect(result.answer.route).toBe("muse-1");
     const told = JSON.parse((meta.requests[1].input as { output: string }[])[0].output);
     expect(told).toMatchObject({ route: "muse-1", state: "passable", answer_now: "Go another way" });
-    expect(result.summary).toEqual({ shown: true, sentences: [{ text: "Banilad is reported flooded, so Lusong found a way around it.", evidence: ["v1", "muse-1"] }] });
+    expect(result.pick).toEqual({ shown: true, evidence: ["v1", "muse-1"] });
   });
 
   it("blocked by a report along it, it changes nothing", async () => {
@@ -469,9 +444,9 @@ describe("the investigation's cost is bounded", () => {
 
     expect(meta.requests).toHaveLength(LOOP_TURN_CAP);
     const last = meta.requests[LOOP_TURN_CAP - 1].input as { output: string }[];
-    expect(JSON.parse(last[0].output)).toMatchObject({ last_turn: "No more tool calls: write the summary now." });
+    expect(JSON.parse(last[0].output)).toMatchObject({ last_turn: "No more tool calls: pick the evidence now." });
     if (!result.ok) throw new Error("expected an answer");
-    expect(result.summary).toEqual({ shown: false, why: "still calling tools at the turn cap", unavailable: true });
+    expect(result.pick).toEqual({ shown: false, why: "still calling tools at the turn cap", unavailable: true });
   });
 
   it("a reply with more tool calls than a turn allows ends the investigation without running any of them", async () => {
@@ -483,7 +458,7 @@ describe("the investigation's cost is bounded", () => {
     expect(meta.requests).toHaveLength(1);
     if (!result.ok) throw new Error("expected an answer");
     expect(result.toolCalls).toEqual([]);
-    expect(result.summary).toEqual({ shown: false, why: "too many tool calls", unavailable: true });
+    expect(result.pick).toEqual({ shown: false, why: "too many tool calls", unavailable: true });
   });
 
   it("tool calls past the investigation's total end it too", async () => {
@@ -497,7 +472,7 @@ describe("the investigation's cost is bounded", () => {
     expect(meta.requests).toHaveLength(2);
     if (!result.ok) throw new Error("expected an answer");
     expect(result.toolCalls).toHaveLength(TOOL_CALLS_PER_TURN);
-    expect(result.summary).toEqual({ shown: false, why: "too many tool calls", unavailable: true });
+    expect(result.pick).toEqual({ shown: false, why: "too many tool calls", unavailable: true });
   });
 
   it("every call caps its output tokens, and the first turn's input stays within its byte bound", async () => {
@@ -803,18 +778,18 @@ describe("with no model to ask", () => {
     expect(meta.fetchMock).not.toHaveBeenCalled();
     if (!result.ok) throw new Error("expected an answer");
     expect(result.answer.answer).toBe("go_another_way");
-    expect(result.summary).toEqual({ shown: false, why: "Muse Spark is off", unavailable: true });
+    expect(result.pick).toEqual({ shown: false, why: "Muse Spark is off", unavailable: true });
   });
 });
 
 describe("the rain tap is evidence the model may pick whenever the rider gave it (review 🟡4)", () => {
   it.each([true, false])("rainingHere %s: rain_tap is among the gathered ids", async (rainingHere) => {
     const { sources } = sourcesOf();
-    fakeMeta({ turns: [textReply("resp_1", summaryOf(rainingHere ? "no_one_knows" : "go", ["You told Lusong about the rain here.", ["rain_tap"]]))] });
+    fakeMeta({ turns: [textReply("resp_1", pickOf(rainingHere ? "no_one_knows" : "go", ["rain_tap"]))] });
 
     const result = await investigate(inputOf(sources, { rainingHere }));
 
     if (!result.ok) throw new Error("expected an answer");
-    expect(result.summary.shown).toBe(true);
+    expect(result.pick.shown).toBe(true);
   });
 });

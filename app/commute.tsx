@@ -4,7 +4,7 @@ import { useEffect, useReducer, useState } from "react";
 import type { AnswerKind, RouteState } from "@/lib/answer";
 import { detourWords } from "@/lib/commute-words";
 import { DEMO_TRIPS, SCENARIOS, scenariosFor, type DemoTripId } from "@/lib/samples";
-import { MuseSummary, WebFindings, type PageMuse } from "./commute-muse";
+import { MusePick, WebFindings, type PageMuse } from "./commute-muse";
 import { commuteReducer, initialCommuteState, type CommuteInputs, type CommuteState } from "./commute-state";
 
 interface PageReport {
@@ -180,7 +180,7 @@ function ResultView({ result, checkedFor }: { result: CommuteResult; checkedFor:
         </div>
       </section>
 
-      {result.muse && <MuseSummary summary={result.muse.summary} />}
+      {result.muse && <MusePick pick={result.muse.pick} />}
 
       <Advisory advisory={result.advisory} />
 

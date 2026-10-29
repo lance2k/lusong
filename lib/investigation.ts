@@ -14,7 +14,7 @@ export type { WebEvidence, WebFinding } from "./web-search";
  * The check's evidence is gathered here deterministically, whatever the model does: the reports along every route that
  * is judged, through `sources`, and the advisory the caller read. The model's tool calls only add to it: a way around
  * spots it names, judged by the same rules on deterministically gathered reports. The answer rules pick the answer; the
- * model writes a summary citing the evidence, shown below the rules' own reason only when it agrees with it.
+ * model picks the evidence that explains it, which Lusong describes in its own words below the rules' reason.
  */
 
 export type ReportsResult = { ok: true; reports: Report[] } | { ok: false };
@@ -27,105 +27,62 @@ export interface InvestigationSources {
   routeAround(spots: readonly Point[]): Promise<AroundResult>;
 }
 
-export interface SummarySentence {
-  text: string;
-  /** Ids of the gathered evidence the sentence rests on: report and web finding ids, advisory, rain_tap, route ids. */
-  evidence: string[];
-}
-
 /**
- * Muse Spark's summary, shown labelled below the rules' own reason, which is always shown first. `unavailable` is
- * true when the model failed or ran out of time, so the page says so; a summary that fails its checks is just not shown.
+ * The evidence Muse Spark picked to explain the rules' answer, most important first: ids only. Lusong writes every
+ * sentence shown from that evidence's own fields (lib/evidence-words.ts), so no word the model writes reaches the page.
+ * `unavailable` is true when the model failed or ran out of time, so the page says so; a pick that fails its checks is
+ * just not shown.
  */
-export type Summary = { shown: true; sentences: SummarySentence[] } | { shown: false; why: string; unavailable: boolean };
+export type EvidencePick = { shown: true; evidence: string[] } | { shown: false; why: string; unavailable: boolean };
 
-export const SUMMARY_UNAVAILABLE = "Muse Spark's explanation is unavailable.";
-export const SUMMARY_MAX_SENTENCES = 4;
-export const SENTENCE_MAX_CHARS = 200;
+export const PICK_UNAVAILABLE = "Muse Spark couldn't pick the evidence for this check.";
+export const EVIDENCE_MAX_PICKS = 4;
 
 const ANSWER_KINDS: AnswerKind[] = ["go", "go_another_way", "wait", "no_one_knows"];
 
-const SUMMARY_FORMAT = {
+/**
+ * The ids aren't an enum in the schema: they grow as tools run, and an enum would make the prompt's size, and so the
+ * reservation, depend on the evidence. vetPick checks them against what was gathered instead.
+ */
+const PICK_FORMAT = {
   type: "json_schema" as const,
-  name: "lusong_summary",
+  name: "lusong_evidence_pick",
   strict: true,
   schema: {
     type: "object",
     additionalProperties: false,
-    required: ["answer", "sentences"],
+    required: ["answer", "evidence"],
     properties: {
       answer: { type: "string", enum: ANSWER_KINDS },
-      sentences: {
-        type: "array",
-        maxItems: SUMMARY_MAX_SENTENCES,
-        items: {
-          type: "object",
-          additionalProperties: false,
-          required: ["text", "evidence"],
-          properties: { text: { type: "string" }, evidence: { type: "array", items: { type: "string" } } },
-        },
-      },
+      evidence: { type: "array", maxItems: EVIDENCE_MAX_PICKS, items: { type: "string" } },
     },
   },
 };
 
-/** Lusong never uses MMDA's "passable to all types of vehicles", whatever the answer. */
-const PATV = /passable to all (types of )?vehicles|\bPATV\b/i;
-/**
- * Words that tell a rider the way is fine to take, in English, Tagalog and Cebuano. Left to a Go. Matching is broad on
- * purpose: a false match only hides the summary, and the rules' reason is shown anyway.
- */
-const GO_WORDS =
-  /\b(go now|go ahead|you can go|good to go|ok(ay)? to go|fine to go|safe to go|leave now|you can leave|proceed\w*|no need to wait|(don'?t|do not|needn'?t) (need to )?wait|safe|safely|safer|clear|cleared|passable|ligtas|luwas|pwede|puwede|pede|walang baha|wala'?y baha|walay baha|agi na|sige|lakaw na|larga na|tara na|okay na|ok na|makaagi|maka-agi)\b/i;
-/** Phrases that name an answer, so a sentence can't argue for another one. */
-const NAMES_ANSWER: Record<AnswerKind, RegExp> = {
-  go: /\b(you can go|go now|good to go|ok(ay)? to go|go ahead|leave now)\b/i,
-  go_another_way: /\b(go another way|(take|use) (the|another|a) ((other|different) )?(way|route|road|detour))\b/i,
-  wait: /\b(wait|hold off|don'?t (go|leave|ride)|stay (home|put|inside))\b/i,
-  no_one_knows: /\b(no one knows|nobody knows)\b/i,
-};
-
-function flat(text: string): string {
-  return text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim();
-}
-
-function parseSummary(text: string): { answer: unknown; sentences: { text: unknown; evidence: unknown }[] } | null {
+function parsePick(text: string): { answer: unknown; evidence: unknown[] } | null {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start < 0 || end < start) return null;
   try {
     const parsed = JSON.parse(text.slice(start, end + 1));
-    if (typeof parsed !== "object" || parsed === null || !Array.isArray(parsed.sentences)) return null;
-    if (!parsed.sentences.every((s: unknown) => typeof s === "object" && s !== null)) return null;
+    if (typeof parsed !== "object" || parsed === null || !Array.isArray(parsed.evidence)) return null;
     return parsed;
   } catch {
     return null;
   }
 }
 
-/**
- * The model's summary, shown only when its answer field is the rules' answer, every sentence cites gathered evidence,
- * it is within bounds, and no sentence tells the rider to go when the answer isn't Go.
- */
-export function vetSummary(text: string, answer: AnswerKind, gathered: ReadonlySet<string>): Summary {
-  const hidden = (why: string): Summary => ({ shown: false, why, unavailable: false });
-  const parsed = parseSummary(text);
+/** The model's pick, kept only when its answer field is the rules' answer and every id is gathered evidence. */
+export function vetPick(text: string, answer: AnswerKind, gathered: ReadonlySet<string>): EvidencePick {
+  const hidden = (why: string): EvidencePick => ({ shown: false, why, unavailable: false });
+  const parsed = parsePick(text);
   if (!parsed) return hidden("unreadable");
-  if (parsed.answer !== answer) return hidden("names another answer");
-  if (parsed.sentences.length > SUMMARY_MAX_SENTENCES) return hidden("too long");
-  const sentences = parsed.sentences.map((s) => ({
-    text: typeof s.text === "string" ? flat(s.text) : "",
-    evidence: Array.isArray(s.evidence) ? s.evidence.filter((id): id is string => typeof id === "string") : [],
-  }));
-  if (sentences.length === 0 || sentences.some((s) => s.text === "")) return hidden("empty");
-  if (sentences.some((s) => s.text.length > SENTENCE_MAX_CHARS)) return hidden("too long");
-  if (sentences.some((s) => s.evidence.length === 0)) return hidden("a sentence cites no evidence");
-  if (sentences.some((s) => s.evidence.some((id) => !gathered.has(id)))) return hidden("cites evidence Lusong didn't gather");
-  const words = sentences.map((s) => s.text).join(" ");
-  if (PATV.test(words)) return hidden("PATV wording");
-  if (answer !== "go" && GO_WORDS.test(words)) return hidden("tells the rider to go");
-  if (ANSWER_KINDS.some((kind) => kind !== answer && NAMES_ANSWER[kind].test(words))) return hidden("names another answer");
-  return { shown: true, sentences };
+  if (parsed.answer !== answer) return hidden("another answer");
+  if (parsed.evidence.some((id) => typeof id !== "string" || !gathered.has(id))) return hidden("picks evidence Lusong didn't gather");
+  const evidence = [...new Set(parsed.evidence as string[])];
+  if (evidence.length === 0) return hidden("picks no evidence");
+  if (evidence.length > EVIDENCE_MAX_PICKS) return hidden("picks too much");
+  return { shown: true, evidence };
 }
 
 export interface Detour {
@@ -142,7 +99,7 @@ export type InvestigationResult =
       reports: Report[];
       detours: Detour[];
       web: WebEvidence;
-      summary: Summary;
+      pick: EvidencePick;
       toolCalls: { name: string; outcome: string }[];
     }
   | { ok: false; failed: "reports" | "routing" };
@@ -158,7 +115,7 @@ export interface InvestigationInput {
   meter: Meter;
   web: WebEvidence;
   sources: InvestigationSources;
-  /** Why no model is asked at all (e.g. no API key): the rules answer alone and the summary is unavailable. */
+  /** Why no model is asked at all (e.g. no API key): the rules answer alone and the pick is unavailable. */
   modelOff?: string;
 }
 
@@ -169,14 +126,14 @@ export const LOOP_MAX_OUTPUT_TOKENS = 3_000;
 /** A call gets at most this long, and never past the deadline. The probe's slowest function turn took 9.8 s (1 draw). */
 export const LOOP_ATTEMPT_MS = 15_000;
 
-/** A reply calling more tools than this, or an investigation past the total, ends without a summary. */
+/** A reply calling more tools than this, or an investigation past the total, ends without a pick. */
 export const TOOL_CALLS_PER_TURN = 3;
 export const TOOL_CALLS_TOTAL = 5;
 /** Each tool's output, as sent back, in UTF-8 bytes; lists are cut from the end to fit. */
 export const TOOL_RESULT_MAX_BYTES = 2_000;
 /** The check's summary in the first turn, in UTF-8 bytes. */
 export const CONTEXT_MAX_BYTES = 3_000;
-/** The instructions, tool definitions and summary schema together, in UTF-8 bytes; a test holds them to it. */
+/** The instructions, tool definitions and pick schema together, in UTF-8 bytes; a test holds them to it. */
 export const PROMPT_MAX_BYTES = 4_000;
 /**
  * Input the API adds to every call beyond what Lusong sends: the probe's 90-character prompt with one small tool read
@@ -185,7 +142,7 @@ export const PROMPT_MAX_BYTES = 4_000;
 export const FRAMING_TOKENS_PER_CALL = 1_000;
 /** Each function_call_output's framing beyond its text. Not measured; the probe's one output added about 10 tokens. */
 export const ITEM_FRAMING_TOKENS = 50;
-const LAST_TURN_NOTE = "No more tool calls: write the summary now.";
+const LAST_TURN_NOTE = "No more tool calls: pick the evidence now.";
 
 /** A way around is asked for only with this much time left: a cached Valhalla slot and one attempt, with room to explain. */
 export const ROUTE_AROUND_MIN_MS = 12_000;
@@ -248,9 +205,8 @@ const INSTRUCTIONS = [
   "Lusong's rules have already picked the answer and you cannot change it.",
   "Call read_advisory and reports_near_route to see the evidence Lusong gathered.",
   "If the usual way is blocked and you know of another flooded or closed spot, you may call route_around once.",
-  "Then write a summary for the rider as JSON: answer is the answer_id you were given, and one to four plain English",
-  "sentences say why, each citing in evidence the ids it rests on (report and web finding ids, advisory, rain_tap, route ids).",
-  "Do not call any way safe or clear, do not suggest a different answer, and write no markdown or links.",
+  "Then answer with JSON: answer is the answer_id you were given, and evidence lists the one to four ids that best explain",
+  "it to the rider, most important first (report and web finding ids, advisory, rain_tap, route ids).",
 ].join(" ");
 
 const CONTEXT_LEAD = "\n\nThis check: ";
@@ -501,15 +457,15 @@ export async function investigate(input: InvestigationInput): Promise<Investigat
     "rain_tap",
     ...answer.routes.map((r) => r.routeId),
   ]);
-  const summary: Summary =
-    "text" in written ? vetSummary(written.text, answer.answer, gathered) : { shown: false, why: written.unavailable, unavailable: true };
+  const pick: EvidencePick =
+    "text" in written ? vetPick(written.text, answer.answer, gathered) : { shown: false, why: written.unavailable, unavailable: true };
   return {
     ok: true,
     answer,
     reports: [...evidence.reports.values()],
     detours: evidence.detours,
     web: input.web,
-    summary,
+    pick,
     toolCalls,
   };
 }
@@ -559,7 +515,7 @@ async function explain(input: InvestigationInput, evidence: Evidence, runTool: (
         input: turnInput,
         previousResponseId,
         tools: TOOLS,
-        textFormat: SUMMARY_FORMAT,
+        textFormat: PICK_FORMAT,
         maxOutputTokens: LOOP_MAX_OUTPUT_TOKENS,
         attemptTimeoutMs: LOOP_ATTEMPT_MS,
         deadline: input.deadline,

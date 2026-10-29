@@ -1,23 +1,26 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { MuseSummary, WebFindings } from "./commute-muse";
+import { MusePick, WebFindings } from "./commute-muse";
 
 describe("Muse Spark on the commute page", () => {
-  it("its summary is plain text: markup in a sentence is shown, never run", () => {
+  const LABEL = "Muse Spark picked this evidence";
+
+  it("the picked evidence is shown in Lusong's sentences, labelled, as plain text", () => {
     const html = renderToStaticMarkup(
-      <MuseSummary summary={{ shown: true, label: "Muse Spark's summary", sentences: ['<img src=x onerror="alert(1)"> Banilad is flooded.'], note: null }} />,
+      <MusePick pick={{ shown: true, label: LABEL, sentences: ["Nothing reported blocks the other way.", "<b>x</b>"], note: null }} />,
     );
-    expect(html).toContain("Muse Spark&#x27;s summary");
-    expect(html).toContain("&lt;img src=x onerror=&quot;alert(1)&quot;&gt; Banilad is flooded.");
-    expect(html).not.toContain("<img");
+    expect(html).toContain("Muse Spark picked this evidence");
+    expect(html).toContain("Nothing reported blocks the other way.");
+    expect(html).toContain("&lt;b&gt;x&lt;/b&gt;");
+    expect(html).toContain("Muse Spark chose which evidence to show. Lusong wrote these lines, and its rules picked the answer.");
   });
 
-  it("says the explanation is unavailable when Muse Spark failed, and shows nothing when its summary was set aside", () => {
+  it("says the pick is unavailable when Muse Spark failed, and shows nothing when its pick was set aside", () => {
     const unavailable = renderToStaticMarkup(
-      <MuseSummary summary={{ shown: false, label: "Muse Spark's summary", sentences: [], note: "Muse Spark's explanation is unavailable." }} />,
+      <MusePick pick={{ shown: false, label: LABEL, sentences: [], note: "Muse Spark couldn't pick the evidence for this check." }} />,
     );
-    expect(unavailable).toContain("Muse Spark&#x27;s explanation is unavailable.");
-    expect(renderToStaticMarkup(<MuseSummary summary={{ shown: false, label: "Muse Spark's summary", sentences: [], note: null }} />)).toBe("");
+    expect(unavailable).toContain("Muse Spark couldn&#x27;t pick the evidence for this check.");
+    expect(renderToStaticMarkup(<MusePick pick={{ shown: false, label: LABEL, sentences: [], note: null }} />)).toBe("");
   });
 
   it("each web finding shows its link and whether it counts, and the search line", () => {

@@ -5,7 +5,8 @@ import { budgetFromEnv, type Budget } from "./budget";
 import { clientIp } from "./check-handler";
 import { boxAround, lineForTrip } from "./detour";
 import { ageWords, depthWords, MMDA_CREDIT, passabilityLine, phtTime } from "./commute-words";
-import { investigate, investigationReserveMicros, SUMMARY_UNAVAILABLE, webFindingCounts, type InvestigationResult } from "./investigation";
+import { evidenceSentences } from "./evidence-words";
+import { investigate, investigationReserveMicros, PICK_UNAVAILABLE, webFindingCounts, type InvestigationResult } from "./investigation";
 import type { Meter } from "./meta";
 import { fetchRoute, ROUTE_WORST_MS, type Route, type RouteResult, type ValhallaGate } from "./router";
 import { DEMO_TRIPS, sampleReports, scenariosFor, type DemoTripId, type ScenarioId } from "./samples";
@@ -93,10 +94,13 @@ function webForPage(web: WebEvidence, now: Date) {
   };
 }
 
-function summaryForPage(result: Extract<InvestigationResult, { ok: true }>) {
-  const label = "Muse Spark's summary";
-  if (result.summary.shown) return { shown: true, label, sentences: result.summary.sentences.map((s) => s.text), note: null };
-  return { shown: false, label, sentences: [], note: result.summary.unavailable ? SUMMARY_UNAVAILABLE : null };
+/** The evidence Muse Spark picked, each piece described in Lusong's words from its own checked fields. */
+function pickForPage(result: Extract<InvestigationResult, { ok: true }>, facts: { now: Date; advisory: AdvisoryReading; rainingHere: boolean }) {
+  const label = "Muse Spark picked this evidence";
+  const hidden = { shown: false, label, sentences: [] as string[], note: !result.pick.shown && result.pick.unavailable ? PICK_UNAVAILABLE : null };
+  if (!result.pick.shown) return hidden;
+  const sentences = evidenceSentences(result.pick.evidence, { ...facts, reports: result.reports, web: result.web.findings, routes: result.answer.routes });
+  return sentences ? { shown: true, label, sentences, note: null } : hidden;
 }
 
 function fail(status: number, error: string): Response {
@@ -344,7 +348,7 @@ export function makeCommuteHandler(deps: {
           role: j.role,
         };
       }),
-      muse: { summary: summaryForPage(result), web: webForPage(result.web, at) },
+      muse: { pick: pickForPage(result, { now: at, advisory, rainingHere: demo.rainingHere }), web: webForPage(result.web, at) },
       mmdaCredit: MMDA_CREDIT,
     });
   }
