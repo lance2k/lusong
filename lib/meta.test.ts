@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Meter, MetaApiError, segment, transcribe } from "./meta";
+import { readFileSync } from "node:fs";
+import { Meter, MetaApiError, segment, segmentReply, transcribe } from "./meta";
 
 const ok = () => new Response(JSON.stringify({ output: [{ content: [{ type: "output_text", text: "" }] }] }), { status: 200 });
 const busy = (retryAfter?: string) =>
@@ -65,6 +66,31 @@ describe("postJson retries within one deadline", () => {
     vi.stubGlobal("fetch", fetchMock);
     await expect(segment("data:image/jpeg;base64,", "person", -1, new Meter())).rejects.toBeInstanceOf(MetaApiError);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("segmentReply keeps Meta's own status for a SAM reply", () => {
+  beforeEach(() => {
+    process.env.MODEL_API_KEY = "test-key";
+  });
+  afterEach(() => vi.unstubAllGlobals());
+  const reply = (body: object) => vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(body)));
+  const recorded = JSON.parse(readFileSync("test/fixtures/sam/quiapo-1__person.json", "utf8"));
+
+  it("reads a recorded reply as completed, with its text", async () => {
+    reply(recorded);
+    const got = await segmentReply("data:image/jpeg;base64,", "person", Date.now() + 30_000, new Meter());
+    expect(got.status).toBe("completed");
+    expect(got.text).toBe(recorded.output[0].content[0].text);
+  });
+
+  it.each([
+    ["the response says incomplete", { ...recorded, status: "incomplete", incomplete_details: { reason: "max_output_tokens" } }, "incomplete"],
+    ["the message says incomplete under a completed response", { ...recorded, output: [{ ...recorded.output[0], status: "incomplete" }] }, "incomplete"],
+    ["the body carries no status", { output: recorded.output }, null],
+  ])("does not call it completed when %s", async (_case, body, status) => {
+    reply(body);
+    expect((await segmentReply("data:image/jpeg;base64,", "person", Date.now() + 30_000, new Meter())).status).toBe(status);
   });
 });
 

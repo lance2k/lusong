@@ -8,10 +8,14 @@ import { publishPhoto, type PhotoInput } from "./photo-publish";
 import { outputTextOf, parseSamText, type PlacedRaster } from "./sam";
 
 const samText = (name: string) => outputTextOf(JSON.parse(readFileSync(`test/fixtures/sam/${name}.json`, "utf8")));
+/** A SAM call whose reply came back with the Responses API status "completed". */
+const done = (text: string) => ({ ok: true, text, status: "completed" }) as const;
 /** SAM 3.1's recorded reply for `person` on quiapo-1: 7 masks. */
 const personText = samText("quiapo-1__person");
 /** A recorded reply with 12 masks, standing in for plates; the fake blur below never looks at the pixels. */
 const twelveMasks = samText("shah-alam-2021__car");
+/** The recorded person reply cut straight after its first complete object, before the comma that starts the next. */
+const personsCutBetweenObjects = personText.slice(0, personText.indexOf("|>,") + 2);
 const photo = new Uint8Array(readFileSync("test/fixtures/photos/quiapo-1-exif.jpg"));
 const BLURRED = new Uint8Array([0xff, 0xd8, 0xb1, 0x0e, 0xff, 0xd9]);
 
@@ -28,8 +32,8 @@ function fakeBlur(result: "ok" | "throws" = "ok") {
 function input(overrides: Partial<PhotoInput> = {}): PhotoInput {
   return {
     jpeg: photo,
-    persons: { ok: true, text: personText },
-    plates: { ok: true, text: twelveMasks },
+    persons: done(personText),
+    plates: done(twelveMasks),
     store: new MemoryBlobStore(),
     blur: fakeBlur().blur,
     plateDetectionTrusted: true,
@@ -41,7 +45,7 @@ describe("publishPhoto", () => {
   it("keeps every photo hidden while plate detection is untrusted, the default until the probe says otherwise", async () => {
     const store = new MemoryBlobStore();
     const { blur, seen } = fakeBlur();
-    const untold = { jpeg: photo, persons: { ok: true, text: personText }, plates: { ok: true, text: twelveMasks }, store, blur } as const;
+    const untold = { jpeg: photo, persons: done(personText), plates: done(twelveMasks), store, blur } as const;
     expect(await publishPhoto(untold)).toEqual({ published: false, reason: "plate_detection_untrusted" });
     expect(seen).toHaveLength(0);
     expect(store.size).toBe(0);
@@ -61,7 +65,7 @@ describe("publishPhoto", () => {
 
   it("publishes when SAM found no plate and no person, since an empty reply is a valid zero-match result", async () => {
     const { blur, seen } = fakeBlur();
-    const outcome = await publishPhoto(input({ blur, persons: { ok: true, text: "" }, plates: { ok: true, text: "" } }));
+    const outcome = await publishPhoto(input({ blur, persons: done(""), plates: done("") }));
     expect(outcome.published).toBe(true);
     expect(seen[0]).toHaveLength(0);
   });
@@ -69,8 +73,14 @@ describe("publishPhoto", () => {
   it.each([
     ["the person call failed", { persons: { ok: false } }, "person_segmentation_failed"],
     ["the plate call failed", { plates: { ok: false } }, "plate_segmentation_failed"],
-    ["the person reply was cut off (3 of its 7 masks parse)", { persons: { ok: true, text: personText.slice(0, personText.length / 2) } }, "unreadable_masks"],
-    ["the plate reply was cut off", { plates: { ok: true, text: twelveMasks.slice(0, twelveMasks.length / 2) } }, "unreadable_masks"],
+    ["the person reply was cut off (3 of its 7 masks parse)", { persons: done(personText.slice(0, personText.length / 2)) }, "unreadable_masks"],
+    ["the plate reply was cut off", { plates: done(twelveMasks.slice(0, twelveMasks.length / 2)) }, "unreadable_masks"],
+    ["the person reply ends between two objects, so 1 of its 7 masks parses with no error", { persons: done(personsCutBetweenObjects) }, "unreadable_masks"],
+    ["the plate reply is only a cut-off frame header", { plates: done("<0") }, "unreadable_masks"],
+    ["the plate reply is prose instead of segmentation", { plates: done("I found no licence plates in this image.\n") }, "unreadable_masks"],
+    ["the person reply carries a stray text line after its masks", { persons: done(`${personText}note: more people may be hidden\n`) }, "unreadable_masks"],
+    ["Meta marked the person reply incomplete, though its text parses in full", { persons: { ok: true, text: personText, status: "incomplete" } }, "unreadable_masks"],
+    ["Meta gave the plate reply no status at all", { plates: { ok: true, text: twelveMasks, status: null } }, "unreadable_masks"],
     ["there is no blob store yet", { store: null }, "no_store"],
   ] as const)("shows no photo when %s, and stores nothing", async (_case, overrides, reason) => {
     const { blur, seen } = fakeBlur();
@@ -95,7 +105,7 @@ describe("publishPhoto", () => {
 describe("publishPhoto with the real blur", () => {
   it("stores a JPEG in which every person SAM found is wiped, with no EXIF, and never the original", async () => {
     const store = new MemoryBlobStore();
-    const outcome = await publishPhoto({ jpeg: photo, persons: { ok: true, text: personText }, plates: { ok: true, text: "" }, store, blur: blurMasked, plateDetectionTrusted: true });
+    const outcome = await publishPhoto({ jpeg: photo, persons: done(personText), plates: done(""), store, blur: blurMasked, plateDetectionTrusted: true });
     expect(outcome.published).toBe(true);
     const stored = store.get((outcome as { url: string }).url)!;
     expect(Buffer.from(stored).equals(Buffer.from(photo))).toBe(false);

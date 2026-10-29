@@ -1,7 +1,6 @@
-import { formats, recordsOfKind } from "@meta-sam/parser";
 import type { BlobStore } from "./blob-store";
 import { blurMasked } from "./blur";
-import { placeRaster, type PlacedRaster } from "./sam";
+import { readSamReplyStrict, type PlacedRaster, type SamReply } from "./sam";
 
 /**
  * Whether SAM 3.1's plate masks can be relied on to find every plate. Until the plate probe
@@ -10,8 +9,8 @@ import { placeRaster, type PlacedRaster } from "./sam";
  */
 export const PLATE_DETECTION_TRUSTED = false;
 
-/** One SAM call's result: its raw segmentation text, or a failure (error, timeout, budget). */
-export type SamCall = { ok: true; text: string } | { ok: false };
+/** One SAM call's result: its reply with Meta's own completion status, or a failure (error, timeout, budget). */
+export type SamCall = ({ ok: true } & SamReply) | { ok: false };
 
 export type HiddenReason =
   | "plate_detection_untrusted"
@@ -37,23 +36,9 @@ export interface PhotoInput {
   signal?: AbortSignal;
 }
 
-/**
- * Every mask in a SAM reply, or null when the reply can't be trusted to hold them all: a parse error (a cut-off
- * reply parses as fewer masks, with no other sign) or a box with no mask, an object found that can't be blurred.
- */
-function allMasks(text: string): PlacedRaster[] | null {
-  try {
-    const parser = formats.segmentation.image().createParser();
-    parser.push(text);
-    const { result } = parser.finish({ status: "completed" });
-    if (result.diagnostics.some((d) => d.severity === "error")) return null;
-    const masks = recordsOfKind(result.records, "mask");
-    const masked = new Set(masks.map((m) => m.objectId));
-    if (recordsOfKind(result.records, "box").some((box) => !masked.has(box.objectId))) return null;
-    return masks.map(placeRaster);
-  } catch {
-    return null;
-  }
+function allMasks(reply: SamReply): PlacedRaster[] | null {
+  const reading = readSamReplyStrict(reply);
+  return reading.ok ? reading.objects.map((o) => o.placed) : null;
 }
 
 /**
@@ -67,8 +52,8 @@ export async function publishPhoto(input: PhotoInput): Promise<PhotoOutcome> {
   if (!input.store) return hidden("no_store");
   if (!input.persons.ok) return hidden("person_segmentation_failed");
   if (!input.plates.ok) return hidden("plate_segmentation_failed");
-  const persons = allMasks(input.persons.text);
-  const plates = allMasks(input.plates.text);
+  const persons = allMasks(input.persons);
+  const plates = allMasks(input.plates);
   if (!persons || !plates) return hidden("unreadable_masks");
 
   let blurred: Uint8Array;
