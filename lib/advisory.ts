@@ -114,7 +114,7 @@ function riversFor(description: string): string | null {
     .replace(/\.$/, "");
 }
 
-/** CAP 1.2's code lists (OASIS CAP v1.2 §3.2.1, §3.2.2). Anything else is a record Lusong can't read. */
+/** CAP 1.2's code lists (UNVERIFIED: written from memory of the OASIS spec). Anything else is a record Lusong can't read. */
 const STATUSES = new Set(["Actual", "Exercise", "System", "Test", "Draft"]);
 const MSG_TYPES = new Set(["Alert", "Update", "Cancel", "Ack", "Error"]);
 const RESPONSE_TYPES = new Set(["Shelter", "Evacuate", "Prepare", "Execute", "Avoid", "Monitor", "Assess", "AllClear", "None"]);
