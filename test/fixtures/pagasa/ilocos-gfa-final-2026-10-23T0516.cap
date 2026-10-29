@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<alert xmlns="urn:oasis:names:tc:emergency:cap:1.2"><identifier>4cd25719-0f85-43f8-8aa7-8eb83f23e565</identifier><sender>PAGASA-DOST</sender><sent>2026-10-23T05:16:03+08:00</sent><status>Actual</status><msgType>Update</msgType><scope>Public</scope><references>PAGASA-DOST,c0e1085c-7ad8-4686-946e-76b132b175cc,2026-10-22T17:26:07+08:00</references><info><category>Met</category><event>General Flood Advisory (Final)</event><responseType>AllClear</responseType><urgency>Past</urgency><severity>Minor</severity><certainty>Unlikely</certainty><expires>2026-10-23T17:16:03+08:00</expires><senderName>PAGASA-DOST</senderName><headline>General Flood Advisory (Final)</headline><description>Under present weather conditions, At 3:00 AM today, the center of the eye of Typhoon "ROSAL" {CHAMPI} was estimated based on all available data at 280 km East Northeast of Itbayat, Batanes (22.0&#xB0;N, 124.2&#xB0;E) with maximum sustained winds of 155 km/h near the center and gustiness of up to 190 km/h. It is moving Northwestward at 15 km/h.  
+The 12-hour rainfall forecast is Isolated light rains or thunderstorms.  
+WATERCOURSES NO LONGER TO BE AFFECTED :  
+
+ + **Ilocos Norte** - Rivers and its tributaries particularly Bulu, Banban, Bacarra-Vintar, Laoag and Quiaoit.  
+</description><instruction>With this development and unless significant rain occurs, this is the final general flood advisory for this event.</instruction><web>http://www.pagasa.dost.gov.ph/index.php/26-hydromet/1582-flood-forecast-terms-and-symbols</web><contact>PAGASA-DOST</contact><parameter><valueName>layer:Google:Region:0.1</valueName><value>Region 1 (Ilocos Region)</value></parameter><area><areaDesc>Ilocos Norte</areaDesc><polygon>18.579611337753,120.97239650866 18.447321817624,120.96087162877 17.971461724878,120.93175516319 17.826210510328,120.62497007269 17.701856694392,120.53671015583 17.898735531421,120.4449782564 18.084728674882,120.47256388267 18.320140726355,120.59567387022 18.492942504427,120.56599945684 18.530074148568,120.73337350922 18.64808013965,120.85649885388 18.579611337753,120.97239650866</polygon><geocode><valueName>SAME</valueName><value>012800000</value></geocode></area></info><Signature xmlns="http://www.w3.org/2000/09/xmldsig#"><SignedInfo><CanonicalizationMethod Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"/><SignatureMethod Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1"/><Reference URI=""><Transforms><Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/></Transforms><DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"/><DigestValue>qHZ1WNKOAyNl7dyjw3la6Z+AswU=</DigestValue></Reference></SignedInfo><SignatureValue>gghyZ2BXWm0a/Y+yKMgAxewIjRO76gQVTxtW/Bk+hMEJ+gyPLpeD9XiUvpljovvn
+FqFp0TNADCtvj7IfHyRf7q5PexjP1mPJPxtAVrwWXNOMQpExqkLbPFx4nZN1mORj
+OuQdLtouD36Zz3H5+hi9tuiN+vkLM664rfaPOW8ZDoKQwkoaS2STKExDX8zQ58EF
+8Cqr8fuCRpPpiUwSS6bSqVnvK12WHE2EjVPTqaLEEEQ7gOYlG1vyOfWb199EGcaq
+OWPDdDD8hVaqANDZFX5yZJYmQx/WpWuFsnOiP++u2Gyj4Pqu/H+DjAxJ7nNutIGr
+Va6hXbdf4mv9DM3/Pro1ZX6mys1koRgRoihd+fSMtA6m/3qwrt0hcMHkw/D0+8bt
+928qaHU3mXukSojyWjrskCpmvykrDE0tKuVdNIy1HyTtvUp06wYFUNa2PCk2WHsJ
+ir6SwvHRE/uQxaFxVnjN6fRZkZbHxO1hF76isSvD0/64b+iGacQvwYfgwTKU9YM4
+Me/M2UYe3eV+2x3XVMC9uQQDZ9s3fiydj2XCdNbuWcT0jBp/iERxltnnXwrdqC3s
+HA1JV4I0HRRL9Q5zZ3VgjkSDqY4U5Stm/W4wm7RSpcD+ursMcGQxUA5oawBWmnro
++VdFjIW0AHjPT2MfzfALwRreggo4SnUbvOdTLLho3bA=</SignatureValue><KeyInfo><KeyValue>
+<RSAKeyValue>
+<Modulus>
+1pm7X28TTIESx7uWklHbVIlO0Y+fUBZ7LynhaRQ9w1rMsMhF0dNEvUdYBKVF1xPz
+SGD0IrbU6Uemw8Xb/sOy263ZOkSxqWIh3UEluOW7s6J3Hgv8UMDZkWDgj3+m2qWT
+UTgbNO3drHGvlRBg6liD15iNusSdSMw/kqmHxe/9tnStpsHo/u57rsH3/ROTvuz2
+yHD2t7I7zo0Kv7mfAAHodU4QoL8/7c3u29szxRu13M4SRkiLKwbgrwlsMCvXhkys
+oEKlX8/SnXDL8iSPExAiP7xVpfbmh8TNiGvtbjH7Ro2EYjUsEcv9qC7G5jLu7Klt
+8TkTobHqES26/F5/u42Ra3rIDunTxczbIHF1qoumAzdsJmFCBc9D1IKTTWKR3D2J
+eAZfpuvMeOEcpRxBayYf2jOBx8iD8gag5cIZWl2/62IfUxTk92A00M5QrzTocNkg
+0U5K1gN5WmhObUN/3fa/Ob5uriELGzRdzXJ+3QE8FpPmSPJZFA//UWmpJqsboO7p
+AhbB8efPIV42nxjwQEbJdkxUOlfAyPMRGcp4RhmaAnX7KmB33j4klYeNktH+OeV8
+S9q/nMJoA/d76K1hCbo9PJTa/UxwZJYh0LEs1YnHP/5wgydZJcyNjmcu7P5ur90L
+qyr2FB0fZYAmWi6SEaA0F7yi2Y0uqV4FP7dfcbfOf+E=
+</Modulus>
+<Exponent>
+AQAB
+</Exponent>
+</RSAKeyValue>
+</KeyValue></KeyInfo></Signature></alert>

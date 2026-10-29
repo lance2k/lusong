@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<alert xmlns="urn:oasis:names:tc:emergency:cap:1.2"><identifier>e615201c-d5a9-49ed-880e-052a3a781da7</identifier><sender>PAGASA-DOST</sender><sent>2026-10-25T17:29:27+08:00</sent><status>Actual</status><msgType>Update</msgType><scope>Public</scope><references>PAGASA-DOST,7e6bff1d-64df-4f8c-b15a-51880eda0080,2026-10-25T05:18:55+08:00</references><info><category>Met</category><event>General Flood Advisory (Final)</event><responseType>AllClear</responseType><urgency>Past</urgency><severity>Minor</severity><certainty>Unlikely</certainty><expires>2026-10-26T05:29:27+08:00</expires><senderName>PAGASA-DOST</senderName><headline>General Flood Advisory (Final)</headline><description>Under present weather conditions, Intertropical Convergence Zone (ITCZ) affecting Palawan, Visayas and Mindanao.  
+The 12-hour rainfall forecast is Light rains.  
+WATERCOURSES NO LONGER TO BE AFFECTED :  
+
+ + **Negros Occidental** - All rivers and its tributaries  
+ + **Negros Oriental** - All rivers and its tributaries  
+ + **Siquijor** - All rivers and its tributaries  
+</description><instruction>With this development and unless significant rain occurs, this is the final general flood advisory for this event.</instruction><web>http://www.pagasa.dost.gov.ph/index.php/26-hydromet/1582-flood-forecast-terms-and-symbols</web><contact>PAGASA-DOST</contact><parameter><valueName>layer:Google:Region:0.1</valueName><value>Region 18 (Negros Island Region)</value></parameter><area><areaDesc>Negros Occidental</areaDesc><polygon>10.901347972718,123.042413106 10.994360400473,123.24046832042 10.920098326828,123.47804188474 10.791740982125,123.56774646545 10.479970230732,123.42358611901 10.386211545776,123.33796764156 10.277243902558,123.19836010127 9.9096582565999,122.98083449812 9.420367040174,122.61544115566 9.6607192461179,122.40813821834 9.8376148642929,122.37600151601 9.9757165924491,122.45304374021 9.9748334861294,122.65343164021 10.120948095053,122.87259934501 10.356207554474,122.86799519553 10.520807936548,122.79609218844 10.672548788065,122.9472383533 10.881098008359,122.95784422618 10.901347972718,123.042413106</polygon><geocode><valueName>SAME</valueName><value>064500000</value></geocode></area><area><areaDesc>Negros Oriental</areaDesc><polygon>10.386211545776,123.33796764156 10.129487427336,123.2823767267 9.9187565536176,123.16225422233 9.627611376823,123.10952384783 9.3177278959104,123.31563943433 9.2036699782207,123.2852811073 9.0460794757039,123.13058738797 9.0864012672969,122.93461698533 9.3568487705958,122.81576465441 9.420367040174,122.61544115566 9.9096582565999,122.98083449812 10.277243902558,123.19836010127 10.386211545776,123.33796764156</polygon><geocode><valueName>SAME</valueName><value>074600000</value></geocode></area><area><areaDesc>Siquijor</areaDesc><polygon>9.3003910566625,123.60500160846 9.1299952222022,123.69653238092 9.1009137899053,123.56228986462 9.3003910566625,123.60500160846</polygon><geocode><valueName>SAME</valueName><value>076100000</value></geocode></area></info><Signature xmlns="http://www.w3.org/2000/09/xmldsig#"><SignedInfo><CanonicalizationMethod Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"/><SignatureMethod Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1"/><Reference URI=""><Transforms><Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/></Transforms><DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"/><DigestValue>NZadsnyxUHsSaN/AVi+Jz2iDnWE=</DigestValue></Reference></SignedInfo><SignatureValue>CBlefU7x8pDYqnGfA6+whmOvmPHdI2gv0YZk88fZchnOfkLCBwKeqUcMUKVoHIlv
+4aJ3VXaq6yX719Mlmsdp6OhYwg92HcX73IzrhsxNPu7dLIHjSfVTw4rPq4KptKNu
+IvigsV49xvJOwGAry2CCeAUToMsCQUfBT2PLewO5q3t9RgHzQjMmHc9uacvezarE
+R8f02wva7R7BV3QssTZ6yQFRrsSWWAwP7CUdiGa0pzUM5mn/E2qd8MkBp0Tl93jI
+hCwXmmeu+HjpJEhCyx6RS5L0DuHuyj2nSIps3i5bBAD6ibXeYxXCrZ878t5rEWgB
+cd3NEvJIKoz2R9ojRVHOkTLIo8iJmr6DMyCmEbi5xclrNHqUh8YfGlKjDgBvncnH
+9amy3288R+5i43gdug4QeNXQ4D5ao49BocbJsmwHLTF1D3salX8wQ5XTE5CLZpc/
+v5TTS6DiYV/jumhT3lvzHCstK9ciazla1T5XU5fr9Z7B6/704WFm4HYdVD4vpBEQ
+LXmCk50oPhrW9vtctPCNofXzUa8y2wykEF83OkBknXVBP8CVV2VOfFxe01+bf8v7
+9xNOOmCu+HyeBQ4fOsKXZLdViIfsQ1v2VmDfOw0HvIfb9tTdss7Mdsm0AQKijU/O
+NjQ7Gf9fqSyx5QUhlUiFWvv8vIEQ2cFYU701w87/pUk=</SignatureValue><KeyInfo><KeyValue>
+<RSAKeyValue>
+<Modulus>
+1pm7X28TTIESx7uWklHbVIlO0Y+fUBZ7LynhaRQ9w1rMsMhF0dNEvUdYBKVF1xPz
+SGD0IrbU6Uemw8Xb/sOy263ZOkSxqWIh3UEluOW7s6J3Hgv8UMDZkWDgj3+m2qWT
+UTgbNO3drHGvlRBg6liD15iNusSdSMw/kqmHxe/9tnStpsHo/u57rsH3/ROTvuz2
+yHD2t7I7zo0Kv7mfAAHodU4QoL8/7c3u29szxRu13M4SRkiLKwbgrwlsMCvXhkys
+oEKlX8/SnXDL8iSPExAiP7xVpfbmh8TNiGvtbjH7Ro2EYjUsEcv9qC7G5jLu7Klt
+8TkTobHqES26/F5/u42Ra3rIDunTxczbIHF1qoumAzdsJmFCBc9D1IKTTWKR3D2J
+eAZfpuvMeOEcpRxBayYf2jOBx8iD8gag5cIZWl2/62IfUxTk92A00M5QrzTocNkg
+0U5K1gN5WmhObUN/3fa/Ob5uriELGzRdzXJ+3QE8FpPmSPJZFA//UWmpJqsboO7p
+AhbB8efPIV42nxjwQEbJdkxUOlfAyPMRGcp4RhmaAnX7KmB33j4klYeNktH+OeV8
+S9q/nMJoA/d76K1hCbo9PJTa/UxwZJYh0LEs1YnHP/5wgydZJcyNjmcu7P5ur90L
+qyr2FB0fZYAmWi6SEaA0F7yi2Y0uqV4FP7dfcbfOf+E=
+</Modulus>
+<Exponent>
+AQAB
+</Exponent>
+</RSAKeyValue>
+</KeyValue></KeyInfo></Signature></alert>
