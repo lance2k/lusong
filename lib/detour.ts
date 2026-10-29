@@ -63,13 +63,13 @@ function inside(ring: readonly XY[], p: XY): boolean {
 /**
  * True when any segment of the line meets the closed ring or lies inside it. Every segment is tested against every
  * edge, so a long segment that crosses the area with both ends outside it is caught (route points alone would miss it).
+ * A connected line that starts outside can only get in by crossing an edge, so only its first point needs the inside test.
  */
 export function lineEntersArea(line: readonly Point[], ring: readonly Point[]): boolean {
   const r = ring.map(xy);
   const l = line.map(xy);
   if (l.length > 0 && inside(r, l[0])) return true;
   for (let i = 0; i + 1 < l.length; i++) {
-    if (inside(r, l[i + 1])) return true;
     for (let k = 0; k + 1 < r.length; k++) if (segmentsMeet(l[i], l[i + 1], r[k], r[k + 1])) return true;
   }
   return false;

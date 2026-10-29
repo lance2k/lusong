@@ -44,6 +44,13 @@ describe("whether a route enters an excluded area (segment–polygon intersectio
     expect(lineEntersArea([justWest, justNorth], box)).toBe(true);
   });
 
+  it("a segment lying wholly inside the box, crossing no edge, enters it; so does a one-point line inside it", () => {
+    const a = { lat: PROBE_SPOT.lat - 0.0003, lon: PROBE_SPOT.lon };
+    const b = { lat: PROBE_SPOT.lat + 0.0003, lon: PROBE_SPOT.lon };
+    expect(lineEntersArea([a, b], box)).toBe(true);
+    expect(lineEntersArea([PROBE_SPOT], box)).toBe(true);
+  });
+
   it("a segment passing just outside the box, or a point inside it, are told apart", () => {
     const north = ne.lat + 0.0001;
     expect(lineEntersArea([{ lat: north, lon: sw.lon - 0.001 }, { lat: north, lon: ne.lon + 0.001 }], box)).toBe(false);
