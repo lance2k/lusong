@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { FEED_URL } from "./advisory";
-import { ADVISORY_CACHE_MS, makeCommuteHandler, ROUTE_CACHE_MS } from "./commute-handler";
+import { createBudget, MemoryBudgetStore, type Budget } from "./budget";
+import { ADVISORY_CACHE_MS, COMMUTE_RESERVE_MICROS, makeCommuteHandler, ROUTE_CACHE_MS } from "./commute-handler";
 import { makeValhallaGate, MemorySlotStore, VALHALLA_URL, type SlotStore } from "./router";
 
 const read = (path: string) => readFileSync(path, "utf8");
@@ -41,10 +42,12 @@ function network(opts: Options = {}) {
   return { fetch: fetchMock as unknown as typeof fetch, calls, valhallaCalls: () => calls.filter((c) => c.url.startsWith(VALHALLA_URL)) };
 }
 
-function handlerAt(now: Date, opts: Options = {}, store: SlotStore = new MemorySlotStore()) {
+const openBudget = () => createBudget({ store: new MemoryBudgetStore(), budgetUsd: 10, ipLimit: 100 });
+
+function handlerAt(now: Date, opts: Options = {}, store: SlotStore = new MemorySlotStore(), budget: Budget = openBudget()) {
   const net = network(opts);
   const gate = makeValhallaGate(store);
-  const handler = makeCommuteHandler({ fetch: net.fetch, now: () => now, gate: () => gate });
+  const handler = makeCommuteHandler({ fetch: net.fetch, now: () => now, gate: () => gate, budget: () => budget });
   return { handler, ...net };
 }
 
@@ -134,7 +137,7 @@ describe("the demo commute check", () => {
 
   it("a routing gate with no store makes no request and gives no answer", async () => {
     const net = network();
-    const handler = makeCommuteHandler({ fetch: net.fetch, now: () => NO_ADVISORY, gate: () => makeValhallaGate(null) });
+    const handler = makeCommuteHandler({ fetch: net.fetch, now: () => NO_ADVISORY, gate: () => makeValhallaGate(null), budget: openBudget });
     const res = await handler(demo("banilad-itpark", "none"));
     expect(res.status).toBe(503);
     expect((await res.json()).answer).toBeUndefined();
@@ -156,7 +159,7 @@ describe("the demo commute check", () => {
     let now = NO_ADVISORY;
     const net = network();
     const gate = makeValhallaGate(new MemorySlotStore());
-    const handler = makeCommuteHandler({ fetch: net.fetch, now: () => now, gate: () => gate });
+    const handler = makeCommuteHandler({ fetch: net.fetch, now: () => now, gate: () => gate, budget: openBudget });
     await handler(demo("banilad-itpark", "none"));
     await handler(demo("banilad-itpark", "flooded"));
     expect(net.valhallaCalls()).toHaveLength(1);
@@ -170,7 +173,7 @@ describe("the demo commute check", () => {
     let now = NO_ADVISORY;
     const net = network();
     const gate = makeValhallaGate(new MemorySlotStore());
-    const handler = makeCommuteHandler({ fetch: net.fetch, now: () => now, gate: () => gate });
+    const handler = makeCommuteHandler({ fetch: net.fetch, now: () => now, gate: () => gate, budget: openBudget });
     const feedCalls = () => net.calls.filter((c) => c.url === FEED_URL).length;
     await handler(demo("banilad-itpark", "none"));
     await handler(demo("mabolo-cbp", "none"));
@@ -180,11 +183,55 @@ describe("the demo commute check", () => {
     expect(feedCalls()).toBe(2);
 
     const down = network({ feed: "down" });
-    const flaky = makeCommuteHandler({ fetch: down.fetch, now: () => NO_ADVISORY, gate: () => gate });
+    const flaky = makeCommuteHandler({ fetch: down.fetch, now: () => NO_ADVISORY, gate: () => gate, budget: openBudget });
     await flaky(demo("banilad-itpark", "none"));
     await flaky(demo("banilad-itpark", "none"));
     expect(down.calls.filter((c) => c.url === FEED_URL)).toHaveLength(2);
   }, 10_000);
+
+  it("a commute check goes through the daily admission, reserving a small positive amount from the client's address", async () => {
+    const admits: unknown[] = [];
+    const settles: boolean[] = [];
+    const inner = openBudget();
+    const watched: Budget = {
+      admit: (ip, at, reserve) => {
+        admits.push([ip, at.toISOString(), reserve]);
+        return inner.admit(ip, at, reserve);
+      },
+      settle: (a, usage, succeeded) => {
+        settles.push(succeeded);
+        return inner.settle(a, usage, succeeded);
+      },
+    };
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), watched);
+    expect((await handler(demo("banilad-itpark", "none"))).status).toBe(200);
+    expect(Number.isSafeInteger(COMMUTE_RESERVE_MICROS) && COMMUTE_RESERVE_MICROS > 0).toBe(true);
+    expect(admits).toEqual([["192.0.2.1", NO_ADVISORY.toISOString(), COMMUTE_RESERVE_MICROS]]);
+    expect(settles).toEqual([true]);
+  });
+
+  it("a refused commute check returns the admission's response and asks neither PAGASA nor Valhalla", async () => {
+    const tight = createBudget({ store: new MemoryBudgetStore(), budgetUsd: 10, ipLimit: 1 });
+    const { handler, calls } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), tight);
+    expect((await handler(demo("banilad-itpark", "none"))).status).toBe(200);
+    const before = calls.length;
+    const refused = await handler(demo("banilad-itpark", "none"));
+    expect(refused.status).toBe(429);
+    expect(await refused.json()).toEqual({
+      error: "You've used today's checks. They start again at 8:00 a.m. Philippine time.",
+      reason: "ip",
+    });
+    expect(calls.length).toBe(before);
+  });
+
+  it("an unanswered check settles as failed", async () => {
+    const settles: boolean[] = [];
+    const inner = openBudget();
+    const watched: Budget = { admit: inner.admit, settle: (a, u, ok) => (settles.push(ok), inner.settle(a, u, ok)) };
+    const { handler } = handlerAt(NO_ADVISORY, { valhalla: "down" }, new MemorySlotStore(), watched);
+    expect((await handler(demo("banilad-itpark", "none"))).status).toBe(503);
+    expect(settles).toEqual([false]);
+  });
 
   it("only demo checks are taken: anything else is refused before any request, so samples never reach a real check", async () => {
     const { handler, calls } = handlerAt(NO_ADVISORY);

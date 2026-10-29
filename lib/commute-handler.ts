@@ -1,8 +1,14 @@
+import { admit } from "./admission";
 import { readAdvisory, type AdvisoryReading } from "./advisory";
 import { decideAnswer, placeOnRoute, ROUTE_CORRIDOR_M, type AnswerKind } from "./answer";
+import { budgetFromEnv, type Budget } from "./budget";
+import { clientIp } from "./check-handler";
 import { ageWords, depthWords, MMDA_CREDIT, passabilityLine, phtTime } from "./commute-words";
 import { fetchRoute, type Route, type RouteResult, type ValhallaGate } from "./router";
 import { DEMO_TRIPS, SCENARIOS, sampleReports, type DemoTripId, type ScenarioId } from "./samples";
+
+/** The demo check makes no Meta call, so it reserves 1 µ$: enough to pass through the daily admission and its per-address limit. */
+export const COMMUTE_RESERVE_MICROS = 1;
 
 /** A demo trip's plain route is reused this long: the roads don't change, and Valhalla is a shared free server. */
 export const ROUTE_CACHE_MS = 10 * 60_000;
@@ -78,7 +84,13 @@ function thinNote(kind: AnswerKind, reportCount: number, voiceOnly: boolean): st
  * POST /api/commute: the demo commute check. Real trips and real reports arrive in later tickets; until then only
  * demo requests are taken, so sample reports can never reach a real check.
  */
-export function makeCommuteHandler(deps: { fetch?: typeof fetch; now?: () => Date; gate: () => ValhallaGate }) {
+export function makeCommuteHandler(deps: {
+  fetch?: typeof fetch;
+  now?: () => Date;
+  gate: () => ValhallaGate;
+  budget?: () => Budget;
+}) {
+  const budget = deps.budget ?? budgetFromEnv;
   const doFetch: typeof fetch = (...args) => (deps.fetch ?? fetch)(...args);
   const now = deps.now ?? (() => new Date());
   const routes = new Map<DemoTripId, { route: Route; at: number }>();
@@ -110,6 +122,19 @@ export function makeCommuteHandler(deps: { fetch?: typeof fetch; now?: () => Dat
     if (!demo) return fail(400, "Only the demo trips can be checked so far.");
 
     const at = now();
+    const admission = await admit(budget(), { clientIp: clientIp(request), reserveMicros: COMMUTE_RESERVE_MICROS, now: at });
+    if (!admission.ok) return admission.response();
+    let answered = false;
+    try {
+      const response = await answerDemo(demo, at);
+      answered = response.ok;
+      return response;
+    } finally {
+      await admission.run.settle(answered);
+    }
+  };
+
+  async function answerDemo(demo: DemoRequest, at: Date): Promise<Response> {
     const [advisory, routed] = await Promise.all([advisoryAt(at), routeFor(demo.trip, at.getTime())]);
     if (!routed.ok) return Response.json({ error: ROUTE_ERRORS[routed.reason], routing: routed.reason }, { status: 503 });
 
@@ -158,5 +183,5 @@ export function makeCommuteHandler(deps: { fetch?: typeof fetch; now?: () => Dat
       }),
       mmdaCredit: MMDA_CREDIT,
     });
-  };
+  }
 }
