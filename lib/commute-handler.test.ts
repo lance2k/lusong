@@ -7,6 +7,7 @@ import {
   COMMUTE_DEADLINE_MS,
   COMMUTE_RESERVE_MICROS,
   COMMUTE_TIMING,
+  makeCommuteCheck,
   makeCommuteHandler,
   MUSE_OFF,
   ROUTE_CACHE_MS,
@@ -1670,5 +1671,60 @@ describe("the web search runs under the check's one deadline (review ðŸ”´C-1, ðŸ
       expect(calls.compareAndSet).toBe(0);
       expect(calls.get).toBe(2);
     }, 10_000);
+  });
+});
+
+describe("a scheduled check of a stored trip (#10's watcher)", () => {
+  function scheduledAt(now: Date, budget: Budget, reports: ReportStore = new MemoryReportStore()) {
+    const net = network();
+    const gate = makeValhallaGate(new MemorySlotStore());
+    return makeCommuteCheck({ fetch: net.fetch, now: () => now, gate: () => gate, budget: () => budget, reports: () => reports, muse: MUSE_OFF });
+  }
+
+  it("reaches admission with no address, so it counts against the daily cap only", async () => {
+    const budget = openBudget();
+    const admit = vi.spyOn(budget, "admit");
+    const { checkTrip } = scheduledAt(NO_ADVISORY, budget);
+    expect(await checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: Date.now() + 20_000 })).toEqual({ ok: true, kind: "go" });
+    expect(admit).toHaveBeenCalledTimes(1);
+    expect(admit.mock.calls[0][0]).toBeNull();
+    expect(admit.mock.calls[0][2]).toBe(COMMUTE_RESERVE_MICROS);
+  });
+
+  it("runs when every address's limit is used up", async () => {
+    const budget = createBudget({ store: new MemoryBudgetStore(), budgetUsd: 10, ipLimit: 1 });
+    const check = scheduledAt(NO_ADVISORY, budget);
+    expect((await check.POST(real())).status).toBe(200);
+    expect((await check.POST(real())).status).toBe(429);
+    const noAddress = () => new Request("http://localhost/api/commute", { method: "POST", body: JSON.stringify({ mode: "real", from: BANILAD, to: IT_PARK }) });
+    expect((await check.POST(noAddress())).status).toBe(200);
+    expect((await check.POST(noAddress())).status).toBe(429);
+    expect(await check.checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: Date.now() + 20_000 })).toEqual({ ok: true, kind: "go" });
+  });
+
+  it("gives no answer when the daily cap refuses it", async () => {
+    const budget = openBudget();
+    // An open reservation of the whole $10 day: nothing is left for a check.
+    expect((await budget.admit("192.0.2.9", NO_ADVISORY, 10_000_000)).ok).toBe(true);
+    const check = scheduledAt(NO_ADVISORY, budget);
+    expect((await check.POST(real())).status).toBe(503);
+    expect(await check.checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: Date.now() + 20_000 })).toEqual({ ok: false, status: 503 });
+  });
+
+  it("gives no answer when the report store can't be read", async () => {
+    const reports = new MemoryReportStore();
+    reports.recent = async () => {
+      throw new Error("store down");
+    };
+    const { checkTrip } = scheduledAt(NO_ADVISORY, openBudget(), reports);
+    expect(await checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: Date.now() + 20_000 })).toEqual({ ok: false, status: 503 });
+  });
+
+  it("refuses a stored trip outside Metro Cebu without asking admission", async () => {
+    const budget = openBudget();
+    const admit = vi.spyOn(budget, "admit");
+    const { checkTrip } = scheduledAt(NO_ADVISORY, budget);
+    expect(await checkTrip({ from: BANILAD, to: { lat: 35.68, lon: 139.76 } }, { deadline: Date.now() + 20_000 })).toEqual({ ok: false, status: 400 });
+    expect(admit).not.toHaveBeenCalled();
   });
 });

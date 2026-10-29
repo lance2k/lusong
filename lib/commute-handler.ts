@@ -77,7 +77,8 @@ export const ADVISORY_CACHE_MS = 5 * 60_000;
 /** An unreadable reading is reused this long, so demo clicks while PAGASA is down don't each fetch it again. */
 export const UNREADABLE_RETRY_MS = 60_000;
 
-const TITLES: Record<AnswerKind, string> = {
+/** Lusong's fixed answer words: the page's title and the watcher's message use these only. */
+export const TITLES: Record<AnswerKind, string> = {
   go: "Go",
   go_another_way: "Go another way",
   wait: "Wait. Check again in 30 minutes.",
@@ -231,12 +232,7 @@ function thinNote(kind: AnswerKind, reportCount: number, voiceOnly: boolean): st
   return "This answer rests on one report.";
 }
 
-/**
- * POST /api/commute. A demo check uses its trip's sample reports and never reads the report store; a real check uses
- * the stored real reports and never a sample. A real trip is used for this answer only: nothing about it is cached
- * or stored. Both run Muse Spark's investigation the same way.
- */
-export function makeCommuteHandler(deps: {
+type CommuteDeps = {
   fetch?: typeof fetch;
   now?: () => Date;
   gate: () => ValhallaGate;
@@ -244,7 +240,26 @@ export function makeCommuteHandler(deps: {
   reports?: () => ReportStore | null;
   muse?: MuseDeps;
   timing?: CommuteTiming;
-}) {
+};
+
+/** What a scheduled check learns: the answer's kind, or the HTTP status a page would have been given instead. */
+export type ScheduledCheck = { ok: true; kind: AnswerKind } | { ok: false; status: number };
+
+/**
+ * POST /api/commute. A demo check uses its trip's sample reports and never reads the report store; a real check uses
+ * the stored real reports and never a sample. A real trip is used for this answer only: nothing about it is cached
+ * or stored. Both run Muse Spark's investigation the same way.
+ */
+export function makeCommuteHandler(deps: CommuteDeps) {
+  return makeCommuteCheck(deps).POST;
+}
+
+/**
+ * The page's POST and, for the watcher, `checkTrip`: the same real check of a stored trip, Muse Spark's investigation
+ * included, admitted with no address (a scheduled run no client asked for), so it counts against the daily cap and no
+ * address's limit.
+ */
+export function makeCommuteCheck(deps: CommuteDeps) {
   const budget = deps.budget ?? budgetFromEnv;
   const reportStore = deps.reports ?? reportStoreFromEnv;
   const muse = () => deps.muse ?? museFromEnv();
@@ -287,10 +302,9 @@ export function makeCommuteHandler(deps: {
     return reading;
   }
 
-  return async function POST(request: Request): Promise<Response> {
+  async function POST(request: Request): Promise<Response> {
     // Epoch ms, from the first byte. Every step below ends by it; only the settle runs past it, cut off at settleBy.
     const deadline = Date.now() + timing.deadlineMs;
-    const settleBy = deadline + timing.storeCallMs;
 
     const body = await readBody(request, { maxBytes: MAX_BODY_BYTES, deadline });
     if (body === "too_large") return fail(413, "That check is too large.");
@@ -304,7 +318,25 @@ export function makeCommuteHandler(deps: {
     const demo = parseDemo(parsed);
     const realTrip = demo ? null : parseReal(parsed);
     if (!demo && !realTrip) return fail(400, "Send a demo trip, or a real trip whose start and end are both in Metro Cebu.");
+    return admitted(demo ? { demo } : { real: realTrip! }, clientIp(request), deadline);
+  }
 
+  async function checkTrip(trip: { from: Point; to: Point }, opts: { deadline: number }): Promise<ScheduledCheck> {
+    const real = parseReal({ mode: "real", from: trip.from, to: trip.to });
+    if (!real) return { ok: false, status: 400 };
+    // The caller's deadline bounds the settle too, so the check's own deadline is one store call earlier.
+    const response = await admitted({ real }, null, Math.min(opts.deadline - timing.storeCallMs, Date.now() + timing.deadlineMs));
+    if (!response.ok) return { ok: false, status: response.status };
+    const kind = ((await response.json()) as { answer?: { kind?: unknown } }).answer?.kind;
+    return typeof kind === "string" && Object.hasOwn(TITLES, kind) ? { ok: true, kind: kind as AnswerKind } : { ok: false, status: 500 };
+  }
+
+  /**
+   * The check after its request is read, for the page and the watcher alike. `deadline` is epoch ms: every step ends by
+   * it, held in the one CheckRun every step reads; only the settle runs past it, cut off at settleBy.
+   */
+  async function admitted(check: { demo: DemoRequest } | { real: RealRequest }, ip: string | null, deadline: number): Promise<Response> {
+    const settleBy = deadline + timing.storeCallMs;
     const at = now();
     const museDeps = muse();
     const plan: WebPlan = museDeps.enabled ? await planWebSearch(museDeps.searchStore(), at, museDeps.searchBudget(), deadline) : { kind: "off", why: "Muse Spark is off" };
@@ -314,7 +346,7 @@ export function makeCommuteHandler(deps: {
       return fail(503, OUT_OF_TIME);
     }
     const reserveMicros = COMMUTE_RESERVE_MICROS + (museDeps.enabled ? investigationReserveMicros(plan) : 0);
-    const admitting = admit(budget(), { clientIp: clientIp(request), reserveMicros, now: at });
+    const admitting = admit(budget(), { clientIp: ip, reserveMicros, now: at });
     const admission = await beforeDeadline(admitting, deadline);
     if (admission === "late") {
       // Nothing was asked of anyone, so a reservation that lands late is refunded, and the web search given back.
@@ -341,14 +373,16 @@ export function makeCommuteHandler(deps: {
     };
     let answered = false;
     try {
-      const response = demo ? await answerDemo(demo, at, run) : await answerReal(realTrip!, at, run);
+      const response = "demo" in check ? await answerDemo(check.demo, at, run) : await answerReal(check.real, at, run);
       answered = response.ok;
       return response;
     } finally {
       // A settle cut off here keeps the reservation charged: the safe side. A search the check never ran is given back.
       await beforeDeadline(Promise.all([admission.run.settle(answered), run.searched ? null : releaseWebSearch(plan)]), settleBy);
     }
-  };
+  }
+
+  return { POST, checkTrip };
 
   function answerDemo(demo: DemoRequest, at: Date, run: CheckRun): Promise<Response> {
     return answerTrip({
