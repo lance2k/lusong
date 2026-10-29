@@ -150,13 +150,28 @@ interface ValhallaTrip {
   error_code?: number;
 }
 
+const onEarth = (p: Point) => Math.abs(p.lat) <= 90 && Math.abs(p.lon) <= 180;
+
+/** Anything not shaped like a Valhalla trip is null, never a thrown error or a half-read route. */
 function readTrip(body: ValhallaTrip): Route | null {
   const leg = body.trip?.legs?.[0];
   const summary = body.trip?.summary;
-  if (!leg?.shape || typeof summary?.length !== "number" || typeof summary.time !== "number") return null;
-  const line = decodePolyline6(leg.shape);
-  if (line.length < 2) return null;
-  const streets = [...new Set((leg.maneuvers ?? []).flatMap((m) => m.street_names?.slice(0, 1) ?? []))];
+  if (typeof leg?.shape !== "string" || typeof summary?.length !== "number" || typeof summary.time !== "number") return null;
+  let line: Point[];
+  try {
+    line = decodePolyline6(leg.shape);
+  } catch {
+    return null;
+  }
+  if (line.length < 2 || !line.every(onEarth)) return null;
+  const maneuvers: unknown = leg.maneuvers ?? [];
+  if (!Array.isArray(maneuvers)) return null;
+  const streets: string[] = [];
+  for (const m of maneuvers) {
+    const names: unknown = (m as { street_names?: unknown })?.street_names ?? [];
+    if (!Array.isArray(names) || !names.every((n) => typeof n === "string")) return null;
+    if (names.length > 0 && !streets.includes(names[0])) streets.push(names[0]);
+  }
   return { line, lengthKm: summary.length, timeMin: summary.time / 60, streets };
 }
 

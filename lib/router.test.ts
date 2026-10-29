@@ -30,6 +30,12 @@ function valhalla(replies: Reply[]) {
   });
   return { fetch: fetchMock as unknown as typeof fetch, starts };
 }
+/** The saved Banilad route with its leg changed by `edit`. */
+function withLeg(edit: (leg: Record<string, unknown>) => Record<string, unknown>): Response {
+  const body = JSON.parse(PLAIN);
+  body.trip.legs[0] = edit(body.trip.legs[0]);
+  return Response.json(body);
+}
 const ok = (): Reply => () => new Response(PLAIN, { status: 200 });
 const dropped = (): Reply => () => Promise.reject(new TypeError("fetch failed"));
 
@@ -75,6 +81,10 @@ describe("the plain motorbike route from Valhalla", () => {
   it.each([
     { name: "HTTP 503", reply: () => new Response("busy", { status: 503 }) },
     { name: "a body that isn't a trip", reply: () => Response.json({ trip: { legs: [] } }) },
+    { name: "a malformed shape", reply: () => withLeg((leg) => ({ ...leg, shape: "?" })) },
+    { name: "a shape decoding to impossible coordinates", reply: () => withLeg((leg) => ({ ...leg, shape: "~~~~~~~~~~~~~~~~~~~~" })) },
+    { name: "maneuvers that aren't a list", reply: () => withLeg((leg) => ({ ...leg, maneuvers: "left, then right" })) },
+    { name: "street names that aren't strings", reply: () => withLeg((leg) => ({ ...leg, maneuvers: [{ street_names: [7] }] })) },
   ])("$name is unreachable", async ({ reply }) => {
     const { fetch } = valhalla([reply]);
     expect(await fetchRoute({ from: BANILAD, to: IT_PARK }, { fetch, gate: gateOn(new MemorySlotStore()) })).toEqual({
