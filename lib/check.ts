@@ -90,9 +90,11 @@ export async function checkPhoto(
   imageDataUrl: string,
   image: { width: number; height: number },
   meter: Meter,
+  opts: { deadline?: number } = {},
 ): Promise<CheckResult> {
   const started = Date.now();
-  const deadline = started + PIPELINE_BUDGET_MS;
+  /** A caller with its own request deadline (epoch ms) can end the pipeline sooner. */
+  const deadline = Math.min(started + PIPELINE_BUDGET_MS, opts.deadline ?? Infinity);
   // Settle every call before failing, so the meter holds what the others cost.
   const settled = await Promise.allSettled(
     ["flood water", "person", "car", "tire"].map((phrase) => segment(imageDataUrl, phrase, deadline, meter)),

@@ -7,6 +7,8 @@ import { scenariosFor, type DemoTripId } from "./samples";
 import { cutEnd, cutStart, derivedReply } from "../test/valhalla-derived";
 import { CAP_EDITS, CV_GFA5, FEED, feedWith, SAVED } from "../test/pagasa-fixtures";
 import { makeValhallaGate, MemorySlotStore, VALHALLA_URL, type SlotStore } from "./router";
+import { MemoryReportStore, UpstashReportStore, type ReportStore, type StoredReport } from "./report-store";
+import { randomUUID } from "node:crypto";
 
 const read = (path: string) => readFileSync(path, "utf8");
 const ROUTES: Record<string, string> = {
@@ -53,6 +55,9 @@ type Options = {
   /** A reply to send instead of the saved plain route or the saved detour (derived fixtures). */
   plainReply?: string;
   detourReply?: string;
+  /** Hold the plain route's reply this long; a detour that "hangs" answers only when its own timeout aborts it. */
+  plainDelayMs?: number;
+  detourHangs?: boolean;
 };
 
 /** PAGASA and Valhalla faked at fetch with their saved records; any CAP link not saved fails as a dropped connection. */
@@ -68,7 +73,14 @@ function network(opts: Options = {}) {
       if (opts.valhalla === "down") throw new TypeError("fetch failed");
       const sent = JSON.parse(String(init!.body));
       const from = `${sent.locations[0].lat},${sent.locations[0].lon}`;
-      if (!sent.exclude_polygons) return new Response(opts.plainReply ?? ROUTES[from], { status: 200 });
+      if (!sent.exclude_polygons) {
+        if (opts.plainDelayMs) await new Promise((resolve) => setTimeout(resolve, opts.plainDelayMs));
+        return new Response(opts.plainReply ?? ROUTES[from], { status: 200 });
+      }
+      if (opts.detourHangs) {
+        const signal = init!.signal!;
+        return new Promise<Response>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
+      }
       if (opts.detour === "down") throw new TypeError("fetch failed");
       if (opts.detourReply) return new Response(opts.detourReply, { status: 200 });
       if (opts.detour === "no_route") return new Response(NO_ROUTE, { status: 400 });
@@ -84,10 +96,17 @@ function network(opts: Options = {}) {
 
 const openBudget = () => createBudget({ store: new MemoryBudgetStore(), budgetUsd: 10, ipLimit: 100 });
 
-function handlerAt(now: Date, opts: Options = {}, store: SlotStore = new MemorySlotStore(), budget: Budget = openBudget()) {
+function handlerAt(
+  now: Date,
+  opts: Options = {},
+  store: SlotStore = new MemorySlotStore(),
+  budget: Budget = openBudget(),
+  reports: ReportStore | null = new MemoryReportStore(),
+  timing?: Parameters<typeof makeCommuteHandler>[0]["timing"],
+) {
   const net = network(opts);
   const gate = makeValhallaGate(store);
-  const handler = makeCommuteHandler({ fetch: net.fetch, now: () => now, gate: () => gate, budget: () => budget });
+  const handler = makeCommuteHandler({ fetch: net.fetch, now: () => now, gate: () => gate, budget: () => budget, reports: () => reports, timing });
   return { handler, ...net };
 }
 
@@ -322,7 +341,7 @@ describe("the demo commute check", () => {
     expect(settles).toEqual([false]);
   });
 
-  it("only demo checks are taken: anything else is refused before any request, so samples never reach a real check", async () => {
+  it("a malformed check is refused before any request", async () => {
     const { handler, calls } = handlerAt(NO_ADVISORY);
     for (const body of [
       { mode: "real", trip: "banilad-itpark", scenario: "flooded" },
@@ -523,5 +542,256 @@ describe("a route must reach the trip's own start and end (🔴1)", () => {
     const body = await (await handler(demo("banilad-itpark", "no_way_around"))).json();
     expect(body.answer.kind).toBe("wait");
     expect(body.reports[0]).toMatchObject({ onRoute: true, role: "block" });
+  });
+});
+
+/** The demo Banilad → IT Park trip's ends, sent as a real trip: the saved Valhalla replies answer for them. */
+const BANILAD = { lat: 10.346, lon: 123.911 };
+const IT_PARK = { lat: 10.3307, lon: 123.9058 };
+const real = (from = BANILAD, to = IT_PARK, rainingHere = false) => check({ mode: "real", from, to, rainingHere });
+
+/** A real photo report, NPLV, 40 min old, at the same spot as the demo's flooded sample (so the saved detour answers). */
+function storedReport(at: Date, overrides: Partial<StoredReport> = {}): StoredReport {
+  return {
+    id: randomUUID(),
+    kind: "photo",
+    at: { lat: 10.335398, lon: 123.910908 },
+    wayId: null,
+    place: "Governor M. Cuenco Avenue",
+    receivedAt: new Date(at.getTime() - 40 * 60_000).toISOString(),
+    capturedAt: null,
+    verdict: {
+      kind: "measured",
+      rangeCm: { low: 27, high: 39 },
+      passability: "NPLV",
+      confidence: "low",
+      readingsComplete: true,
+      decidedBy: { label: "C1", landmark: "tyre_half", interval: { low: 27, high: 39 } },
+      readingsUsed: ["C1"],
+    },
+    photoHash: "a".repeat(64),
+    ...overrides,
+  };
+}
+
+describe("a real commute check (#6)", () => {
+  it("a real commute check uses a stored real report and never a sample", async () => {
+    const store = new MemoryReportStore();
+    const flooded = storedReport(NO_ADVISORY);
+    await store.save(flooded);
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
+    const res = await handler(real());
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.demo).toBe(false);
+    expect(body.answer.kind).toBe("go_another_way");
+    expect(body.reports).toEqual([expect.objectContaining({ id: flooded.id, sample: false, role: "block", counts: true, onRoute: true })]);
+    expect(body.reports.some((r: { id: string }) => r.id.startsWith("sample-"))).toBe(false);
+    expect(body.detour).not.toBeNull();
+  });
+
+  it("with no stored reports, the same trip is Go: no sample stands in for a report", async () => {
+    const { handler } = handlerAt(NO_ADVISORY);
+    const body = await (await handler(real())).json();
+    expect(body.answer.kind).toBe("go");
+    expect(body.reports).toEqual([]);
+  });
+
+  it("a report on a road the trip doesn't take is left out of the answer: its spot isn't sent to the rider", async () => {
+    const store = new MemoryReportStore();
+    const far = storedReport(NO_ADVISORY, { at: { lat: 10.3143, lon: 123.9147 } });
+    const near = storedReport(NO_ADVISORY, { verdict: { kind: "no_flood" } });
+    await store.save(far);
+    await store.save(near);
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
+    const body = await (await handler(real())).json();
+    expect(body.reports.map((r: { id: string }) => r.id)).toEqual([near.id]);
+    expect(JSON.stringify(body)).not.toContain("123.9147");
+  });
+
+  it("a demo check never uses a real report, and never reads the store", async () => {
+    const store = new MemoryReportStore();
+    await store.save(storedReport(NO_ADVISORY));
+    const recent = vi.spyOn(store, "recent");
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
+    const body = await (await handler(demo("banilad-itpark", "none"))).json();
+    expect(body.answer.kind).toBe("go");
+    expect(body.reports).toEqual([]);
+    expect(recent).not.toHaveBeenCalled();
+  });
+
+  it("a failed report-store read gives no answer, never an empty one", async () => {
+    const store = new MemoryReportStore();
+    store.recent = async () => {
+      throw new Error("Upstash HTTP 500");
+    };
+    const { handler, valhallaCalls } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
+    const res = await handler(real());
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.answer).toBeUndefined();
+    expect(body.error).toMatch(/reports/);
+    expect(valhallaCalls()).toHaveLength(0);
+  });
+
+  it("no report store configured gives no answer", async () => {
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), null);
+    const res = await handler(real());
+    expect(res.status).toBe(503);
+    expect((await res.json()).answer).toBeUndefined();
+  });
+
+  it("goes through the daily admission with the client's address, before any request", async () => {
+    const budget = createBudget({ store: new MemoryBudgetStore(), budgetUsd: 10, ipLimit: 1 });
+    const store = new MemoryReportStore();
+    const recent = vi.spyOn(store, "recent");
+    const { handler, calls } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), budget, store);
+    expect((await handler(real())).status).toBe(200);
+    const before = calls.length;
+    const refused = await handler(real());
+    expect(refused.status).toBe(429);
+    expect(await refused.json()).toMatchObject({ reason: "ip" });
+    expect(calls).toHaveLength(before);
+    expect(recent).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["no start", { mode: "real", to: IT_PARK }],
+    ["a start that isn't a number", { mode: "real", from: { lat: "10.3", lon: 123.9 }, to: IT_PARK }],
+    ["an end outside the Philippines", { mode: "real", from: BANILAD, to: { lat: 35.68, lon: 139.76 } }],
+    ["an end north of Metro Cebu", { mode: "real", from: BANILAD, to: { lat: 10.95, lon: 124.0 } }],
+    ["a rain tap that isn't true or false", { mode: "real", from: BANILAD, to: IT_PARK, rainingHere: "yes" }],
+  ])("%s is refused before any request", async (_why, body) => {
+    const store = new MemoryReportStore();
+    const recent = vi.spyOn(store, "recent");
+    const { handler, calls } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
+    expect((await handler(check(body))).status).toBe(400);
+    expect(calls).toHaveLength(0);
+    expect(recent).not.toHaveBeenCalled();
+  });
+
+  it("a trip outside Metro Cebu is refused before any request: the advisory Lusong reads is Cebu's only", async () => {
+    const store = new MemoryReportStore();
+    const recent = vi.spyOn(store, "recent");
+    const { handler, calls } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
+    // Quezon City to Makati, Metro Manila: PAGASA's Cebu advisory says nothing about it.
+    const res = await handler(real({ lat: 14.676, lon: 121.0437 }, { lat: 14.5547, lon: 121.0244 }));
+    expect(res.status).toBe(400);
+    expect(calls).toHaveLength(0);
+    expect(recent).not.toHaveBeenCalled();
+    // Toledo City, Cebu province but outside Metro Cebu, to Cebu IT Park.
+    expect((await handler(real({ lat: 10.3773, lon: 123.6386 }, IT_PARK))).status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("a Lapu-Lapu → Cebu IT Park trip is taken", async () => {
+    const { handler, valhallaCalls } = handlerAt(NO_ADVISORY);
+    const res = await handler(real({ lat: 10.3103, lon: 123.9494 }, IT_PARK));
+    expect(res.status).not.toBe(400);
+    expect(valhallaCalls()).toHaveLength(1);
+  });
+
+  it("asks Valhalla for the trip as sent", async () => {
+    const { handler, valhallaCalls } = handlerAt(NO_ADVISORY);
+    await handler(real());
+    expect(JSON.parse(valhallaCalls()[0].body!).locations).toEqual([BANILAD, IT_PARK]);
+  });
+});
+
+const upstashUrl = process.env.LUSONG_TEST_UPSTASH_URL;
+const upstashToken = process.env.LUSONG_TEST_UPSTASH_TOKEN ?? "";
+
+/** Every key under the prefix with its value (a string, or a sorted set's members), read with SCAN. */
+async function upstashHeld(prefix: string): Promise<Record<string, unknown>> {
+  const call = async (command: string[]) => {
+    const res = await fetch(upstashUrl!, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${upstashToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify(command),
+    });
+    return ((await res.json()) as { result: unknown }).result;
+  };
+  const out: Record<string, unknown> = {};
+  let cursor = "0";
+  do {
+    const [next, keys] = (await call(["SCAN", cursor, "MATCH", `${prefix}:*`, "COUNT", "1000"])) as [string, string[]];
+    for (const key of keys) out[key] = (await call(["TYPE", key])) === "zset" ? await call(["ZRANGE", key, "0", "-1"]) : await call(["GET", key]);
+    cursor = next;
+  } while (cursor !== "0");
+  return out;
+}
+
+describe.each([
+  ["memory store", () => {
+    const store = new MemoryReportStore();
+    return { store, held: async () => store.dump() as Record<string, unknown> };
+  }],
+  ...(upstashUrl
+    ? [["Upstash store", () => {
+        const prefix = `lusong-test-${randomUUID()}`;
+        return { store: new UpstashReportStore(upstashUrl, upstashToken, prefix) as ReportStore, held: () => upstashHeld(prefix) };
+      }] as const]
+    : []),
+] as [string, () => { store: ReportStore; held: () => Promise<Record<string, unknown>> }][])("after a real check, the %s", (_name, make) => {
+  it("holds nothing about the trip: every key and value is as it was", async () => {
+    const { store, held } = make();
+    await store.save(storedReport(new Date(), { receivedAt: new Date(Date.now() - 40 * 60_000).toISOString() }));
+    const before = await held();
+    expect(Object.keys(before)).toHaveLength(3);
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
+    expect((await handler(real())).status).toBe(200);
+    const after = await held();
+    expect(after).toEqual(before);
+    const everything = JSON.stringify(after);
+    for (const coordinate of ["10.346", "123.911", "10.3307", "123.9058"]) expect(everything).not.toContain(coordinate);
+  });
+});
+
+describe("one deadline for the whole commute check (route maxDuration 60 s)", () => {
+  /** Scaled down from 50 s, 5 s and 2 s so the test runs in seconds. */
+  const timing = { budgetMs: 2_500, storeCallMs: 200, responseMs: 100 };
+
+  it("a slow plain route, then a detour that never answers: no answer, within the budget", async () => {
+    const store = new MemoryReportStore();
+    await store.save(storedReport(NO_ADVISORY));
+    const { handler, valhallaCalls } = handlerAt(NO_ADVISORY, { plainDelayMs: 1_200, detourHangs: true }, new MemorySlotStore(), openBudget(), store, timing);
+    const started = Date.now();
+    const res = await handler(real());
+    expect(Date.now() - started).toBeLessThan(timing.budgetMs);
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.answer).toBeUndefined();
+    expect(body.routing).toBe("out_of_time");
+    expect(valhallaCalls()).toHaveLength(2);
+  }, 30_000);
+
+  it("a demo check's detour that never answers is cut off the same way", async () => {
+    const { handler } = handlerAt(NO_ADVISORY, { plainDelayMs: 1_200, detourHangs: true }, new MemorySlotStore(), openBudget(), new MemoryReportStore(), timing);
+    const started = Date.now();
+    const res = await handler(demo("banilad-itpark", "flooded"));
+    expect(Date.now() - started).toBeLessThan(timing.budgetMs);
+    expect(res.status).toBe(503);
+    expect((await res.json()).answer).toBeUndefined();
+  }, 30_000);
+
+  it("a report store that never answers: no answer, within the budget, and Valhalla isn't asked", async () => {
+    const store = new MemoryReportStore();
+    store.recent = () => new Promise(() => {});
+    const { handler, valhallaCalls } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store, timing);
+    const started = Date.now();
+    const res = await handler(real());
+    expect(Date.now() - started).toBeLessThan(timing.budgetMs);
+    expect(res.status).toBe(503);
+    expect((await res.json()).answer).toBeUndefined();
+    expect(valhallaCalls()).toHaveLength(0);
+  }, 10_000);
+
+  it("the real budget leaves the route's 60 s limit room for the settle and the response", async () => {
+    const { COMMUTE_TIMING } = await import("./commute-handler");
+    // The route module imports through the "@/" alias, which vitest doesn't resolve, so its limit is read from source.
+    const maxDuration = Number(/export const maxDuration = (\d+);/.exec(readFileSync("app/api/commute/route.ts", "utf8"))?.[1]);
+    expect(maxDuration).toBe(60);
+    expect(COMMUTE_TIMING.budgetMs).toBeLessThan(maxDuration * 1_000);
+    expect(COMMUTE_TIMING.storeCallMs).toBeGreaterThanOrEqual(5_000);
   });
 });

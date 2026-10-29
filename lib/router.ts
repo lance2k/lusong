@@ -1,5 +1,6 @@
 import type { Point } from "./answer";
 import { USER_AGENT } from "./advisory";
+import { beforeDeadline } from "./deadline";
 
 /** FOSSGIS's public Valhalla server: free, shared, fair use, no key. */
 export const VALHALLA_URL = "https://valhalla1.openstreetmap.de";
@@ -18,6 +19,8 @@ export const GATE_WAIT_MS = 4_000;
 const GATE_POLL_MS = 100;
 const REQUEST_TIMEOUT_MS = 10_000;
 const ATTEMPTS = 2;
+/** An attempt isn't started with less than this before the caller's deadline. */
+const MIN_ATTEMPT_MS = 500;
 
 /** `SET key 1 NX PX ttl`: true when this caller took the slot. */
 export interface SlotStore {
@@ -114,7 +117,7 @@ export interface Route {
 
 export type RouteResult =
   | { ok: true; route: Route }
-  | { ok: false; reason: "unreachable" | "busy" | "gate_unavailable" | "no_route" };
+  | { ok: false; reason: "unreachable" | "busy" | "gate_unavailable" | "no_route" | "out_of_time" };
 
 export function decodePolyline6(encoded: string): Point[] {
   const out: Point[] = [];
@@ -184,8 +187,9 @@ const NO_PATH = 442;
 
 export async function fetchRoute(
   request: { from: Point; to: Point; excludePolygons?: Point[][] },
-  deps: { fetch: typeof fetch; gate: ValhallaGate },
+  deps: { fetch: typeof fetch; gate: ValhallaGate; deadline?: number },
 ): Promise<RouteResult> {
+  const deadline = deps.deadline ?? Infinity;
   const body = {
     locations: [request.from, request.to],
     costing: "motorcycle",
@@ -193,7 +197,9 @@ export async function fetchRoute(
     directions_options: { units: "kilometers" },
   };
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
-    const gate = await deps.gate.acquire();
+    if (deadline - Date.now() < MIN_ATTEMPT_MS) return { ok: false, reason: "out_of_time" };
+    const gate = await beforeDeadline(deps.gate.acquire(), deadline);
+    if (gate === "late") return { ok: false, reason: "out_of_time" };
     if (gate === "busy") return { ok: false, reason: "busy" };
     if (gate === "unavailable") return { ok: false, reason: "gate_unavailable" };
     let res: Response;
@@ -202,10 +208,11 @@ export async function fetchRoute(
         method: "POST",
         headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT, "X-Client-Id": VALHALLA_CLIENT_ID },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(Math.max(1, Math.min(REQUEST_TIMEOUT_MS, deadline - Date.now()))),
       });
     } catch (err) {
       console.error("Valhalla unreachable:", err instanceof Error ? err.message : err);
+      if (Date.now() >= deadline) return { ok: false, reason: "out_of_time" };
       continue;
     }
     if (res.status >= 500 || res.status === 429) continue;
