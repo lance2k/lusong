@@ -21,7 +21,8 @@ export const ADVISORY_CACHE_MS = 5 * 60_000;
 /** An unreadable reading is reused this long, so demo clicks while PAGASA is down don't each fetch it again. */
 export const UNREADABLE_RETRY_MS = 60_000;
 
-const TITLES: Record<AnswerKind, string> = {
+/** Lusong's fixed answer words: the page's title and the watcher's message use these only. */
+export const TITLES: Record<AnswerKind, string> = {
   go: "Go",
   go_another_way: "Go another way",
   wait: "Wait. Check again in 30 minutes.",
@@ -143,14 +144,27 @@ const MAX_BODY_BYTES = 4 * 1024;
 
 const OUT_OF_TIME = "Lusong ran out of time checking this trip, so it can't give an answer. Try again in a minute.";
 
-export function makeCommuteHandler(deps: {
+type CommuteDeps = {
   fetch?: typeof fetch;
   now?: () => Date;
   gate: () => ValhallaGate;
   budget?: () => Budget;
   reports?: () => ReportStore | null;
   timing?: CommuteTiming;
-}) {
+};
+
+/** What a scheduled check learns: the answer's kind, or the HTTP status a page would have been given instead. */
+export type ScheduledCheck = { ok: true; kind: AnswerKind } | { ok: false; status: number };
+
+export function makeCommuteHandler(deps: CommuteDeps) {
+  return makeCommuteCheck(deps).POST;
+}
+
+/**
+ * The page's POST and, for the watcher, `checkTrip`: the same real check of a stored trip, admitted with no address
+ * (a scheduled run no client asked for), so it counts against the daily cap and no address's limit.
+ */
+export function makeCommuteCheck(deps: CommuteDeps) {
   const timing = deps.timing ?? COMMUTE_TIMING;
   const budget = deps.budget ?? budgetFromEnv;
   const reportStore = deps.reports ?? reportStoreFromEnv;
@@ -192,11 +206,9 @@ export function makeCommuteHandler(deps: {
     return reading;
   }
 
-  return async function POST(request: Request): Promise<Response> {
-    // Epoch ms. The admission and the answer must end in time for the settle, and the settle in time for the response.
+  async function POST(request: Request): Promise<Response> {
     const deadline = Date.now() + timing.budgetMs;
-    const settleBy = deadline - timing.responseMs;
-    const answerBy = settleBy - timing.storeCallMs;
+    const answerBy = deadline - timing.responseMs - timing.storeCallMs;
 
     const body = await readBody(request, { maxBytes: MAX_BODY_BYTES, deadline: answerBy });
     if (body === "too_large") return fail(413, "That check is too large.");
@@ -210,9 +222,24 @@ export function makeCommuteHandler(deps: {
     const demo = parseDemo(parsed);
     const realTrip = demo ? null : parseReal(parsed);
     if (!demo && !realTrip) return fail(400, "Send a demo trip, or a real trip whose start and end are both in Metro Cebu.");
+    return admitted(demo ? { demo } : { real: realTrip! }, clientIp(request), deadline);
+  }
 
+  async function checkTrip(trip: { from: Point; to: Point }, opts: { deadline: number }): Promise<ScheduledCheck> {
+    const real = parseReal({ mode: "real", from: trip.from, to: trip.to });
+    if (!real) return { ok: false, status: 400 };
+    const response = await admitted({ real }, null, Math.min(opts.deadline, Date.now() + timing.budgetMs));
+    if (!response.ok) return { ok: false, status: response.status };
+    const kind = ((await response.json()) as { answer?: { kind?: unknown } }).answer?.kind;
+    return typeof kind === "string" && Object.hasOwn(TITLES, kind) ? { ok: true, kind: kind as AnswerKind } : { ok: false, status: 500 };
+  }
+
+  /** `deadline` is epoch ms. The admission and the answer must end in time for the settle, and the settle in time for the response. */
+  async function admitted(check: { demo: DemoRequest } | { real: RealRequest }, ip: string | null, deadline: number): Promise<Response> {
+    const settleBy = deadline - timing.responseMs;
+    const answerBy = settleBy - timing.storeCallMs;
     const at = now();
-    const admitting = admit(budget(), { clientIp: clientIp(request), reserveMicros: COMMUTE_RESERVE_MICROS, now: at });
+    const admitting = admit(budget(), { clientIp: ip, reserveMicros: COMMUTE_RESERVE_MICROS, now: at });
     const admission = await beforeDeadline(admitting, answerBy);
     if (admission === "late") {
       // Nothing was asked of anyone, so a reservation that lands late is refunded.
@@ -227,14 +254,16 @@ export function makeCommuteHandler(deps: {
     if (!admission.ok) return admission.response();
     let answered = false;
     try {
-      const response = demo ? await answerDemo(demo, at, answerBy) : await answerReal(realTrip!, at, answerBy);
+      const response = "demo" in check ? await answerDemo(check.demo, at, answerBy) : await answerReal(check.real, at, answerBy);
       answered = response.ok;
       return response;
     } finally {
       // A settle cut off here keeps the reservation charged: the safe side.
       await beforeDeadline(admission.run.settle(answered), settleBy);
     }
-  };
+  }
+
+  return { POST, checkTrip };
 
   function answerDemo(demo: DemoRequest, at: Date, deadline: number): Promise<Response> {
     return answerTrip({
