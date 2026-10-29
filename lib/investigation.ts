@@ -14,7 +14,7 @@ export type { WebEvidence, WebFinding } from "./web-search";
  * The check's evidence is gathered here deterministically, whatever the model does: the reports along every route that
  * is judged, through `sources`, and the advisory the caller read. The model's tool calls only add to it: a way around
  * spots it names, judged by the same rules on deterministically gathered reports. The answer rules pick the answer; the
- * model writes the explanation, which is replaced by the rules' own reason when it disagrees.
+ * model writes a summary citing the evidence, shown below the rules' own reason only when it agrees with it.
  */
 
 export type ReportsResult = { ok: true; reports: Report[] } | { ok: false };
@@ -27,41 +27,105 @@ export interface InvestigationSources {
   routeAround(spots: readonly Point[]): Promise<AroundResult>;
 }
 
-export type Explanation =
-  | { by: "muse_spark"; text: string }
-  | { by: "rules"; text: string; why: string }
-  | { by: "unavailable"; text: string; why: string };
-
-export const EXPLANATION_UNAVAILABLE = "Muse Spark's explanation is unavailable.";
-
-/** "A few plain sentences": longer than this is not shown. */
-export const EXPLANATION_MAX_CHARS = 600;
-export const EXPLANATION_MAX_SENTENCES = 5;
+export interface SummarySentence {
+  text: string;
+  /** Ids of the gathered evidence the sentence rests on: report and web finding ids, advisory, rain_tap, route ids. */
+  evidence: string[];
+}
 
 /**
- * Phrases that tell the rider to do what an answer says. Matching is deliberately broad: a false match only swaps the
- * model's words for the rules' own reason.
+ * Muse Spark's summary, shown labelled below the rules' own reason, which is always shown first. `unavailable` is
+ * true when the model failed or ran out of time, so the page says so; a summary that fails its checks is just not shown.
  */
+export type Summary = { shown: true; sentences: SummarySentence[] } | { shown: false; why: string; unavailable: boolean };
+
+export const SUMMARY_UNAVAILABLE = "Muse Spark's explanation is unavailable.";
+export const SUMMARY_MAX_SENTENCES = 4;
+export const SENTENCE_MAX_CHARS = 200;
+
+const ANSWER_KINDS: AnswerKind[] = ["go", "go_another_way", "wait", "no_one_knows"];
+
+const SUMMARY_FORMAT = {
+  type: "json_schema" as const,
+  name: "lusong_summary",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["answer", "sentences"],
+    properties: {
+      answer: { type: "string", enum: ANSWER_KINDS },
+      sentences: {
+        type: "array",
+        maxItems: SUMMARY_MAX_SENTENCES,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["text", "evidence"],
+          properties: { text: { type: "string" }, evidence: { type: "array", items: { type: "string" } } },
+        },
+      },
+    },
+  },
+};
+
+/** Lusong never uses MMDA's "passable to all types of vehicles", whatever the answer. */
+const PATV = /passable to all (types of )?vehicles|\bPATV\b/i;
+/**
+ * Words that tell a rider the way is fine to take, in English, Tagalog and Cebuano. Left to a Go. Matching is broad on
+ * purpose: a false match only hides the summary, and the rules' reason is shown anyway.
+ */
+const GO_WORDS =
+  /\b(go now|go ahead|you can go|good to go|ok(ay)? to go|fine to go|safe to go|leave now|you can leave|proceed\w*|no need to wait|(don'?t|do not|needn'?t) (need to )?wait|safe|safely|safer|clear|cleared|passable|ligtas|luwas|pwede|puwede|pede|walang baha|wala'?y baha|walay baha|agi na|sige|lakaw na|larga na|tara na|okay na|ok na|makaagi|maka-agi)\b/i;
+/** Phrases that name an answer, so a sentence can't argue for another one. */
 const NAMES_ANSWER: Record<AnswerKind, RegExp> = {
-  go: /\b(you can go|go now|good to go|ok(ay)? to go|fine to go|safe to go|go ahead|leave now|you can leave)\b/i,
+  go: /\b(you can go|go now|good to go|ok(ay)? to go|go ahead|leave now)\b/i,
   go_another_way: /\b(go another way|(take|use) (the|another|a) ((other|different) )?(way|route|road|detour))\b/i,
   wait: /\b(wait|hold off|don'?t (go|leave|ride)|stay (home|put|inside))\b/i,
   no_one_knows: /\b(no one knows|nobody knows)\b/i,
 };
-/** Calling a way safe or clear is left to a Go. English, Tagalog ligtas and Cebuano luwas. */
-const SAFE_OR_CLEAR = /\b(safe|safely|clear|cleared|ligtas|luwas)\b/i;
 
-/** The model's explanation as shown, or the rules' own reason when it is empty, too long or disagrees with the answer. */
-export function vetExplanation(text: string, answer: AnswerKind, rulesReason: string): Explanation {
-  const shown = text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim();
-  const rules = (why: string): Explanation => ({ by: "rules", text: rulesReason, why });
-  if (shown === "") return rules("empty");
-  const sentences = shown.split(/[.!?]+(?:\s|$)/).filter((part) => part.trim() !== "").length;
-  if (shown.length > EXPLANATION_MAX_CHARS || sentences > EXPLANATION_MAX_SENTENCES) return rules("too long");
-  const others = (Object.keys(NAMES_ANSWER) as AnswerKind[]).filter((kind) => kind !== answer);
-  if (others.some((kind) => NAMES_ANSWER[kind].test(shown))) return rules("names another answer");
-  if (answer !== "go" && SAFE_OR_CLEAR.test(shown)) return rules("calls the way safe or clear");
-  return { by: "muse_spark", text: shown };
+function flat(text: string): string {
+  return text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function parseSummary(text: string): { answer: unknown; sentences: { text: unknown; evidence: unknown }[] } | null {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start < 0 || end < start) return null;
+  try {
+    const parsed = JSON.parse(text.slice(start, end + 1));
+    if (typeof parsed !== "object" || parsed === null || !Array.isArray(parsed.sentences)) return null;
+    if (!parsed.sentences.every((s: unknown) => typeof s === "object" && s !== null)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The model's summary, shown only when its answer field is the rules' answer, every sentence cites gathered evidence,
+ * it is within bounds, and no sentence tells the rider to go when the answer isn't Go.
+ */
+export function vetSummary(text: string, answer: AnswerKind, gathered: ReadonlySet<string>): Summary {
+  const hidden = (why: string): Summary => ({ shown: false, why, unavailable: false });
+  const parsed = parseSummary(text);
+  if (!parsed) return hidden("unreadable");
+  if (parsed.answer !== answer) return hidden("names another answer");
+  if (parsed.sentences.length > SUMMARY_MAX_SENTENCES) return hidden("too long");
+  const sentences = parsed.sentences.map((s) => ({
+    text: typeof s.text === "string" ? flat(s.text) : "",
+    evidence: Array.isArray(s.evidence) ? s.evidence.filter((id): id is string => typeof id === "string") : [],
+  }));
+  if (sentences.length === 0 || sentences.some((s) => s.text === "")) return hidden("empty");
+  if (sentences.some((s) => s.text.length > SENTENCE_MAX_CHARS)) return hidden("too long");
+  if (sentences.some((s) => s.evidence.length === 0)) return hidden("a sentence cites no evidence");
+  if (sentences.some((s) => s.evidence.some((id) => !gathered.has(id)))) return hidden("cites evidence Lusong didn't gather");
+  const words = sentences.map((s) => s.text).join(" ");
+  if (PATV.test(words)) return hidden("PATV wording");
+  if (answer !== "go" && GO_WORDS.test(words)) return hidden("tells the rider to go");
+  if (ANSWER_KINDS.some((kind) => kind !== answer && NAMES_ANSWER[kind].test(words))) return hidden("names another answer");
+  return { shown: true, sentences };
 }
 
 export interface Detour {
@@ -78,7 +142,7 @@ export type InvestigationResult =
       reports: Report[];
       detours: Detour[];
       web: WebEvidence;
-      explanation: Explanation;
+      summary: Summary;
       toolCalls: { name: string; outcome: string }[];
     }
   | { ok: false; failed: "reports" | "routing" };
@@ -103,14 +167,14 @@ export const LOOP_MAX_OUTPUT_TOKENS = 3_000;
 /** A call gets at most this long, and never past the deadline. The probe's slowest function turn took 9.8 s (1 draw). */
 export const LOOP_ATTEMPT_MS = 15_000;
 
-/** A reply calling more tools than this, or an investigation past the total, ends without an explanation. */
+/** A reply calling more tools than this, or an investigation past the total, ends without a summary. */
 export const TOOL_CALLS_PER_TURN = 3;
 export const TOOL_CALLS_TOTAL = 5;
 /** Each tool's output, as sent back, in UTF-8 bytes; lists are cut from the end to fit. */
 export const TOOL_RESULT_MAX_BYTES = 2_000;
 /** The check's summary in the first turn, in UTF-8 bytes. */
 export const CONTEXT_MAX_BYTES = 3_000;
-/** The instructions and tool definitions together, in UTF-8 bytes; a test holds them to it. */
+/** The instructions, tool definitions and summary schema together, in UTF-8 bytes; a test holds them to it. */
 export const PROMPT_MAX_BYTES = 4_000;
 /**
  * Input the API adds to every call beyond what Lusong sends: the probe's 90-character prompt with one small tool read
@@ -127,7 +191,7 @@ export const SEARCH_INPUT_TOKEN_BOUND = 200_000;
  */
 export const SEARCH_QUERIES_RESERVED = 22;
 
-const LAST_TURN_NOTE = "No more tool calls: write the explanation now.";
+const LAST_TURN_NOTE = "No more tool calls: write the summary now.";
 
 /**
  * Model calls (the web search included) must finish this long after the check starts. Valhalla requests are bounded
@@ -199,7 +263,8 @@ const INSTRUCTIONS = [
   "Lusong's rules have already picked the answer and you cannot change it.",
   "Call read_advisory and reports_near_route to see the evidence Lusong gathered.",
   "If the usual way is blocked and you know of another flooded or closed spot, you may call route_around once.",
-  "Then write the explanation: two to four plain English sentences saying why the answer is what it is.",
+  "Then write a summary for the rider as JSON: answer is the answer_id you were given, and one to four plain English",
+  "sentences say why, each citing in evidence the ids it rests on (report and web finding ids, advisory, rain_tap, route ids).",
   "Do not call any way safe or clear, do not suggest a different answer, and write no markdown or links.",
 ].join(" ");
 
@@ -290,6 +355,10 @@ class Evidence {
     });
   }
 
+  get rainingHere(): boolean {
+    return this.input.rainingHere;
+  }
+
   lineOf(routeId: string): Point[] | null {
     if (routeId === "plain") return this.input.plainLine;
     return this.detours.find((d) => d.id === routeId)?.line ?? null;
@@ -350,7 +419,7 @@ export async function investigate(input: InvestigationInput): Promise<Investigat
     switch (call.name) {
       case "read_advisory":
         toolCalls.push({ name: call.name, outcome: "read" });
-        return advisoryView(input.advisory);
+        return { id: "advisory", ...advisoryView(input.advisory) };
       case "reports_near_route": {
         const routeId = typeof args.route === "string" ? args.route : "";
         const answer = evidence.answer();
@@ -367,6 +436,7 @@ export async function investigate(input: InvestigationInput): Promise<Investigat
           reports: judged.reportIds.map((id) => {
             const r = evidence.reports.get(id)!;
             return {
+              id: r.id,
               place: r.place,
               kind: r.reading.source,
               says: says(r),
@@ -435,17 +505,22 @@ export async function investigate(input: InvestigationInput): Promise<Investigat
     throw err;
   }
   const answer = evidence.answer();
-  const explanation: Explanation =
-    "text" in written
-      ? vetExplanation(written.text, answer.answer, answer.reason)
-      : { by: "unavailable", text: EXPLANATION_UNAVAILABLE, why: written.unavailable };
+  const gathered = new Set([
+    ...evidence.reports.keys(),
+    ...input.web.findings.map((f) => f.id),
+    "advisory",
+    ...(input.rainingHere ? ["rain_tap"] : []),
+    ...answer.routes.map((r) => r.routeId),
+  ]);
+  const summary: Summary =
+    "text" in written ? vetSummary(written.text, answer.answer, gathered) : { shown: false, why: written.unavailable, unavailable: true };
   return {
     ok: true,
     answer,
     reports: [...evidence.reports.values()],
     detours: evidence.detours,
     web: input.web,
-    explanation,
+    summary,
     toolCalls,
   };
 }
@@ -476,11 +551,13 @@ function contextOf(evidence: Evidence, web: WebEvidence) {
   const answer = evidence.answer();
   return {
     answer: ANSWER_WORDS[answer.answer],
+    answer_id: answer.answer,
     reason: answer.reason,
+    rain_tap: evidence.rainingHere,
     routes: answer.routes.map((r) => ({ id: r.routeId, state: r.state })),
     web: {
       state: web.state,
-      closures: web.findings.map((f) => ({ place: f.place, source_date: f.sourceDate, placed_on_map: f.at !== null })),
+      closures: web.findings.map((f) => ({ id: f.id, place: f.place, source_date: f.sourceDate, placed_on_map: f.at !== null })),
     },
   };
 }
@@ -499,6 +576,7 @@ async function explain(input: InvestigationInput, evidence: Evidence, runTool: (
         input: turnInput,
         previousResponseId,
         tools: TOOLS,
+        textFormat: SUMMARY_FORMAT,
         maxOutputTokens: LOOP_MAX_OUTPUT_TOKENS,
         attemptTimeoutMs: LOOP_ATTEMPT_MS,
         deadline: input.deadline,

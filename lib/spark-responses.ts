@@ -75,6 +75,8 @@ export async function respond(request: {
   input: string | { type: "function_call_output"; call_id: string; output: string }[];
   previousResponseId?: string;
   tools: readonly (FunctionTool | { type: "web_search" })[];
+  /** Structured output for the final message (`text.format`). Not yet measured on Meta's Responses API. */
+  textFormat?: { type: "json_schema"; name: string; schema: object; strict: boolean };
   maxOutputTokens: number;
   attemptTimeoutMs: number;
   deadline: number;
@@ -85,6 +87,7 @@ export async function respond(request: {
       input: request.input,
       ...(request.previousResponseId ? { previous_response_id: request.previousResponseId } : {}),
       tools: request.tools,
+      ...(request.textFormat ? { text: { format: request.textFormat } } : {}),
       max_output_tokens: request.maxOutputTokens,
     },
     request.attemptTimeoutMs,
