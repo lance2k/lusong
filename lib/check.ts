@@ -105,6 +105,8 @@ export async function checkPhoto(
   if (failed) throw failed.reason;
   const replies = settled.map((s) => (s as PromiseFulfilledResult<SamReply>).value);
   const [waterText, personText, carText, tyreText] = replies.map((r) => r.text);
+  // A failed or malformed reply has empty text that would parse as "found nothing", so it must not count as complete.
+  const samComplete = replies.every((r) => r.status === "completed");
   const segmented = Date.now();
 
   const water = parseSamText(waterText);
@@ -136,7 +138,7 @@ export async function checkPhoto(
     ? { kind: "cannot_measure", reason: "too_crowded" }
     : decideVerdict({
         readings: model?.readings ?? [],
-        readingsComplete: (model?.problems.length ?? 0) === 0,
+        readingsComplete: samComplete && (model?.problems.length ?? 0) === 0,
         waterFound: water.length > 0,
         modelSaysFlooded: model?.modelSaysFlooded ?? false,
         tyreEstimates: tyres,
