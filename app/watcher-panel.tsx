@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type { Trip } from "./trip";
-import { createWatcherStore, watchesTrip, watchOnRequest, type SavedWatcher, type WindowInput } from "./watcher";
+import { createWatcherStore, switchOnWatcher, watchesTrip, type SavedWatcher, type WatchCall, type WindowInput } from "./watcher";
 
 let store: ReturnType<typeof createWatcherStore> | null = null;
 
@@ -24,10 +24,10 @@ const savedWatcher = () => watcherStore().get();
 
 type Status = "unknown" | "waiting" | "linked";
 
-async function callWatch(body: object): Promise<{ status: number; body: Record<string, unknown> | null }> {
+const callWatch: WatchCall = async (body) => {
   const res = await fetch("/api/watch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   return { status: res.status, body: await res.json().catch(() => null) };
-}
+};
 
 const button = "min-h-11 rounded-full border border-zinc-300 px-4 text-sm font-medium disabled:opacity-60 dark:border-zinc-700";
 
@@ -79,20 +79,9 @@ export function WatcherPanel({ trip }: { trip: Trip | null }) {
 
   const switchOn = () =>
     act(async () => {
-      const { status: code, body } = await callWatch(watchOnRequest(trip!, hours));
-      if (code !== 200 || typeof body?.watcher !== "string") {
-        setMessage(typeof body?.error === "string" ? body.error : "Lusong couldn't switch the watcher on. Try again in a minute.");
-        return;
-      }
-      const saved: SavedWatcher = {
-        token: body.watcher,
-        window: hours,
-        trip: trip!,
-        link: typeof body.link === "string" ? body.link : null,
-        linkExpiresAt: typeof body.linkExpiresAt === "string" ? body.linkExpiresAt : null,
-      };
-      setStatus("waiting");
-      watcherStore().save(saved);
+      const result = await switchOnWatcher({ call: callWatch, store: watcherStore(), trip: trip!, window: hours });
+      if (result.ok) setStatus("waiting");
+      else setMessage(result.message);
     });
 
   const relink = (w: SavedWatcher) =>

@@ -107,3 +107,51 @@ export function createWatcherStore(storage: TripStorage | null, events: StorageE
     },
   };
 }
+
+export type WatcherStore = ReturnType<typeof createWatcherStore>;
+export type WatchCall = (body: object) => Promise<{ status: number; body: Record<string, unknown> | null }>;
+
+const SWITCH_OFF_TRIES = 3;
+const KEEP_IT = "Allow this site to store data (private browsing blocks it) and try again.";
+
+/**
+ * The panel's switch-on. The token is the only way to switch the watcher off, so when the phone won't keep it the
+ * watcher is switched off again at once, with the token still in memory, and no Telegram link is shown: otherwise
+ * closing the page would leave the trip on the server, messaging the rider, with nothing able to delete it.
+ */
+export async function switchOnWatcher(deps: {
+  call: WatchCall;
+  store: WatcherStore;
+  trip: Trip;
+  window: WindowInput;
+  retryMs?: number;
+}): Promise<{ ok: true } | { ok: false; message: string }> {
+  const { status, body } = await deps.call(watchOnRequest(deps.trip, deps.window));
+  if (status !== 200 || typeof body?.watcher !== "string") {
+    return { ok: false, message: typeof body?.error === "string" ? body.error : "Lusong couldn't switch the watcher on. Try again in a minute." };
+  }
+  const saved: SavedWatcher = {
+    token: body.watcher,
+    window: deps.window,
+    trip: deps.trip,
+    link: typeof body.link === "string" ? body.link : null,
+    linkExpiresAt: typeof body.linkExpiresAt === "string" ? body.linkExpiresAt : null,
+  };
+  if (deps.store.save(saved)) return { ok: true };
+
+  deps.store.clear();
+  for (let i = 0; i < SWITCH_OFF_TRIES; i += 1) {
+    if (i > 0) await new Promise((resolve) => setTimeout(resolve, deps.retryMs ?? 1_000));
+    const off = await deps.call({ action: "off", watcher: saved.token }).catch(() => null);
+    if (off?.status === 200) {
+      return {
+        ok: false,
+        message: `This browser wouldn't keep the watcher's key, and without it the watcher couldn't be switched off later, so Lusong switched it off again. ${KEEP_IT}`,
+      };
+    }
+  }
+  return {
+    ok: false,
+    message: `This browser wouldn't keep the watcher's key, and Lusong couldn't switch the watcher off again. With no Telegram chat linked it sends nothing, and Lusong deletes it in 30 days. ${KEEP_IT}`,
+  };
+}
