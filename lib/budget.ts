@@ -45,11 +45,12 @@ export type Admission = Admitted | { ok: false; reason: RefusalReason };
 
 export interface BudgetStore {
   /** Atomic: admits only if the IP's count stays within ipLimit and spend + reserve stays within the
-   *  budget, then records both plus the reservation under `id`. A refusal changes nothing. */
+   *  budget, then records both plus the reservation under `id`. A refusal changes nothing. A null
+   *  ipKey (a run no client asked for) skips the IP count entirely. */
   admit(a: {
     id: string;
     day: string;
-    ipKey: string;
+    ipKey: string | null;
     reserveMicros: number;
     budgetMicros: number;
     ipLimit: number;
@@ -60,7 +61,8 @@ export interface BudgetStore {
 }
 
 export interface Budget {
-  admit(ip: string, now: Date): Promise<Admission>;
+  /** A null ip is a scheduled run: it reserves against the daily budget and no address's limit. */
+  admit(ip: string | null, now: Date, reserveMicros?: number): Promise<Admission>;
   /** Never throws: a settle that fails leaves the whole reservation charged. */
   settle(admission: Admitted, usage: MeteredUsage, succeeded: boolean): Promise<void>;
 }
@@ -78,7 +80,7 @@ export function createBudget(options: { store: BudgetStore | null; budgetUsd: nu
   const { store, ipLimit } = options;
   const budgetMicros = Math.floor(options.budgetUsd * 1e6);
   return {
-    async admit(ip, now) {
+    async admit(ip, now, reserveMicros = RESERVE_MICROS) {
       if (!store || !Number.isFinite(budgetMicros) || budgetMicros <= 0) return { ok: false, reason: "unavailable" };
       const day = utcDay(now);
       const id = randomUUID();
@@ -87,8 +89,8 @@ export function createBudget(options: { store: BudgetStore | null; budgetUsd: nu
         outcome = await store.admit({
           id,
           day,
-          ipKey: ipKeyFor(day, ip),
-          reserveMicros: RESERVE_MICROS,
+          ipKey: ip === null ? null : ipKeyFor(day, ip),
+          reserveMicros,
           budgetMicros,
           ipLimit,
         });
@@ -96,7 +98,7 @@ export function createBudget(options: { store: BudgetStore | null; budgetUsd: nu
         console.error("budget store unreachable on admit:", err instanceof Error ? err.message : err);
         return { ok: false, reason: "unavailable" };
       }
-      return outcome === "admitted" ? { ok: true, id, day, reservedMicros: RESERVE_MICROS } : { ok: false, reason: outcome };
+      return outcome === "admitted" ? { ok: true, id, day, reservedMicros: reserveMicros } : { ok: false, reason: outcome };
     },
 
     async settle(admission, usage, succeeded) {
@@ -151,12 +153,12 @@ export class MemoryBudgetStore implements BudgetStore {
 
   async admit(a: Parameters<BudgetStore["admit"]>[0]) {
     const spent = this.spent.get(a.day) ?? 0;
-    const ipKey = `${a.day}:${a.ipKey}`;
-    const ipCount = this.perIp.get(ipKey) ?? 0;
+    const ipKey = a.ipKey === null ? null : `${a.day}:${a.ipKey}`;
+    const ipCount = ipKey === null ? 0 : (this.perIp.get(ipKey) ?? 0);
     if (spent + a.reserveMicros > a.budgetMicros) return "budget" as const;
-    if (ipCount + 1 > a.ipLimit) return "ip" as const;
+    if (ipKey !== null && ipCount + 1 > a.ipLimit) return "ip" as const;
     this.spent.set(a.day, spent + a.reserveMicros);
-    this.perIp.set(ipKey, ipCount + 1);
+    if (ipKey !== null) this.perIp.set(ipKey, ipCount + 1);
     this.reservations.set(a.id, { day: a.day, reserved: a.reserveMicros });
     return "admitted" as const;
   }
@@ -170,17 +172,20 @@ export class MemoryBudgetStore implements BudgetStore {
   }
 }
 
+/** KEYS are spend, then the IP count unless the run has no address, then the reservation. */
 const ADMIT_SCRIPT = `
+local hasIp = #KEYS == 3
 local spent = tonumber(redis.call('GET', KEYS[1]) or '0')
-local count = tonumber(redis.call('GET', KEYS[2]) or '0')
 local reserve, budget, limit, ttl = tonumber(ARGV[1]), tonumber(ARGV[2]), tonumber(ARGV[3]), tonumber(ARGV[4])
 if spent + reserve > budget then return 'budget' end
-if count + 1 > limit then return 'ip' end
+if hasIp and tonumber(redis.call('GET', KEYS[2]) or '0') + 1 > limit then return 'ip' end
 redis.call('INCRBY', KEYS[1], reserve)
 redis.call('EXPIRE', KEYS[1], ttl)
-redis.call('INCR', KEYS[2])
-redis.call('EXPIRE', KEYS[2], ttl)
-redis.call('SET', KEYS[3], reserve .. ':' .. ARGV[5], 'EX', ttl)
+if hasIp then
+  redis.call('INCR', KEYS[2])
+  redis.call('EXPIRE', KEYS[2], ttl)
+end
+redis.call('SET', KEYS[#KEYS], reserve .. ':' .. ARGV[5], 'EX', ttl)
 return 'admitted'
 `;
 
@@ -222,9 +227,10 @@ export class UpstashBudgetStore implements BudgetStore {
   }
 
   async admit(a: Parameters<BudgetStore["admit"]>[0]) {
+    const ipKeys = a.ipKey === null ? [] : [`${this.prefix}:ip:${a.day}:${a.ipKey}`];
     const result = await this.evalScript(
       ADMIT_SCRIPT,
-      [`${this.prefix}:spent:${a.day}`, `${this.prefix}:ip:${a.day}:${a.ipKey}`, `${this.prefix}:res:${a.id}`],
+      [`${this.prefix}:spent:${a.day}`, ...ipKeys, `${this.prefix}:res:${a.id}`],
       [a.reserveMicros, a.budgetMicros, a.ipLimit, KEY_TTL_SECONDS, a.day],
     );
     if (result === "admitted" || result === "budget" || result === "ip") return result;

@@ -65,6 +65,25 @@ describe.each(stores)("%s", (_name, makeStore) => {
     expect(await budget.admit("198.51.100.10", NOON)).toEqual({ ok: false, reason: "budget" });
   });
 
+  it("a run with no client address is held to the daily cap but not to any address's limit", async () => {
+    const budget = budgetFor(4, 1);
+    expect((await budget.admit(null, NOON)).ok).toBe(true);
+    expect((await budget.admit(null, NOON)).ok).toBe(true);
+    expect((await budget.admit("192.0.2.1", NOON)).ok).toBe(true);
+    expect(await budget.admit("192.0.2.1", NOON)).toEqual({ ok: false, reason: "ip" });
+    expect((await budget.admit(null, NOON)).ok).toBe(true);
+    expect(await budget.admit(null, NOON)).toEqual({ ok: false, reason: "budget" });
+  });
+
+  it("the store skips the address check when there is no address", async () => {
+    const store = makeStore();
+    const admit = (id: string) =>
+      store.admit({ id, day: "2026-11-05", ipKey: null, reserveMicros: R, budgetMicros: 2 * R, ipLimit: 0 });
+    expect(await admit("first")).toBe("admitted");
+    expect(await admit("second")).toBe("admitted");
+    expect(await admit("third")).toBe("budget");
+  });
+
   it("a budget refusal does not use up the IP's checks", async () => {
     const budget = budgetOfMicros(R, 2);
     const first = admitted(await budget.admit("192.0.2.1", NOON));
@@ -136,6 +155,27 @@ describe.each(stores)("%s", (_name, makeStore) => {
     expect((await budget.admit("192.0.2.2", lateNight)).ok).toBe(true);
     expect(await budget.admit("192.0.2.3", lateNight)).toEqual({ ok: false, reason: "budget" });
     expect((await budget.admit("192.0.2.3", new Date("2026-11-06T00:00:01Z"))).ok).toBe(true);
+  });
+});
+
+describe.skipIf(!upstashUrl)("the Upstash store's keys", () => {
+  async function keysMatching(pattern: string): Promise<string[]> {
+    const res = await fetch(upstashUrl!, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${upstashToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify(["KEYS", pattern]),
+    });
+    return ((await res.json()) as { result: string[] }).result;
+  }
+
+  it("a run with no client address creates no per-address counter", async () => {
+    const prefix = `lusong-test-${randomUUID()}`;
+    const budget = createBudget({ store: new UpstashBudgetStore(upstashUrl!, upstashToken, prefix), budgetUsd: (3 * R) / 1e6, ipLimit: 10 });
+    expect((await budget.admit(null, NOON)).ok).toBe(true);
+    expect(await keysMatching(`${prefix}:ip:*`)).toEqual([]);
+    expect(await keysMatching(`${prefix}:spent:*`)).toHaveLength(1);
+    expect((await budget.admit("192.0.2.1", NOON)).ok).toBe(true);
+    expect(await keysMatching(`${prefix}:ip:*`)).toHaveLength(1);
   });
 });
 
