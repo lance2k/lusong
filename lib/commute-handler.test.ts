@@ -138,7 +138,7 @@ function handlerAt(
 ) {
   const net = network(opts);
   const gate = makeValhallaGate(store);
-  const handler = makeCommuteHandler({
+  const { POST: handler, checkTrip } = makeCommuteCheck({
     fetch: net.fetch,
     now: () => now,
     gate: () => gate,
@@ -147,7 +147,7 @@ function handlerAt(
     muse,
     timing: timing && { ...COMMUTE_TIMING, ...timing },
   });
-  return { handler, ...net };
+  return { handler, checkTrip, ...net };
 }
 
 function check(body: object): Request {
@@ -1244,6 +1244,46 @@ describe("Muse Spark in a real check (#6 with #7)", () => {
     expect(body.muse.web.line).toBe("Searched the web at 29 Oct, 12:00 p.m. PHT");
     expect(body.muse.web.findings.map((f: { place: string }) => f.place)).toEqual(["Colon St"]);
     expect(meta.searchRequests).toHaveLength(1);
+  });
+
+  describe("a scheduled check of a stored trip runs the same investigation (#10 with #7)", () => {
+    it("reserves what the page's check reserves, reads the stored report through reports_near_route, and gives back the answer's kind alone", async () => {
+      const store = new MemoryReportStore();
+      const flooded = storedReport(NO_ADVISORY);
+      await seedReport(store, flooded);
+      const meta = fakeMeta({
+        search: [searchReply(closures)],
+        turns: [callsReply("resp_1", [{ name: "reports_near_route", args: { route: "plain" } }]), textReply("resp_2", pickOf("go_another_way", [flooded.id, "detour"]))],
+      });
+      const { admits, settles, budget } = watched();
+      const { checkTrip } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), budget, store, museOn());
+
+      const result = await checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: Date.now() + 60_000 });
+
+      expect(result).toEqual({ ok: true, kind: "go_another_way" });
+      expect(admits).toEqual([COMMUTE_RESERVE_MICROS + investigationReserveMicros({ kind: "search" })]);
+      expect(settles).toEqual([true]);
+      const toolOutput = JSON.parse((meta.requests[1].input as { output: string }[])[0].output);
+      expect(toolOutput.reports.map((r: { id: string }) => r.id)).toEqual([flooded.id]);
+      expect(meta.searchRequests).toHaveLength(1);
+    });
+
+    it("one whose web search and model never answer ends by the caller's deadline, settle included, as the page's check would: out of time for a way around", async () => {
+      const store = new MemoryReportStore();
+      await seedReport(store, storedReport(NO_ADVISORY));
+      fakeMeta({ search: [hangs], turns: [hangs] });
+      const { settles, budget } = watched();
+      // The check's own deadline is far off: only the caller's can end it in time.
+      const timing: CommuteTiming = { deadlineMs: 10_000, routeWorstMs: 300, storeCallMs: 200, modelRoomMs: 200 };
+      const { checkTrip } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), budget, store, museOn(), timing);
+
+      const started = Date.now();
+      const result = await checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: started + 1_500 });
+
+      expect(Date.now() - started).toBeLessThan(1_500);
+      expect(result).toEqual({ ok: false, status: 503 });
+      expect(settles).toEqual([false]);
+    }, 15_000);
   });
 
   describe("a stored voice report reaches the investigation as a photo report does (#9 with #7)", () => {
