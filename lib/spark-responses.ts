@@ -23,6 +23,8 @@ export interface SparkReply {
   /** Every non-commentary message's text, joined. Commentary is the model narrating before a tool call. */
   answerText: string;
   webSearchActions: WebSearchAction[];
+  /** The `url` of every message's url_citation annotation (OpenAI's shape: the probe's annotations were all empty, 1 draw). */
+  citedUrls: string[];
 }
 
 type Item = Record<string, unknown>;
@@ -35,6 +37,15 @@ function messageText(item: Item): string {
     .join("");
 }
 
+function citedUrls(item: Item): string[] {
+  if (!Array.isArray(item.content)) return [];
+  return item.content.flatMap((part: Item | null) =>
+    Array.isArray(part?.annotations)
+      ? (part.annotations as (Item | null)[]).flatMap((a) => (a?.type === "url_citation" && typeof a.url === "string" ? [a.url] : []))
+      : [],
+  );
+}
+
 export function readReply(body: unknown): SparkReply {
   const b = (typeof body === "object" && body !== null ? body : {}) as Item;
   const output = Array.isArray(b.output) ? (b.output as unknown[]).filter((i): i is Item => typeof i === "object" && i !== null) : null;
@@ -43,7 +54,9 @@ export function readReply(body: unknown): SparkReply {
   const functionCalls: FunctionCall[] = [];
   const texts: string[] = [];
   const webSearchActions: WebSearchAction[] = [];
+  const cited: string[] = [];
   for (const item of items) {
+    if (item.type === "message") cited.push(...citedUrls(item));
     if (item.type === "function_call" && typeof item.call_id === "string" && typeof item.name === "string") {
       functionCalls.push({ callId: item.call_id, name: item.name, arguments: typeof item.arguments === "string" ? item.arguments : "" });
     } else if (item.type === "message" && item.phase !== "commentary") {
@@ -57,7 +70,7 @@ export function readReply(body: unknown): SparkReply {
       });
     }
   }
-  return { id: typeof b.id === "string" ? b.id : null, status, functionCalls, answerText: texts.join("\n").trim(), webSearchActions };
+  return { id: typeof b.id === "string" ? b.id : null, status, functionCalls, answerText: texts.join("\n").trim(), webSearchActions, citedUrls: cited };
 }
 
 export interface FunctionTool {

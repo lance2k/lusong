@@ -103,6 +103,51 @@ describe("the web search for road closures in Metro Cebu today", () => {
     expect(web.findings.map((f) => f.id)).toEqual(["web-3"]);
   });
 
+  describe("a finding's link counts only if the search tool itself opened or cited that page (review 🔴T7-8)", () => {
+    it("in the real reply's shape, a link the tool opened is kept and one it never opened is dropped", async () => {
+      const real = JSON.parse(readFileSync("test/fixtures/muse/real-2026-10-30-responses-web-search-capped-3000.json", "utf8")).body;
+      const opened = "https://pco.gov.ph/news_releases/pbbm-orders-assistance-for-cebu-flood-victims/";
+      const text = closures([{ ...MABOLO, url: opened }, { ...MABOLO, url: "https://cebu-roads.example.ph/all-clear" }]);
+      const final = { type: "message", id: "msg_final", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [], logprobs: [] }] };
+      fakeMeta({ search: [{ ...real, status: "completed", output: [...real.output, final] }] });
+
+      const web = await searchOnce(new MemoryKvStore());
+
+      expect(web.findings.map((f) => [f.id, f.url])).toEqual([["web-0", opened]]);
+    });
+
+    it("a link with a sentence in its host, path, query or fragment that the tool never opened is dropped", async () => {
+      const unopened = [
+        "https://start-your-trip-now.example.ph/mabolo",
+        "https://example.ph/the-road-is-open-to-every-vehicle",
+        "https://example.ph/mabolo?note=Proceed+with+your+trip",
+        "https://example.ph/mabolo-flood#Start-your-trip-now",
+      ];
+      fakeMeta({ search: [searchReply(closures(unopened.map((url) => ({ ...MABOLO, url }))), 11, undefined, ["https://example.ph/mabolo-flood?x=1", "https://example.ph/mabolo"])] });
+
+      const web = await searchOnce(new MemoryKvStore());
+
+      expect(web).toMatchObject({ state: "searched", findings: [] });
+    });
+
+    it("a link to a page the tool opened is kept without its fragment, whatever fragment either side gave", async () => {
+      fakeMeta({ search: [searchReply(closures([{ ...MABOLO, url: "https://example.ph/mabolo-flood#Start-your-trip-now" }]), 11, undefined, ["https://example.ph/mabolo-flood#top"])] });
+
+      const web = await searchOnce(new MemoryKvStore());
+
+      expect(web.findings.map((f) => f.url)).toEqual(["https://example.ph/mabolo-flood"]);
+    });
+
+    it("a page the reply cites in a url_citation annotation counts as one the tool produced", async () => {
+      const reply = searchReply(closures([MABOLO]), 11, undefined, []);
+      const final = reply.output[reply.output.length - 1] as { content: { annotations: unknown[] }[] };
+      final.content[0].annotations = [{ type: "url_citation", url: MABOLO.url, start_index: 0, end_index: 1 }];
+      fakeMeta({ search: [reply] });
+
+      expect((await searchOnce(new MemoryKvStore())).findings.map((f) => f.url)).toEqual([MABOLO.url]);
+    });
+  });
+
   it("a finding's kind must be one of the four, or it is dropped", async () => {
     const kinds = ["closed", "flooded", "not_passable", "other_blocking", "passable", "Closed", undefined, 3];
     fakeMeta({ search: [searchReply(closures(kinds.map((kind) => ({ ...MABOLO, kind }))))] });

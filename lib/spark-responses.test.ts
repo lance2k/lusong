@@ -28,6 +28,32 @@ describe("reading a Muse Spark Responses-API reply (real records, 2026-10-30)", 
     expect(reply.webSearchActions.filter((a) => a.type === "open_page")).toHaveLength(5);
   });
 
+  it("the real web search reply cites no page: its messages' annotations are all empty", () => {
+    expect(readReply(real("web-search-capped-3000").body).citedUrls).toEqual([]);
+  });
+
+  it("a message's url_citation annotations give the pages the search cited; other annotations and non-string urls are ignored", () => {
+    const text = (annotations: unknown[]) => ({ type: "output_text", text: "x", annotations });
+    const reply = readReply({
+      id: "resp_x",
+      status: "completed",
+      output: [
+        { type: "message", phase: "commentary", content: [text([{ type: "url_citation", url: "https://a.example.ph/one", start_index: 0, end_index: 1 }])] },
+        {
+          type: "message",
+          content: [
+            text([
+              { type: "url_citation", url: "https://b.example.ph/two" },
+              { type: "file_citation", url: "https://c.example.ph/three" },
+              { type: "url_citation", url: 7 },
+            ]),
+          ],
+        },
+      ],
+    });
+    expect(reply.citedUrls).toEqual(["https://a.example.ph/one", "https://b.example.ph/two"]);
+  });
+
   it("a malformed reply reads as failed with nothing in it, never as a completed empty answer", () => {
     for (const body of [null, "text", {}, { output: "x" }, { status: "completed" }]) {
       const reply = readReply(body);

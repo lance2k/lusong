@@ -67,14 +67,28 @@ export function textReply(id: string, text: string, usage: Usage | null = TURN_U
 /**
  * A web search reply: the real record's first `actions` items' worth of web_search_call (repeating its 11 if more are
  * asked for), then a final message with `text`. The real reply ran out of tokens before any final message.
+ * `opened` are the pages the search tool opens, as the real record's open_page actions, in place of the last of those
+ * items so the count stays `actions`; by default every `url` in the text's closures.
  */
-export function searchReply(text: string | null, actions = 11, usage: Usage | null = { input_tokens: 90_257, output_tokens: 3_000 }) {
+export function searchReply(text: string | null, actions = 11, usage: Usage | null = { input_tokens: 90_257, output_tokens: 3_000 }, opened = urlsIn(text)) {
   const calls = SEARCH.output.filter((i) => i.type === "web_search_call");
+  const openPage = calls.find((i) => (i.action as { type: string }).type === "open_page")!;
   const searches = Array.from({ length: actions }, (_, i) => ({ ...calls[i % calls.length], id: `ws_call_${i}` }));
+  const opens = opened.map((url, i) => ({ ...openPage, id: `ws_open_${i}`, action: { type: "open_page", url } }));
   const [reasoning] = SEARCH.output;
   const final = text === null ? [] : [{ type: "message", id: "msg_final", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [], logprobs: [] }] }];
   const envelope = withoutUsage(SEARCH);
-  return { ...envelope, id: "resp_search", status: text === null ? "incomplete" : "completed", output: [reasoning, ...searches, ...final], ...usageBlock(usage) };
+  const output = [reasoning, ...searches.slice(0, Math.max(0, actions - opens.length)), ...opens, ...final];
+  return { ...envelope, id: "resp_search", status: text === null ? "incomplete" : "completed", output, ...usageBlock(usage) };
+}
+
+function urlsIn(text: string | null): string[] {
+  try {
+    const closures = (JSON.parse(text!.slice(text!.indexOf("{"), text!.lastIndexOf("}") + 1)) as { closures?: { url?: unknown }[] }).closures;
+    return [...new Set((closures ?? []).flatMap((c) => (typeof c?.url === "string" ? [c.url] : [])))];
+  } catch {
+    return [];
+  }
 }
 
 export type Scripted =

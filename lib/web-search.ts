@@ -11,7 +11,7 @@ import {
   type Budget,
 } from "./budget";
 import type { Meter } from "./meta";
-import { respond } from "./spark-responses";
+import { respond, type SparkReply } from "./spark-responses";
 
 /**
  * Muse Spark's built-in web search for road closures in Metro Cebu today. "Road closures in Cebu today" isn't trip
@@ -313,14 +313,29 @@ function plainText(value: unknown, max: number): string {
   return value.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
 }
 
-function httpUrl(value: unknown): string | null {
-  if (typeof value !== "string" || value.length > 500) return null;
+const URL_MAX_CHARS = 500;
+
+/**
+ * An http(s) link as it is stored and compared: normalised, with no fragment, and within URL_MAX_CHARS in that form,
+ * since percent-encoding can make a short Unicode link several times longer. Null for anything else.
+ */
+function canonicalUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
   try {
     const url = new URL(value);
-    return url.protocol === "https:" || url.protocol === "http:" ? url.href : null;
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    url.hash = "";
+    return url.href.length <= URL_MAX_CHARS ? url.href : null;
   } catch {
     return null;
   }
+}
+
+/** The pages the search tool itself opened or cited: a finding's link is the model's to write, so it must be one of these. */
+function toolPages(reply: SparkReply): string[] {
+  const opened = reply.webSearchActions.flatMap((a) => (a.type === "open_page" ? [a.url] : []));
+  const pages = [...opened, ...reply.citedUrls].map(canonicalUrl).filter((u): u is string => u !== null);
+  return [...new Set(pages)];
 }
 
 function isoDay(value: unknown): string | null {
@@ -358,15 +373,15 @@ function isStoredFinding(f: unknown): f is WebFinding {
     Object.keys(x).length === 6 &&
     typeof x.id === "string" &&
     placeLabel(x.place) === x.place &&
-    httpUrl(x.url) === x.url &&
+    canonicalUrl(x.url) === x.url &&
     (x.sourceDate === null || isoDay(x.sourceDate) === x.sourceDate) &&
     closureKind(x.kind) !== null &&
     (at === null || (typeof at === "object" && inMetroCebu(at)))
   );
 }
 
-/** The findings in the reply's JSON object, or null when there is none to read. */
-function findingsIn(text: string): WebFinding[] | null {
+/** The findings in the reply's JSON object whose link is one of `pages`, or null when there is none to read. */
+function findingsIn(text: string, pages: readonly string[]): WebFinding[] | null {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start < 0 || end < start) return null;
@@ -382,9 +397,9 @@ function findingsIn(text: string): WebFinding[] | null {
   list.forEach((item: Record<string, unknown> | null, i) => {
     if (typeof item !== "object" || item === null) return;
     const place = placeLabel(item.place);
-    const url = httpUrl(item.url);
+    const url = canonicalUrl(item.url);
     const kind = closureKind(item.kind);
-    if (!place || !url || !kind) return;
+    if (!place || !url || !pages.includes(url) || !kind) return;
     const at = inMetroCebu({ lat: item.lat, lon: item.lon }) ? { lat: item.lat as number, lon: item.lon as number } : null;
     findings.push({ id: `web-${i}`, place, at, url, sourceDate: isoDay(item.date), kind });
   });
@@ -411,7 +426,7 @@ export async function runWebSearch(
       deadline: deps.deadline,
       meter: plan.run.meter,
     });
-    const findings = reply.status === "completed" ? findingsIn(reply.answerText) : null;
+    const findings = reply.status === "completed" ? findingsIn(reply.answerText, toolPages(reply)) : null;
     if (reply.status !== "completed") evidence = failed("search cut off");
     else if (findings === null) evidence = failed("unreadable reply");
     else evidence = { state: "searched", searchedAt, findings };

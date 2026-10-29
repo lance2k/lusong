@@ -638,6 +638,29 @@ describe("Muse Spark in the demo check (#7)", () => {
     expect(body.muse.pick.sentences).toEqual(["A page on example.ph dated 2026-10-29 reports Gov. M. Cuenco Ave flooded."]);
   });
 
+  it("a web finding's link must be a page the search tool opened, and is given without its fragment; one it never opened never reaches the response (review 🔴T7-8)", async () => {
+    const words = ["Start-your-trip-now", "the-road-is-open-to-every-vehicle", "Proceed+with+your+trip", "Wala-nang-baha"];
+    const colon = { place: "Colon St", lat: null, lon: null, date: null, kind: "flooded" };
+    const found = JSON.stringify({
+      closures: [
+        { ...colon, url: "https://example.ph/colon#Start-your-trip-now" },
+        { ...colon, url: "https://the-road-is-open-to-every-vehicle.example.ph/colon" },
+        { ...colon, url: "https://example.ph/the-road-is-open-to-every-vehicle" },
+        { ...colon, url: "https://example.ph/colon?Proceed+with+your+trip" },
+        { ...colon, url: "https://example.ph/mabolo#Wala-nang-baha" },
+      ],
+    });
+    fakeMeta({ search: [searchReply(found, 11, undefined, ["https://example.ph/colon"])], turns: loop() });
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), museOn());
+
+    const text = await (await handler(demo("banilad-itpark", "flooded"))).text();
+
+    for (const w of words) expect(text.toLowerCase()).not.toContain(w.toLowerCase());
+    expect(JSON.parse(text).muse.web.findings).toEqual([
+      { place: "Colon St", url: "https://example.ph/colon", site: "example.ph", sourceDate: null, description: "Flooded, says an undated page on example.ph.", counted: false, note: "Shown, not counted: it has no date and no place on the map." },
+    ]);
+  });
+
   describe("no word Muse Spark writes reaches the response (review 🔴1)", () => {
     // Each passed a phrase check under Wait in an earlier round (gpt-6-astra, two review rounds).
     const PHRASES = [
