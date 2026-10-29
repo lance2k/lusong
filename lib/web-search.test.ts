@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBudget, MemoryBudgetStore } from "./budget";
+import type { WebPlan } from "./web-search";
 import { Meter } from "./meta";
 import {
   MAX_WEB_FINDINGS,
@@ -17,6 +18,8 @@ import {
   WEB_SEARCH_CACHE_MS,
   WEB_SEARCH_FAILED_CACHE_MS,
   WEB_SEARCH_KEY,
+  WEB_SEARCH_LEASE_KEY,
+  SEARCH_LEASE_MS,
   UpstashKvStore,
   type KvStore,
 } from "./web-search";
@@ -172,8 +175,9 @@ describe("one search is shared by every check for a while", () => {
     expect(meta.searchRequests).toHaveLength(1);
 
     now = new Date(NOW.getTime() + WEB_SEARCH_CACHE_MS);
-    expect(await planWebSearch(store, now, roomy())).toMatchObject({ kind: "search" });
-    await searchOnce(store, now);
+    const again = await planWebSearch(store, now, roomy());
+    expect(again).toMatchObject({ kind: "search" });
+    await runWebSearch(again, { store, now, deadline: Date.now() + 40_000, meter: new Meter() });
     expect(meta.searchRequests).toHaveLength(2);
   });
 
@@ -191,10 +195,8 @@ describe("one search is shared by every check for a while", () => {
 
   it("with no shared store, or one that can't be read, there is no search: each check would pay for its own", async () => {
     const meta = fakeMeta({ search: [] });
-    const broken: KvStore = {
-      get: () => Promise.reject(new Error("down")),
-      set: () => Promise.reject(new Error("down")),
-    };
+    const down = () => Promise.reject(new Error("down"));
+    const broken: KvStore = { get: down, set: down, setIfAbsent: down, deleteIfEquals: down };
 
     expect(await planWebSearch(null, NOW, roomy())).toEqual({ kind: "off", why: "no shared store" });
     expect(await planWebSearch(broken, NOW, roomy())).toEqual({ kind: "off", why: "store unreachable" });
@@ -228,9 +230,141 @@ describe("one search is shared by every check for a while", () => {
 
   it("a search whose result can't be stored still answers this check", async () => {
     fakeMeta({ search: [searchReply(closures([MABOLO]))] });
-    const readOnly: KvStore = { get: async () => null, set: () => Promise.reject(new Error("down")) };
+    const readOnly: KvStore = { get: async () => null, set: () => Promise.reject(new Error("down")), setIfAbsent: async () => true, deleteIfEquals: async () => {} };
 
     expect(await searchOnce(readOnly)).toMatchObject({ state: "searched", findings: [{ id: "web-0" }] });
+  });
+});
+
+describe("one search at a time, and the newest result kept (review 🟡3)", () => {
+  const run = (plan: WebPlan, store: KvStore, now: Date) => runWebSearch(plan, { store, now, deadline: Date.now() + 40_000, meter: new Meter() });
+  const stored = async (store: KvStore) => JSON.parse((await store.get(WEB_SEARCH_KEY))!).evidence;
+
+  it("concurrent misses make one search: the others run without it and say why", async () => {
+    expect(WEB_SEARCH_LEASE_KEY.startsWith("lusong:")).toBe(true);
+    const store = new MemoryKvStore();
+    const meta = fakeMeta({ search: [searchReply(closures([MABOLO]))] });
+
+    const plans = await Promise.all([1, 2, 3].map(() => planWebSearch(store, NOW, roomy())));
+    const results = await Promise.all(plans.map((plan) => run(plan, store, NOW)));
+
+    expect(plans.map((p) => p.kind).sort()).toEqual(["off", "off", "search"]);
+    expect(plans.filter((p) => p.kind === "off")).toEqual([
+      { kind: "off", why: "another check is searching the web right now" },
+      { kind: "off", why: "another check is searching the web right now" },
+    ]);
+    expect(meta.searchRequests).toHaveLength(1);
+    expect(results.filter((r) => r.state === "searched")).toHaveLength(1);
+  });
+
+  it("the lease is given back when the search ends, failed or not, and when the check is refused", async () => {
+    let now = NOW;
+    const store = new MemoryKvStore(() => now.getTime());
+    fakeMeta({ search: [searchReply("no JSON")] });
+
+    await run(await planWebSearch(store, now, roomy()), store, now);
+    expect(await store.get(WEB_SEARCH_LEASE_KEY)).toBeNull();
+
+    now = new Date(NOW.getTime() + WEB_SEARCH_FAILED_CACHE_MS);
+    const refused = await planWebSearch(store, now, roomy());
+    expect(refused).toMatchObject({ kind: "search" });
+    await releaseWebSearch(refused);
+    expect(await store.get(WEB_SEARCH_LEASE_KEY)).toBeNull();
+  });
+
+  it("a search the cap refuses gives the lease back", async () => {
+    const store = new MemoryKvStore();
+    const spent = createBudget({ store: new MemoryBudgetStore(), budgetUsd: 0.000_001, ipLimit: 1 });
+
+    expect(await planWebSearch(store, NOW, spent)).toMatchObject({ kind: "off" });
+    expect(await store.get(WEB_SEARCH_LEASE_KEY)).toBeNull();
+  });
+
+  it("the cache is read again once the lease is held: a search another check just stored is used, not repeated", async () => {
+    const inner = new MemoryKvStore();
+    const fresh = { expiresAt: NOW.getTime() + 60_000, startedAt: NOW.getTime(), evidence: { state: "searched", searchedAt: NOW.toISOString(), findings: [] } };
+    let reads = 0;
+    const store: KvStore = {
+      get: async (key) => (key === WEB_SEARCH_KEY && reads++ === 0 ? null : key === WEB_SEARCH_KEY ? JSON.stringify(fresh) : inner.get(key)),
+      set: (k, v, t) => inner.set(k, v, t),
+      setIfAbsent: (k, v, t) => inner.setIfAbsent(k, v, t),
+      deleteIfEquals: (k, v) => inner.deleteIfEquals(k, v),
+    };
+
+    expect(await planWebSearch(store, NOW, roomy())).toEqual({ kind: "cached", evidence: fresh.evidence });
+    expect(await inner.get(WEB_SEARCH_LEASE_KEY)).toBeNull();
+  });
+
+  it("a lease that can't be taken because the store fails means no search", async () => {
+    const store = new MemoryKvStore();
+    store.setIfAbsent = () => Promise.reject(new Error("down"));
+
+    expect(await planWebSearch(store, NOW, roomy())).toEqual({ kind: "off", why: "store unreachable" });
+  });
+
+  describe(`a search still running after its ${SEARCH_LEASE_MS / 1000} s lease lapses`, () => {
+    async function overlapping(first: "older" | "newer", older: string, newer: string) {
+      let now = NOW;
+      const store = new MemoryKvStore(() => now.getTime());
+      const a = await planWebSearch(store, now, roomy());
+      now = new Date(NOW.getTime() + SEARCH_LEASE_MS);
+      const b = await planWebSearch(store, now, roomy());
+      expect([a.kind, b.kind]).toEqual(["search", "search"]);
+      const order = first === "newer" ? [newer, older] : [older, newer];
+      fakeMeta({ search: order.map((text) => searchReply(text)) });
+      if (first === "newer") {
+        await run(b, store, new Date(NOW.getTime() + SEARCH_LEASE_MS));
+        await run(a, store, NOW);
+      } else {
+        await run(a, store, NOW);
+        await run(b, store, new Date(NOW.getTime() + SEARCH_LEASE_MS));
+      }
+      return store;
+    }
+    const OLDER = closures([{ ...MABOLO, place: "Older Street" }]);
+    const NEWER = closures([{ ...MABOLO, place: "Newer Street" }]);
+
+    it("an older search that finishes last never replaces the newer result", async () => {
+      const store = await overlapping("newer", OLDER, NEWER);
+      expect((await stored(store)).findings.map((f: { place: string }) => f.place)).toEqual(["Newer Street"]);
+    });
+
+    it("an older failure that finishes last never replaces the newer success", async () => {
+      const store = await overlapping("newer", "no JSON", NEWER);
+      expect(await stored(store)).toMatchObject({ state: "searched", findings: [{ place: "Newer Street" }] });
+    });
+
+    it("a newer failure never replaces a success still fresh", async () => {
+      const store = await overlapping("older", OLDER, "no JSON");
+      expect(await stored(store)).toMatchObject({ state: "searched", findings: [{ place: "Older Street" }] });
+    });
+
+    it("a newer success replaces an older one", async () => {
+      const store = await overlapping("older", OLDER, NEWER);
+      expect((await stored(store)).findings.map((f: { place: string }) => f.place)).toEqual(["Newer Street"]);
+    });
+  });
+});
+
+describe("the Upstash store's lease commands", () => {
+  function upstash(result: unknown) {
+    const sent: unknown[] = [];
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => (sent.push(JSON.parse(String(init.body))), Response.json({ result })));
+    return { store: new UpstashKvStore("https://u.example", "t"), sent };
+  }
+
+  it("takes a lease with SET NX PX, held only when Redis says OK", async () => {
+    const held = upstash("OK");
+    expect(await held.store.setIfAbsent(WEB_SEARCH_LEASE_KEY, "token-1", 80_000)).toBe(true);
+    expect(held.sent).toEqual([["SET", WEB_SEARCH_LEASE_KEY, "token-1", "NX", "PX", "80000"]]);
+    vi.unstubAllGlobals();
+    expect(await upstash(null).store.setIfAbsent(WEB_SEARCH_LEASE_KEY, "token-1", 80_000)).toBe(false);
+  });
+
+  it("gives a lease back only if it still holds the same token, in one script", async () => {
+    const { store, sent } = upstash(1);
+    await store.deleteIfEquals(WEB_SEARCH_LEASE_KEY, "token-1");
+    expect(sent).toEqual([["EVAL", expect.stringContaining('redis.call("GET", KEYS[1]) == ARGV[1]'), "1", WEB_SEARCH_LEASE_KEY, "token-1"]]);
   });
 });
 

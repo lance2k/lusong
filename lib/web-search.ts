@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { admit, type AdmittedRun } from "./admission";
 import type { Point } from "./answer";
 import {
@@ -28,6 +29,11 @@ export const SEARCH_MAX_OUTPUT_TOKENS = 4_000;
 /** The probe took 23 s at 3,000 output tokens (1 draw). */
 export const SEARCH_ATTEMPT_MS = 35_000;
 export const MAX_WEB_FINDINGS = 8;
+
+/** Held while one check searches, so checks that miss the cache at the same moment don't each pay for a search. */
+export const WEB_SEARCH_LEASE_KEY = "lusong:muse:road-closures:lease";
+/** Both attempts of a search, with room to store it; a search still running past this may overlap another. */
+export const SEARCH_LEASE_MS = ATTEMPTS_PER_CALL * SEARCH_ATTEMPT_MS + 10_000;
 
 /** 2.2 × the probe search's 90,257 input tokens, which ran 11 actions at a 3,000-token output cap (1 draw). */
 export const SEARCH_INPUT_TOKEN_BOUND = 200_000;
@@ -90,25 +96,46 @@ export type WebEvidence =
   | { state: "searched"; searchedAt: string; findings: WebFinding[] }
   | { state: "failed" | "not_run"; why: string; searchedAt: string | null; findings: WebFinding[] };
 
-/** `GET` and `SET … PX`: the same Upstash database as the budget, keys under `lusong:`. */
+/** `GET`, `SET … PX` and a lease: the same Upstash database as the budget, keys under `lusong:`. */
 export interface KvStore {
   get(key: string): Promise<string | null>;
   set(key: string, value: string, ttlMs: number): Promise<void>;
+  /** `SET … NX PX`: true when the key was free and is now this value. */
+  setIfAbsent(key: string, value: string, ttlMs: number): Promise<boolean>;
+  /** Deletes the key only while it still holds this value, so a lapsed lease never frees another check's. */
+  deleteIfEquals(key: string, value: string): Promise<void>;
 }
 
 export class MemoryKvStore implements KvStore {
   private values = new Map<string, { value: string; until: number }>();
   constructor(private readonly clock: () => number = Date.now) {}
 
-  async get(key: string) {
+  private read(key: string): string | null {
     const entry = this.values.get(key);
     return entry && entry.until > this.clock() ? entry.value : null;
+  }
+
+  async get(key: string) {
+    return this.read(key);
   }
 
   async set(key: string, value: string, ttlMs: number) {
     this.values.set(key, { value, until: this.clock() + ttlMs });
   }
+
+  // Read and write with no await between them, as Redis's SET NX does in one step.
+  async setIfAbsent(key: string, value: string, ttlMs: number) {
+    if (this.read(key) !== null) return false;
+    this.values.set(key, { value, until: this.clock() + ttlMs });
+    return true;
+  }
+
+  async deleteIfEquals(key: string, value: string) {
+    if (this.read(key) === value) this.values.delete(key);
+  }
 }
+
+const DELETE_IF_EQUALS = 'if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) else return 0 end';
 
 export class UpstashKvStore implements KvStore {
   constructor(
@@ -141,6 +168,14 @@ export class UpstashKvStore implements KvStore {
   async set(key: string, value: string, ttlMs: number) {
     await this.command(["SET", this.key(key), value, "PX", String(ttlMs)]);
   }
+
+  async setIfAbsent(key: string, value: string, ttlMs: number) {
+    return (await this.command(["SET", this.key(key), value, "NX", "PX", String(ttlMs)])) === "OK";
+  }
+
+  async deleteIfEquals(key: string, value: string) {
+    await this.command(["EVAL", DELETE_IF_EQUALS, "1", this.key(key), value]);
+  }
 }
 
 const sharedMemoryStore = (() => {
@@ -160,10 +195,20 @@ export function searchStoreFromEnv(env: Record<string, string | undefined> = pro
 }
 
 /** A planned search holds its reservation against the daily search cap until it runs or is released. */
-export type WebPlan = { kind: "cached"; evidence: WebEvidence } | { kind: "search"; run: AdmittedRun } | { kind: "off"; why: string };
+export type WebPlan =
+  | { kind: "cached"; evidence: WebEvidence }
+  | { kind: "search"; run: AdmittedRun; lease: Lease; startedAt: number }
+  | { kind: "off"; why: string };
+
+interface Lease {
+  store: KvStore;
+  token: string;
+}
 
 interface Stored {
   expiresAt: number;
+  /** When its search started: a search that started earlier never replaces it. */
+  startedAt: number;
   evidence: WebEvidence;
 }
 
@@ -171,7 +216,8 @@ function readStored(text: string): Stored | null {
   try {
     const stored = JSON.parse(text) as Stored;
     const e = stored?.evidence;
-    if (typeof stored.expiresAt !== "number" || !e || !Array.isArray(e.findings) || !["searched", "failed"].includes(e.state)) return null;
+    if (typeof stored.expiresAt !== "number" || typeof stored.startedAt !== "number") return null;
+    if (!e || !Array.isArray(e.findings) || !["searched", "failed"].includes(e.state)) return null;
     // A record stored under older checks is searched again rather than trusted.
     if (!e.findings.every(isStoredFinding)) return null;
     return stored;
@@ -183,24 +229,69 @@ function readStored(text: string): Stored | null {
 /** Decided before admission, since a search changes what the check must reserve. */
 export async function planWebSearch(store: KvStore | null, now: Date, searchBudget: Budget): Promise<WebPlan> {
   if (!store) return { kind: "off", why: "no shared store" };
-  let text: string | null;
+  const unreachable: WebPlan = { kind: "off", why: "store unreachable" };
+  const fresh = async () => {
+    const text = await store.get(WEB_SEARCH_KEY);
+    const stored = text === null ? null : readStored(text);
+    return stored && stored.expiresAt > now.getTime() ? stored : null;
+  };
   try {
-    text = await store.get(WEB_SEARCH_KEY);
+    const cached = await fresh();
+    if (cached) return { kind: "cached", evidence: cached.evidence };
   } catch {
-    return { kind: "off", why: "store unreachable" };
+    return unreachable;
   }
-  const stored = text === null ? null : readStored(text);
-  if (stored && stored.expiresAt > now.getTime()) return { kind: "cached", evidence: stored.evidence };
+  const lease: Lease = { store, token: randomUUID() };
+  try {
+    if (!(await store.setIfAbsent(WEB_SEARCH_LEASE_KEY, lease.token, SEARCH_LEASE_MS))) return { kind: "off", why: "another check is searching the web right now" };
+  } catch {
+    return unreachable;
+  }
+  // A search another check finished between the first read and the lease.
+  let cached: Stored | null;
+  try {
+    cached = await fresh();
+  } catch {
+    await giveBack(lease);
+    return unreachable;
+  }
+  if (cached) {
+    await giveBack(lease);
+    return { kind: "cached", evidence: cached.evidence };
+  }
   const admission = await admit(searchBudget, { clientIp: null, reserveMicros: SEARCH_RESERVE_MICROS, now });
   if (!admission.ok) {
+    await giveBack(lease);
     return { kind: "off", why: admission.reason === "budget" ? "today's web search budget is used up" : "the web search budget can't be read" };
   }
-  return { kind: "search", run: admission.run };
+  return { kind: "search", run: admission.run, lease, startedAt: now.getTime() };
 }
 
-/** Gives back a planned search's reservation when the check is refused before it runs. */
+async function giveBack(lease: Lease): Promise<void> {
+  try {
+    await lease.store.deleteIfEquals(WEB_SEARCH_LEASE_KEY, lease.token);
+  } catch (err) {
+    console.error("couldn't give back the web search lease:", err instanceof Error ? err.message : err);
+  }
+}
+
+/** Gives back a planned search's reservation and lease when the check is refused before it runs. */
 export async function releaseWebSearch(plan: WebPlan): Promise<void> {
-  if (plan.kind === "search") await plan.run.settle(true);
+  if (plan.kind !== "search") return;
+  await plan.run.settle(true);
+  await giveBack(plan.lease);
+}
+
+/**
+ * Stores the result unless the stored one should stand: a search that started later, or a success still fresh when
+ * this one failed. Not atomic, but the lease keeps two searches from overlapping unless one outlives it.
+ */
+async function keep(store: KvStore, record: Stored, now: Date): Promise<void> {
+  const text = await store.get(WEB_SEARCH_KEY);
+  const current = text === null ? null : readStored(text);
+  if (current && current.startedAt > record.startedAt) return;
+  if (current && current.evidence.state === "searched" && current.expiresAt > now.getTime() && record.evidence.state !== "searched") return;
+  await store.set(WEB_SEARCH_KEY, JSON.stringify(record), record.expiresAt - now.getTime());
 }
 
 function phtDay(t: Date): string {
@@ -331,9 +422,10 @@ export async function runWebSearch(
   await plan.run.settle(true);
   const ttl = evidence.state === "searched" ? WEB_SEARCH_CACHE_MS : WEB_SEARCH_FAILED_CACHE_MS;
   try {
-    await deps.store?.set(WEB_SEARCH_KEY, JSON.stringify({ expiresAt: deps.now.getTime() + ttl, evidence } satisfies Stored), ttl);
+    if (deps.store) await keep(deps.store, { expiresAt: deps.now.getTime() + ttl, startedAt: plan.startedAt, evidence }, deps.now);
   } catch (err) {
     console.error("couldn't store the web search:", err instanceof Error ? err.message : err);
   }
+  await giveBack(plan.lease);
   return evidence;
 }
