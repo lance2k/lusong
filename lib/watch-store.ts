@@ -59,9 +59,13 @@ export interface WatchStore {
   /** Atomic: marks a run at `nowMs` if the generation matches and the last run was at least `minGapMs` earlier. */
   claimRun(id: string, gen: string, nowMs: number, minGapMs: number): Promise<boolean>;
   isCurrent(id: string, gen: string): Promise<boolean>;
-  /** Before a send: records the answer about to go, if the generation still matches. False means don't send. */
+  /**
+   * Before a send: records the answer about to go, if the generation still matches. False means don't send. Atomic: an
+   * answer still marked as sending from an earlier send is first recorded as the last sent, since its delivery is
+   * uncertain, so dropping the new one falls back to it rather than to an older answer.
+   */
   markSending(id: string, gen: string, answer: SentAnswer): Promise<boolean>;
-  /** After Telegram refused the message: it wasn't sent, so the next check may send it again. */
+  /** When the message wasn't sent (refused, or called off before sending): the next check may send it again. */
   dropSending(id: string, gen: string): Promise<void>;
   /** Records the answer just sent and clears the one marked as sending, if the generation still matches. */
   commit(id: string, gen: string, last: SentAnswer): Promise<boolean>;
@@ -229,6 +233,11 @@ export class MemoryWatchStore implements WatchStore {
   async markSending(id: string, gen: string, answer: SentAnswer) {
     const fields = this.live(id);
     if (!fields || fields.gen !== gen) return false;
+    const uncertain = fromFields(id, fields)?.sending;
+    if (uncertain) {
+      fields.lastKind = uncertain.kind;
+      fields.lastDay = uncertain.day;
+    }
     fields.sending = `${answer.kind}|${answer.day}`;
     return true;
   }
@@ -344,8 +353,14 @@ if redis.call('HGET', KEYS[1], 'gen') == ARGV[1] then return 1 end
 return 0
 `;
 
+/** An answer still marked as sending becomes the last sent before the new one is marked; see WatchStore.markSending. */
 const MARK_SENDING_SCRIPT = `
 if redis.call('HGET', KEYS[1], 'gen') ~= ARGV[1] then return 0 end
+local uncertain = redis.call('HGET', KEYS[1], 'sending')
+if uncertain then
+  local kind, day = string.match(uncertain, '^([^|]+)|(.+)$')
+  if kind then redis.call('HSET', KEYS[1], 'lastKind', kind, 'lastDay', day) end
+end
 redis.call('HSET', KEYS[1], 'sending', ARGV[2])
 return 1
 `;

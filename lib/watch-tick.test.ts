@@ -3,6 +3,7 @@ import { FakeChannel } from "../test/fake-channel";
 import type { AnswerKind } from "./answer";
 import { SEND_TIMEOUT_MS, TelegramChannel } from "./channel";
 import type { ScheduledCheck } from "./commute-handler";
+import { watchStores } from "../test/watch-stores";
 import { MemoryWatchStore, type NewWatcher, type WatchStore } from "./watch-store";
 import { runTick, SEND_LEASE_MS, type TickDeps } from "./watch-tick";
 
@@ -42,6 +43,19 @@ function setup(start = "2026-10-30T05:50:00+08:00") {
     },
   };
   return { clock, store, channel, answers, checked, deps, tick: () => runTick(deps) };
+}
+
+/** Telegram's Bot API faked at fetch: every request is counted, as if Telegram had it, before the reply is decided. */
+function telegramAt(replies: ("ok" | "timeout" | 429)[]) {
+  const requests: string[] = [];
+  const fetch = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
+    requests.push(JSON.parse(String(init?.body)).text);
+    const reply = replies.shift() ?? "ok";
+    if (reply === "timeout") throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    if (reply === 429) return new Response(JSON.stringify({ ok: false, error_code: 429, parameters: { retry_after: 3 } }), { status: 429 });
+    return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }));
+  });
+  return { requests, channel: new TelegramChannel("TEST-TOKEN", fetch) };
 }
 
 describe("the watcher's tick (fake clock, fake channel)", () => {
@@ -160,19 +174,6 @@ describe("the watcher's tick (fake clock, fake channel)", () => {
     await tick();
     expect(channel.sent).toHaveLength(1);
   });
-
-  /** Telegram's Bot API faked at fetch: every request is counted, as if Telegram had it, before the reply is decided. */
-  function telegramAt(replies: ("ok" | "timeout" | 429)[]) {
-    const requests: string[] = [];
-    const fetch = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
-      requests.push(JSON.parse(String(init?.body)).text);
-      const reply = replies.shift() ?? "ok";
-      if (reply === "timeout") throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
-      if (reply === 429) return new Response(JSON.stringify({ ok: false, error_code: 429, parameters: { retry_after: 3 } }), { status: 429 });
-      return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }));
-    });
-    return { requests, channel: new TelegramChannel("TEST-TOKEN", fetch) };
-  }
 
   it("a message Telegram may have taken (no reply before the timeout) counts as sent: it isn't sent again", async () => {
     const { clock, store, answers, deps } = setup("2026-10-30T06:00:00+08:00");
@@ -350,5 +351,62 @@ describe("the watcher's tick (fake clock, fake channel)", () => {
     await runTick(deps);
     expect(deadlines[0]).toBeGreaterThanOrEqual(before + 45_000);
     expect(deadlines[0]).toBeLessThanOrEqual(Date.now() + 45_000);
+  });
+});
+
+/** The same sequences on every store, since what counts as sent lives in the store. */
+describe.each(watchStores)("the watcher's tick on the %s", (_name, make) => {
+  /** Go is sent and recorded at 06:00; Wait is handed to Telegram at 06:20, which doesn't answer before the timeout. */
+  async function goSentThenWaitUncertain(then: "ok" | 429) {
+    const t = setup("2026-10-30T06:00:00+08:00");
+    t.deps.store = make().store;
+    const w = await linkedWatcher(t.deps.store);
+    const telegram = telegramAt(["ok", "timeout", then]);
+    t.deps.channel = telegram.channel;
+    t.answers.push("go");
+    await runTick(t.deps);
+    t.clock.set("2026-10-30T06:20:00+08:00");
+    t.answers.push("wait");
+    await runTick(t.deps);
+    expect(telegram.requests).toHaveLength(2);
+    return { ...t, w, telegram };
+  }
+
+  it("after an uncertain Wait, a Go Telegram refuses (a 429) leaves Wait as the last sent: a later Wait sends nothing", async () => {
+    const { clock, answers, deps, telegram } = await goSentThenWaitUncertain(429);
+    clock.set("2026-10-30T06:30:00+08:00");
+    answers.push("go");
+    expect(await runTick(deps)).toMatchObject({ sent: 0, failed: 1 });
+    expect(telegram.requests).toHaveLength(3);
+    clock.set("2026-10-30T06:40:00+08:00");
+    answers.push("wait");
+    expect(await runTick(deps)).toMatchObject({ sent: 0 });
+    expect(telegram.requests).toHaveLength(3);
+  });
+
+  it("after an uncertain Wait, a Go whose send is called off for want of lease leaves Wait as the last sent: a later Wait sends nothing", async () => {
+    const { clock, answers, deps, telegram } = await goSentThenWaitUncertain("ok");
+    const store = deps.store;
+    const realNow = Date.now.bind(Date);
+    let lag = 0;
+    const now = vi.spyOn(Date, "now").mockImplementation(() => realNow() + lag);
+    const markSending = store.markSending.bind(store);
+    store.markSending = async (...args) => {
+      lag += SEND_LEASE_MS - SEND_TIMEOUT_MS;
+      return markSending(...args);
+    };
+    try {
+      clock.set("2026-10-30T06:30:00+08:00");
+      answers.push("go");
+      expect(await runTick(deps)).toMatchObject({ sent: 0, failed: 1 });
+      expect(telegram.requests).toHaveLength(2);
+    } finally {
+      now.mockRestore();
+      store.markSending = markSending;
+    }
+    clock.set("2026-10-30T06:40:00+08:00");
+    answers.push("wait");
+    expect(await runTick(deps)).toMatchObject({ sent: 0 });
+    expect(telegram.requests).toHaveLength(2);
   });
 });

@@ -124,6 +124,19 @@ describe.each(watchStores)("the watch %s", (_name, make) => {
     expect(await store.get(id)).toBeNull();
   });
 
+  it("an answer still marked as sending counts as the last sent once a newer one is marked: dropping the newer one keeps it", async () => {
+    const { store } = make();
+    const id = "a".repeat(64);
+    await store.create(watcher(), "code1");
+    await store.commit(id, "g1", { kind: "go", day: "2026-10-30" });
+    // Wait was handed to Telegram and never recorded as sent: its delivery is uncertain.
+    await store.markSending(id, "g1", { kind: "wait", day: "2026-10-30" });
+    expect(await store.markSending(id, "g1", { kind: "go", day: "2026-10-30" })).toBe(true);
+    expect(await store.get(id)).toMatchObject({ sending: { kind: "go", day: "2026-10-30" }, lastKind: "wait", lastDay: "2026-10-30" });
+    await store.dropSending(id, "g1");
+    expect(await store.get(id)).toMatchObject({ sending: null, lastKind: "wait", lastDay: "2026-10-30" });
+  });
+
   it("lends a watcher's send lease to one holder at a time, frees it only for that holder's token, and lets it expire", async () => {
     const { store, held, wait } = make();
     const id = "a".repeat(64);
