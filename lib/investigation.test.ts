@@ -140,6 +140,28 @@ describe("Muse Spark's investigation", () => {
     expect(JSON.parse(outputs[1].output)).toMatchObject({ id: "advisory", state: "none" });
     expect(result.toolCalls.map((c) => c.name)).toEqual(["reports_near_route", "read_advisory"]);
   });
+
+  it("a report the store gave that lies off every judged route can't be picked: the pick naming it is not shown (review 🔴C-3)", async () => {
+    const TABUNOK: Point = { lat: 10.2447, lon: 123.8494 };
+    const blocker = voice("v1", BLOCKED_SPOT, "not_passable");
+    const offRoute = voice("v-off", TABUNOK, "not_passable", "Tabunok Public Market");
+    const { sources } = sourcesOf({ reports: [blocker, offRoute] });
+    const meta = fakeMeta({
+      turns: [
+        callsReply("resp_1", [{ name: "reports_near_route", args: { route: "plain" } }]),
+        textReply("resp_2", pickOf("go_another_way", ["v1", "v-off"])),
+      ],
+    });
+
+    const result = await investigate(inputOf(sources));
+
+    if (!result.ok) throw new Error("expected an answer");
+    expect(placeOnRoute(TABUNOK, PLAIN).offM).toBeGreaterThan(ROUTE_CORRIDOR_M);
+    expect(placeOnRoute(TABUNOK, DETOUR).offM).toBeGreaterThan(ROUTE_CORRIDOR_M);
+    expect(result.answer.answer).toBe("go_another_way");
+    expect(result.pick).toEqual({ shown: false, why: "picks evidence Lusong didn't gather", unavailable: false });
+    expect(JSON.stringify(meta.requests)).not.toContain("v-off");
+  });
 });
 
 describe("the rules pick the answer, whatever the model does (🔴P5)", () => {

@@ -449,8 +449,9 @@ export async function investigate(input: InvestigationInput): Promise<Investigat
     throw err;
   }
   const answer = evidence.answer();
+  // A report off every judged route played no part, and a real one's spot is someone else's: it can't be picked.
   const gathered = new Set([
-    ...evidence.reports.keys(),
+    ...answer.routes.flatMap((r) => r.reportIds),
     ...input.web.findings.map((f) => f.id),
     "advisory",
     // The rider always answers the rain tap, so "not tapped" is evidence too.
