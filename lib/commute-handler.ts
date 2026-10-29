@@ -300,7 +300,12 @@ export function makeCommuteHandler(deps: {
 
     const at = now();
     const museDeps = muse();
-    const plan: WebPlan = museDeps.enabled ? await planWebSearch(museDeps.searchStore(), at, museDeps.searchBudget()) : { kind: "off", why: "Muse Spark is off" };
+    const plan: WebPlan = museDeps.enabled ? await planWebSearch(museDeps.searchStore(), at, museDeps.searchBudget(), deadline) : { kind: "off", why: "Muse Spark is off" };
+    if (Date.now() >= deadline) {
+      // Planning took the whole deadline, so nothing is reserved; a search it planned is given back.
+      void releaseWebSearch(plan).catch(() => {});
+      return fail(503, OUT_OF_TIME);
+    }
     const reserveMicros = COMMUTE_RESERVE_MICROS + (museDeps.enabled ? investigationReserveMicros(plan) : 0);
     const admitting = admit(budget(), { clientIp: clientIp(request), reserveMicros, now: at });
     const admission = await beforeDeadline(admitting, deadline);

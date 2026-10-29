@@ -11,6 +11,7 @@ import {
   type Budget,
 } from "./budget";
 import type { Meter } from "./meta";
+import { beforeDeadline } from "./deadline";
 import { respond, type SparkReply } from "./spark-responses";
 
 /**
@@ -247,42 +248,75 @@ function readStored(text: string): Stored | null {
   }
 }
 
-/** Decided before admission, since a search changes what the check must reserve. */
-export async function planWebSearch(store: KvStore | null, now: Date, searchBudget: Budget): Promise<WebPlan> {
+/**
+ * Decided before admission, since a search changes what the check must reserve. Every step ends by `deadline` (epoch
+ * ms) and none starts after it: a step that answers too late is "store unreachable", and a lease or a search
+ * reservation that is granted after the deadline is given back in the background.
+ */
+export async function planWebSearch(store: KvStore | null, now: Date, searchBudget: Budget, deadline = Infinity): Promise<WebPlan> {
   if (!store) return { kind: "off", why: "no shared store" };
   const unreachable: WebPlan = { kind: "off", why: "store unreachable" };
   const fresh = async () => {
-    const text = await store.get(WEB_SEARCH_KEY);
+    if (Date.now() >= deadline) return "late";
+    const text = await beforeDeadline(store.get(WEB_SEARCH_KEY), deadline);
+    if (text === "late") return "late";
     const stored = text === null ? null : readStored(text);
     return stored && stored.expiresAt > now.getTime() ? stored : null;
   };
   try {
     const cached = await fresh();
+    if (cached === "late") return unreachable;
     if (cached) return { kind: "cached", evidence: cached.evidence };
   } catch {
     return unreachable;
   }
   const lease: Lease = { store, token: randomUUID() };
+  // Given back on every path; past the deadline it finishes in the background.
+  const giveBackInTime = () => beforeDeadline(giveBack(lease), deadline);
+  if (Date.now() >= deadline) return unreachable;
   try {
-    if (!(await store.setIfAbsent(WEB_SEARCH_LEASE_KEY, lease.token, SEARCH_LEASE_MS))) return { kind: "off", why: "another check is searching the web right now" };
+    const leasing = store.setIfAbsent(WEB_SEARCH_LEASE_KEY, lease.token, SEARCH_LEASE_MS);
+    const held = await beforeDeadline(leasing, deadline);
+    if (held === "late") {
+      void leasing.then((got) => (got ? giveBack(lease) : undefined), () => {});
+      return unreachable;
+    }
+    if (!held) return { kind: "off", why: "another check is searching the web right now" };
   } catch {
     return unreachable;
   }
   // A search another check finished between the first read and the lease.
-  let cached: Stored | null;
+  let cached: Stored | null | "late";
   try {
     cached = await fresh();
   } catch {
-    await giveBack(lease);
+    await giveBackInTime();
+    return unreachable;
+  }
+  if (cached === "late") {
+    void giveBack(lease);
     return unreachable;
   }
   if (cached) {
-    await giveBack(lease);
+    await giveBackInTime();
     return { kind: "cached", evidence: cached.evidence };
   }
-  const admission = await admit(searchBudget, { clientIp: null, reserveMicros: SEARCH_RESERVE_MICROS, now });
+  if (Date.now() >= deadline) {
+    void giveBack(lease);
+    return unreachable;
+  }
+  const admitting = admit(searchBudget, { clientIp: null, reserveMicros: SEARCH_RESERVE_MICROS, now });
+  const admission = await beforeDeadline(admitting, deadline);
+  if (admission === "late") {
+    void giveBack(lease);
+    void admitting.then(
+      (a) => (a.ok ? a.run.settle(false) : undefined),
+      () => {},
+    );
+    return unreachable;
+  }
   if (!admission.ok) {
-    await giveBack(lease);
+    await giveBackInTime();
     return { kind: "off", why: admission.reason === "budget" ? "today's web search budget is used up" : "the web search budget can't be read" };
   }
   return { kind: "search", run: admission.run, lease, startedAt: now.getTime() };

@@ -17,7 +17,7 @@ import {
 } from "./commute-handler";
 import { investigationReserveMicros, PICK_UNAVAILABLE } from "./investigation";
 import { sampleReports, scenariosFor, type DemoTripId } from "./samples";
-import { MemoryKvStore, planWebSearch, SEARCH_RESERVE_MICROS } from "./web-search";
+import { MemoryKvStore, planWebSearch, SEARCH_RESERVE_MICROS, WEB_SEARCH_LEASE_KEY, type KvStore } from "./web-search";
 import { callsReply, fakeMeta, hangs, searchReply, textReply } from "../test/muse-derived";
 import { cutEnd, cutStart, derivedReply } from "../test/valhalla-derived";
 import { CAP_EDITS, CV_GFA5, FEED, feedWith, SAVED } from "../test/pagasa-fixtures";
@@ -1323,4 +1323,130 @@ describe("Muse Spark in a real check (#6 with #7)", () => {
       expect(meta.searchRequests).toHaveLength(1);
     }, 10_000);
   });
+});
+
+describe("the web search runs under the check's one deadline (review 🔴C-1, 🔴C-2)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  process.env.MODEL_API_KEY = "test-key";
+
+  const timing: CommuteTiming = { deadlineMs: 1_500, routeWorstMs: 300, storeCallMs: 200, modelRoomMs: 200 };
+  const limit = timing.deadlineMs + timing.storeCallMs;
+  const closures = JSON.stringify({ closures: [{ place: "Colon St", lat: null, lon: null, url: "https://example.ph/colon", date: null, kind: "flooded" }] });
+  const OPS = ["get", "set", "setIfAbsent", "deleteIfEquals", "compareAndSet"] as const;
+  type Op = (typeof OPS)[number];
+
+  /**
+   * The shared store, with chosen operations that never answer from their nth call (0-based), or that answer only after
+   * a delay. `calls` counts every call each operation was asked, answered or not.
+   */
+  function slowKv(opts: { stallFrom?: Partial<Record<Op, number>>; delayMs?: Partial<Record<Op, number>> }) {
+    const inner = new MemoryKvStore();
+    const calls: Record<Op, number> = { get: 0, set: 0, setIfAbsent: 0, deleteIfEquals: 0, compareAndSet: 0 };
+    const landed: Op[] = [];
+    const store = {} as Record<Op, (...args: unknown[]) => Promise<unknown>>;
+    for (const op of OPS) {
+      store[op] = async (...args) => {
+        const n = calls[op]++;
+        const from = opts.stallFrom?.[op];
+        if (from !== undefined && n >= from) return new Promise(() => {});
+        const delay = opts.delayMs?.[op];
+        if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+        const result = await (inner[op] as (...a: unknown[]) => Promise<unknown>).apply(inner, args);
+        landed.push(op);
+        return result;
+      };
+    }
+    return { kv: store as unknown as KvStore, inner, calls, landed };
+  }
+
+  /** A search budget whose admission or settle never answers, or answers only after a delay; settles are recorded. */
+  function slowSearchBudget(opts: { admit?: "stalls" | number; settle?: "stalls" }) {
+    const inner = createBudget({ store: new MemoryBudgetStore(), budgetUsd: 100, ipLimit: 1 });
+    const settles: boolean[] = [];
+    const budget: Budget = {
+      admit: async (ip, at, reserve) => {
+        if (opts.admit === "stalls") return new Promise(() => {});
+        if (typeof opts.admit === "number") await new Promise((resolve) => setTimeout(resolve, opts.admit as number));
+        return inner.admit(ip, at, reserve);
+      },
+      settle: (a, u, ok) => {
+        settles.push(ok);
+        return opts.settle === "stalls" ? new Promise(() => {}) : inner.settle(a, u, ok);
+      },
+    };
+    return { budget, settles };
+  }
+
+  function mainBudget() {
+    const admits: number[] = [];
+    const settles: boolean[] = [];
+    const inner = openBudget();
+    const budget: Budget = {
+      admit: (ip, at, reserve) => (admits.push(reserve!), inner.admit(ip, at, reserve)),
+      settle: (a, u, ok) => (settles.push(ok), inner.settle(a, u, ok)),
+    };
+    return { budget, admits, settles };
+  }
+
+  function checkWith(kv: KvStore, searchBudget: Budget) {
+    const main = mainBudget();
+    const meta = fakeMeta({ search: [searchReply(closures)], turns: [textReply("resp_1", JSON.stringify({ answer: "go", evidence: ["plain"] }))] });
+    const muse: MuseDeps = { enabled: true, searchStore: () => kv, searchBudget: () => searchBudget };
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), main.budget, new MemoryReportStore(), muse, timing);
+    return { handler, meta, ...main };
+  }
+
+  async function timed(handler: (r: Request) => Promise<Response>) {
+    const started = Date.now();
+    const res = await handler(demo("banilad-itpark", "none"));
+    return { res, elapsed: Date.now() - started };
+  }
+
+  describe("planning that stalls: the check ends by the deadline, reserving nothing and asking no one", () => {
+    it.each([
+      ["the cache read never answers", () => slowKv({ stallFrom: { get: 0 } }), () => slowSearchBudget({})],
+      ["the lease is never granted", () => slowKv({ stallFrom: { setIfAbsent: 0 } }), () => slowSearchBudget({})],
+      ["the search budget never admits", () => slowKv({}), () => slowSearchBudget({ admit: "stalls" })],
+    ] as const)("%s", async (_name, kvOf, searchBudgetOf) => {
+      const { kv } = kvOf();
+      const { handler, meta, admits, settles } = checkWith(kv, searchBudgetOf().budget);
+
+      const { res, elapsed } = await timed(handler);
+
+      expect(elapsed).toBeLessThan(limit);
+      expect(res.status).toBe(503);
+      expect(admits).toEqual([]);
+      expect(settles).toEqual([]);
+      expect(meta.fetchMock).not.toHaveBeenCalled();
+    }, 10_000);
+  });
+
+  it("a lease granted after the deadline is given back, never held", async () => {
+    const { kv, inner, landed } = slowKv({ delayMs: { setIfAbsent: timing.deadlineMs + 100 } });
+    const { handler, admits } = checkWith(kv, slowSearchBudget({}).budget);
+
+    const { res, elapsed } = await timed(handler);
+
+    expect(elapsed).toBeLessThan(limit);
+    expect(res.status).toBe(503);
+    expect(admits).toEqual([]);
+    await vi.waitFor(() => expect(landed).toContain("setIfAbsent"), { timeout: 2_000 });
+    await vi.waitFor(async () => expect(await inner.get(WEB_SEARCH_LEASE_KEY)).toBeNull(), { timeout: 2_000 });
+  }, 10_000);
+
+  it("a search reservation granted after the deadline is settled as failed and its lease given back", async () => {
+    const { kv, inner } = slowKv({});
+    const search = slowSearchBudget({ admit: timing.deadlineMs + 100 });
+    const { handler, admits } = checkWith(kv, search.budget);
+
+    const { res, elapsed } = await timed(handler);
+
+    expect(elapsed).toBeLessThan(limit);
+    expect(res.status).toBe(503);
+    expect(admits).toEqual([]);
+    await vi.waitFor(() => expect(search.settles).toEqual([false]), { timeout: 2_000 });
+    expect(await inner.get(WEB_SEARCH_LEASE_KEY)).toBeNull();
+  }, 10_000);
 });
