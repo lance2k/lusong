@@ -5,7 +5,7 @@ import { startRecording, type RecorderMedia } from "./voice-recorder";
 function fakeMedia(opts: { permission?: Promise<void>; resume?: () => Promise<void>; addModule?: () => Promise<void>; worklet?: () => void } = {}) {
   const track = { stopped: false, stop: () => void (track.stopped = true) };
   const node = () => ({ connect: () => {}, disconnect: () => {} });
-  const seen = { track, contextClosed: false, workletNodes: 0, granted: false };
+  const seen = { track, contextClosed: false, workletNodes: 0, granted: false, ports: [] as { onmessage: unknown }[] };
   const ctx = {
     sampleRate: 48_000,
     destination: node(),
@@ -25,10 +25,28 @@ function fakeMedia(opts: { permission?: Promise<void>; resume?: () => Promise<vo
     newWorkletNode: () => {
       opts.worklet?.();
       seen.workletNodes += 1;
-      return { ...node(), port: { onmessage: null } } as unknown as AudioWorkletNode;
+      const port = { onmessage: null };
+      seen.ports.push(port);
+      return { ...node(), port } as unknown as AudioWorkletNode;
     },
   };
   return { media, seen };
+}
+
+/** The listeners currently added to `signal`, kept up to date as they are added and removed. */
+function listenersOn(signal: AbortSignal): Set<unknown> {
+  const listening = new Set<unknown>();
+  const add = signal.addEventListener.bind(signal);
+  const remove = signal.removeEventListener.bind(signal);
+  signal.addEventListener = ((...args: Parameters<AbortSignal["addEventListener"]>) => {
+    listening.add(args[1]);
+    add(...args);
+  }) as AbortSignal["addEventListener"];
+  signal.removeEventListener = ((...args: Parameters<AbortSignal["removeEventListener"]>) => {
+    listening.delete(args[1]);
+    remove(...args);
+  }) as AbortSignal["removeEventListener"];
+  return listening;
 }
 
 describe("the microphone is let go on every way recording can fail to start (🟡T9-3)", () => {
@@ -113,5 +131,30 @@ describe("a recording the page stopped wanting while it was starting (🟡T9-3)"
     expect(note.type).toBe("audio/wav");
     expect(seen.track.stopped).toBe(true);
     expect(seen.contextClosed).toBe(true);
+  });
+
+  it("three recordings stopped normally leave nothing listening to the page and no capture callback attached", async () => {
+    const page = new AbortController();
+    const listening = listenersOn(page.signal);
+    const ports: { onmessage: unknown }[] = [];
+    for (let i = 0; i < 3; i++) {
+      const { media, seen } = fakeMedia();
+      const recording = await startRecording({ media, signal: page.signal });
+      await recording.stop();
+      ports.push(...seen.ports);
+    }
+    expect(listening.size).toBe(0);
+    expect(ports).toHaveLength(3);
+    expect(ports.every((port) => port.onmessage === null)).toBe(true);
+  });
+
+  it("a cancelled recording leaves nothing listening to the page and no capture callback attached", async () => {
+    const page = new AbortController();
+    const listening = listenersOn(page.signal);
+    const { media, seen } = fakeMedia();
+    const recording = await startRecording({ media, signal: page.signal });
+    recording.cancel();
+    expect(listening.size).toBe(0);
+    expect(seen.ports[0].onmessage).toBeNull();
   });
 });

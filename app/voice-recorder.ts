@@ -48,13 +48,18 @@ export async function startRecording(opts: { media?: RecorderMedia; signal?: Abo
   const ctx = media.newContext();
   let stream: MediaStream | null = null;
   const nodes: AudioNode[] = [];
+  const chunks: Float32Array[] = [];
+  let detachCapture = () => {};
   let released = false;
   const release = () => {
     // Outside the guard: a stream that arrives after the page gave up still has its tracks stopped.
     for (const track of stream?.getTracks() ?? []) track.stop();
     if (released) return;
     released = true;
+    signal?.removeEventListener("abort", onAbort);
+    detachCapture();
     for (const node of nodes) node.disconnect();
+    nodes.length = 0;
     void ctx.close();
   };
   const givenUp = () => new DOMException("The page stopped the recording while it was starting.", "AbortError");
@@ -68,11 +73,11 @@ export async function startRecording(opts: { media?: RecorderMedia; signal?: Abo
   const abandoned = new Promise<never>((_, reject) => (abandon = reject));
   const onAbort = () => {
     release();
+    chunks.length = 0;
     abandon(givenUp());
   };
   signal?.addEventListener("abort", onAbort, { once: true });
 
-  const chunks: Float32Array[] = [];
   const setup = async () => {
     stream = await media.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
     unlessGivenUp();
@@ -96,10 +101,12 @@ export async function startRecording(opts: { media?: RecorderMedia; signal?: Abo
       unlessGivenUp();
       const worklet = media.newWorkletNode(ctx, "lusong-capture", { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1 });
       worklet.port.onmessage = (e: MessageEvent<Float32Array>) => chunks.push(e.data);
+      detachCapture = () => void (worklet.port.onmessage = null);
       node = worklet;
     } else {
       const processor = ctx.createScriptProcessor(4096, 1, 1);
       processor.onaudioprocess = (e) => chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+      detachCapture = () => void (processor.onaudioprocess = null);
       node = processor;
     }
     nodes.push(node);
@@ -124,9 +131,13 @@ export async function startRecording(opts: { media?: RecorderMedia; signal?: Abo
         samples.set(c, offset);
         offset += c.length;
       }
+      chunks.length = 0;
       return new Blob([encodeWav(samples, rate)], { type: "audio/wav" });
     },
-    cancel: release,
+    cancel() {
+      release();
+      chunks.length = 0;
+    },
   };
 }
 
