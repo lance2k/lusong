@@ -122,6 +122,13 @@ against 6 on the previous run. The tyre estimate appeared on 4 of the 30 draws a
 - A scene with too many people and cars for Muse Spark's output cap gets "can't measure", not a guess.
 - The tyre estimate assumes a 58–70 cm car tyre, errs deep when the body hides the tyre's top, and can read
   shallow on a wheel seen at an angle; it can only make a verdict deeper.
+- A photo report counts for 3 hours from when Lusong receives it, and a photo showing no flood water marks the
+  spot clear only if it was taken within the hour before it was sent. Neither rule can prove the photo is recent:
+  - the capture time comes from the phone's EXIF data, which anyone can edit;
+  - EXIF carries no time zone, so Lusong reads it as Philippine time;
+  - the same photo sent again is caught as one report only when its image bytes match, so a re-encoded or
+    cropped copy is counted as a new report;
+  - upload recency can't be proven: an old photo with a fresh capture time looks fresh.
 - It is a guide, not a safety system. Don't drive into flood water you can't see the bottom of.
 
 ## Run it locally
