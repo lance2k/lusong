@@ -42,12 +42,15 @@ const ACTIVE_ADVISORY: AdvisoryReading = {
 };
 const NO_WEB: WebEvidence = { state: "not_run", why: "test", searchedAt: null, findings: [] };
 
-function sourcesOf(options: { reports?: Report[]; around?: (spots: readonly Point[]) => AroundResult; failReports?: boolean } = {}) {
+function sourcesOf(
+  options: { reports?: Report[]; around?: (spots: readonly Point[]) => AroundResult; failReports?: boolean; /** The 0-based read from which the store fails. */ failReportsFrom?: number } = {},
+) {
   const asked = { reportsAlong: [] as Point[][], routeAround: [] as Point[][] };
   const sources: InvestigationSources = {
     async reportsAlong(line) {
       asked.reportsAlong.push([...line]);
-      return options.failReports ? { ok: false } : { ok: true, reports: options.reports ?? [] };
+      const failing = options.failReports || (options.failReportsFrom !== undefined && asked.reportsAlong.length - 1 >= options.failReportsFrom);
+      return failing ? { ok: false } : { ok: true, reports: options.reports ?? [] };
     },
     async routeAround(spots) {
       asked.routeAround.push([...spots]);
@@ -250,5 +253,143 @@ describe("when Muse Spark fails, the check still answers by the rules", () => {
 
     if (!result.ok) throw new Error("expected an answer");
     expect(result.explanation).toEqual(unavailable("reply cut off"));
+  });
+});
+
+describe("a source that fails is a failed check, never an empty success (🔴P5)", () => {
+  it("a report store that can't be read gives no answer, and Muse Spark is never asked", async () => {
+    const { sources } = sourcesOf({ failReports: true });
+    const meta = fakeMeta({ turns: [] });
+
+    expect(await investigate(inputOf(sources))).toEqual({ ok: false, failed: "reports" });
+    expect(meta.requests).toHaveLength(0);
+  });
+
+  it("reports along the way around that can't be read give no answer", async () => {
+    const { sources } = sourcesOf({ reports: [voice("v1", BLOCKED_SPOT, "not_passable")], failReportsFrom: 1 });
+    fakeMeta({ turns: [] });
+
+    expect(await investigate(inputOf(sources))).toEqual({ ok: false, failed: "reports" });
+  });
+
+  it("a router that can't be reached for the way around gives no answer", async () => {
+    const { sources } = sourcesOf({ reports: [voice("v1", BLOCKED_SPOT, "not_passable")], around: () => ({ ok: false, reason: "failed" }) });
+    fakeMeta({ turns: [] });
+
+    expect(await investigate(inputOf(sources))).toEqual({ ok: false, failed: "routing" });
+  });
+});
+
+describe("route_around: a way around the model proposes is judged by the same rules", () => {
+  /** A spot on the saved detour, far from the plain route. */
+  const ON_DETOUR = DETOUR[Math.floor(DETOUR.length / 2)];
+  const MODEL_SPOT = { lat: 10.3362, lon: 123.9105 };
+  const blocker = voice("v1", BLOCKED_SPOT, "not_passable");
+  /** The rules' own way around finds nothing; a request that also avoids the model's spot gets the saved detour. */
+  const onlyWithModelSpot = (spots: readonly Point[]): AroundResult => (spots.length === 1 ? { ok: false, reason: "no_route" } : { ok: true, line: DETOUR });
+  const proposeAround = (spots: unknown) => callsReply("resp_1", [{ name: "route_around", args: { spots } }]);
+
+  it("judged passable on reports gathered along it, it is the way the answer takes", async () => {
+    const { sources, asked } = sourcesOf({ reports: [blocker], around: onlyWithModelSpot });
+    const meta = fakeMeta({ turns: [proposeAround([MODEL_SPOT]), textReply("resp_2", "Banilad is reported not passable, so Lusong found a way around it.")] });
+
+    const result = await investigate(inputOf(sources));
+
+    if (!result.ok) throw new Error("expected an answer");
+    expect(asked.routeAround).toEqual([[BLOCKED_SPOT], [MODEL_SPOT, BLOCKED_SPOT]]);
+    expect(asked.reportsAlong).toEqual([PLAIN, DETOUR]);
+    expect(result.detours).toEqual([{ id: "muse-1", line: DETOUR, proposedBy: "muse_spark" }]);
+    expect(result.answer.answer).toBe("go_another_way");
+    expect(result.answer.route).toBe("muse-1");
+    const told = JSON.parse((meta.requests[1].input as { output: string }[])[0].output);
+    expect(told).toMatchObject({ route: "muse-1", state: "passable", answer_now: "Go another way" });
+    expect(result.explanation.by).toBe("muse_spark");
+  });
+
+  it("blocked by a report along it, it changes nothing", async () => {
+    const { sources } = sourcesOf({ reports: [blocker, voice("v2", ON_DETOUR, "knee_deep_or_deeper", "Lahug")], around: onlyWithModelSpot });
+    fakeMeta({ turns: [proposeAround([MODEL_SPOT]), textReply("resp_2", "Both ways are reported flooded.")] });
+
+    const result = await investigate(inputOf(sources));
+
+    if (!result.ok) throw new Error("expected an answer");
+    expect(result.answer.answer).toBe("wait");
+    expect(result.answer.routes.find((r) => r.routeId === "muse-1")?.state).toBe("blocked");
+  });
+
+  it("a way that still meets a blocked spot is no way around it", async () => {
+    const { sources } = sourcesOf({ reports: [blocker], around: (spots) => (spots.length === 1 ? { ok: false, reason: "no_route" } : { ok: true, line: PLAIN }) });
+    const meta = fakeMeta({ turns: [proposeAround([MODEL_SPOT]), textReply("resp_2", "No way around Banilad was found.")] });
+
+    const result = await investigate(inputOf(sources));
+
+    if (!result.ok) throw new Error("expected an answer");
+    expect(result.detours).toEqual([]);
+    expect(result.answer.answer).toBe("wait");
+    expect(JSON.parse((meta.requests[1].input as { output: string }[])[0].output)).toMatchObject({ result: "meets a blocked spot" });
+  });
+
+  it("when the usual way isn't blocked, the router is not asked", async () => {
+    const { sources, asked } = sourcesOf();
+    const meta = fakeMeta({ turns: [proposeAround([MODEL_SPOT]), textReply("resp_2", "Nobody has reported your way.")] });
+
+    const result = await investigate(inputOf(sources));
+
+    if (!result.ok) throw new Error("expected an answer");
+    expect(asked.routeAround).toEqual([]);
+    expect(JSON.parse((meta.requests[1].input as { output: string }[])[0].output)).toMatchObject({ result: "not needed" });
+  });
+
+  it.each([
+    ["no spots", []],
+    ["four spots", [MODEL_SPOT, MODEL_SPOT, MODEL_SPOT, MODEL_SPOT]],
+    ["a spot in Manila", [{ lat: 14.5995, lon: 120.9842 }]],
+    ["a spot that isn't numbers", [{ lat: "10.33", lon: "123.91" }]],
+    ["spots that aren't a list", "Banilad"],
+  ])("%s is refused without asking the router", async (_name, spots) => {
+    const { sources, asked } = sourcesOf({ reports: [blocker], around: onlyWithModelSpot });
+    const meta = fakeMeta({ turns: [proposeAround(spots), textReply("resp_2", "No way around Banilad was found.")] });
+
+    const result = await investigate(inputOf(sources));
+
+    if (!result.ok) throw new Error("expected an answer");
+    expect(asked.routeAround).toHaveLength(1);
+    expect(JSON.parse((meta.requests[1].input as { output: string }[])[0].output)).toHaveProperty("error");
+  });
+
+  it("only one way around is tried per check", async () => {
+    const { sources, asked } = sourcesOf({ reports: [blocker], around: onlyWithModelSpot });
+    const meta = fakeMeta({
+      turns: [
+        callsReply("resp_1", [
+          { name: "route_around", args: { spots: [MODEL_SPOT] } },
+          { name: "route_around", args: { spots: [ON_DETOUR] } },
+        ]),
+        textReply("resp_2", "Banilad is reported not passable, so Lusong found a way around it."),
+      ],
+    });
+
+    await investigate(inputOf(sources));
+
+    expect(asked.routeAround).toHaveLength(2);
+    expect(JSON.parse((meta.requests[1].input as { output: string }[])[1].output)).toHaveProperty("error");
+  });
+
+  it("a router failure on the model's way around only drops that way", async () => {
+    const { sources } = sourcesOf({ reports: [blocker], around: (spots) => (spots.length === 1 ? { ok: false, reason: "no_route" } : { ok: false, reason: "failed" }) });
+    fakeMeta({ turns: [proposeAround([MODEL_SPOT]), textReply("resp_2", "No way around Banilad was found.")] });
+
+    const result = await investigate(inputOf(sources));
+
+    if (!result.ok) throw new Error("expected an answer");
+    expect(result.answer.answer).toBe("wait");
+    expect(result.detours).toEqual([]);
+  });
+
+  it("reports along the model's way around that can't be read give no answer", async () => {
+    const { sources } = sourcesOf({ reports: [blocker], around: onlyWithModelSpot, failReportsFrom: 1 });
+    fakeMeta({ turns: [proposeAround([MODEL_SPOT])] });
+
+    expect(await investigate(inputOf(sources))).toEqual({ ok: false, failed: "reports" });
   });
 });

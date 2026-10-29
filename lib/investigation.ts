@@ -114,6 +114,33 @@ export const LOOP_MAX_OUTPUT_TOKENS = 3_000;
 /** A call gets at most this long, and never past the deadline. The probe's slowest function turn took 9.8 s (1 draw). */
 export const LOOP_ATTEMPT_MS = 15_000;
 
+/** At most this many ways around the model may ask for in one check: each is a request to the shared Valhalla server. */
+export const ROUTE_AROUND_CAP = 1;
+export const ROUTE_AROUND_MAX_SPOTS = 3;
+
+/**
+ * Metro Cebu, drawn generously by hand from Danao in the north to Carcar in the south and Mactan in the east (not an
+ * official boundary). A location the model gives outside it is not used.
+ */
+export const METRO_CEBU = { south: 10.05, north: 10.6, west: 123.65, east: 124.1 } as const;
+
+export function inMetroCebu(p: { lat: unknown; lon: unknown }): p is Point {
+  return (
+    typeof p.lat === "number" &&
+    typeof p.lon === "number" &&
+    p.lat >= METRO_CEBU.south &&
+    p.lat <= METRO_CEBU.north &&
+    p.lon >= METRO_CEBU.west &&
+    p.lon <= METRO_CEBU.east
+  );
+}
+
+class SourceFailed extends Error {
+  constructor(readonly source: "reports" | "routing") {
+    super(`${source} failed`);
+  }
+}
+
 const ANSWER_WORDS: Record<AnswerKind, string> = {
   go: "Go",
   go_another_way: "Go another way",
@@ -138,12 +165,30 @@ const TOOLS: FunctionTool[] = [
       required: ["route"],
     },
   },
+  {
+    type: "function",
+    name: "route_around",
+    description:
+      "Ask Lusong to try one more way around up to three spots in Metro Cebu that you think are flooded or closed. " +
+      "Lusong also avoids every spot already blocked, gathers the reports along the new way and judges it by its own rules.",
+    parameters: {
+      type: "object",
+      properties: {
+        spots: {
+          type: "array",
+          items: { type: "object", properties: { lat: { type: "number" }, lon: { type: "number" } }, required: ["lat", "lon"] },
+        },
+      },
+      required: ["spots"],
+    },
+  },
 ];
 
 const INSTRUCTIONS = [
   "You help Lusong explain a commute check to a motorbike rider in Metro Cebu.",
   "Lusong's rules have already picked the answer and you cannot change it.",
   "Call read_advisory and reports_near_route to see the evidence Lusong gathered.",
+  "If the usual way is blocked and you know of another flooded or closed spot, you may call route_around once.",
   "Then write the explanation: two to four plain English sentences saying why the answer is what it is.",
   "Do not call any way safe or clear, do not suggest a different answer, and write no markdown or links.",
 ].join(" ");
@@ -242,6 +287,7 @@ export async function investigate(input: InvestigationInput): Promise<Investigat
   }
 
   const toolCalls: { name: string; outcome: string }[] = [];
+  let routeArounds = 0;
   const runTool = async (call: FunctionCall): Promise<object> => {
     let args: Record<string, unknown>;
     try {
@@ -282,13 +328,58 @@ export async function investigate(input: InvestigationInput): Promise<Investigat
           }),
         };
       }
+      case "route_around": {
+        const spots = Array.isArray(args.spots) ? (args.spots as { lat: unknown; lon: unknown }[]) : null;
+        const refuse = (outcome: string, error: string) => {
+          toolCalls.push({ name: call.name, outcome });
+          return { error };
+        };
+        if (routeArounds >= ROUTE_AROUND_CAP) return refuse("over the cap", "Lusong tries only one way around per check.");
+        if (!spots || spots.length === 0 || spots.length > ROUTE_AROUND_MAX_SPOTS) {
+          return refuse("unreadable spots", `give one to ${ROUTE_AROUND_MAX_SPOTS} spots as {lat, lon}`);
+        }
+        if (!spots.every((p) => typeof p === "object" && p !== null && inMetroCebu(p))) {
+          return refuse("spot outside Metro Cebu", "every spot must be a {lat, lon} in Metro Cebu");
+        }
+        routeArounds++;
+        const blocking = plainBlockers();
+        if (blocking.length === 0) {
+          toolCalls.push({ name: call.name, outcome: "not needed" });
+          return { result: "not needed", why: "your usual way isn't blocked, so the answer doesn't depend on a way around" };
+        }
+        const avoid = [...(spots as Point[]).map((p) => ({ lat: p.lat, lon: p.lon })), ...blocking.map((b) => b.at)];
+        const around = await input.sources.routeAround(avoid);
+        if (!around.ok) {
+          toolCalls.push({ name: call.name, outcome: around.reason });
+          return { result: around.reason === "no_route" ? "no way found" : "the router couldn't be reached" };
+        }
+        if (!detourAvoids(around.line, blocking.map((b) => b.at))) {
+          toolCalls.push({ name: call.name, outcome: "meets a blocked spot" });
+          return { result: "meets a blocked spot" };
+        }
+        const along = await input.sources.reportsAlong(around.line);
+        if (!along.ok) throw new SourceFailed("reports");
+        evidence.add(along.reports);
+        const id = `muse-${routeArounds}`;
+        evidence.detours.push({ id, line: around.line, proposedBy: "muse_spark" });
+        const answer = evidence.answer();
+        const judged = answer.routes.find((r) => r.routeId === id)!;
+        toolCalls.push({ name: call.name, outcome: judged.state });
+        return { route: id, state: judged.state, answer_now: ANSWER_WORDS[answer.answer], reason: answer.reason };
+      }
       default:
         toolCalls.push({ name: call.name, outcome: "unknown tool" });
         return { error: `no tool "${call.name}"` };
     }
   };
 
-  const written = await explain(input, evidence, runTool);
+  let written: Written;
+  try {
+    written = await explain(input, evidence, runTool);
+  } catch (err) {
+    if (err instanceof SourceFailed) return { ok: false, failed: err.source };
+    throw err;
+  }
   const answer = evidence.answer();
   const explanation: Explanation =
     "text" in written
