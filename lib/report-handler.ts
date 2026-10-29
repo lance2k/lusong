@@ -73,7 +73,7 @@ export interface ReportView {
   mmdaCredit: string;
 }
 
-function durationWords(ms: number): string {
+export function durationWords(ms: number): string {
   const totalMin = Math.floor(ms / 60_000);
   if (totalMin < 1) return "less than a minute";
   const h = Math.floor(totalMin / 60);
