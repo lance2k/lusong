@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useReducer, useState } from "react";
 import type { AnswerKind } from "@/lib/answer";
-import { DEMO_TRIPS, SCENARIOS, type DemoTripId, type ScenarioId } from "@/lib/samples";
+import { DEMO_TRIPS, SCENARIOS, type DemoTripId } from "@/lib/samples";
+import { commuteReducer, initialCommuteState, type CommuteInputs, type CommuteState } from "./commute-state";
 
 interface PageReport {
   id: string;
@@ -39,12 +40,6 @@ interface CommuteResult {
   reports: PageReport[];
   mmdaCredit: string;
 }
-
-type State =
-  | { step: "idle" }
-  | { step: "checking"; startedAt: number }
-  | { step: "done"; result: CommuteResult }
-  | { step: "failed"; message: string };
 
 const TONES: Record<AnswerKind, string> = {
   go: "bg-emerald-600 text-white",
@@ -150,14 +145,19 @@ function Report({ r }: { r: PageReport }) {
   );
 }
 
-function ResultView({ result }: { result: CommuteResult }) {
+function inputWords(inputs: CommuteInputs): string {
+  const scenario = SCENARIOS.find((s) => s.id === inputs.scenario)!.label;
+  return `${DEMO_TRIPS[inputs.trip].label} · ${scenario} · ${inputs.rainingHere ? "raining here" : "no rain tap"}`;
+}
+
+function ResultView({ result, checkedFor }: { result: CommuteResult; checkedFor: CommuteInputs }) {
   const { answer, route } = result;
   return (
     <div className="space-y-4">
       <section className="overflow-hidden rounded-2xl border border-zinc-200 dark:border-zinc-800">
         <div className={`px-5 py-4 ${TONES[answer.kind]}`}>
           <p className="text-2xl font-bold leading-tight">{answer.title}</p>
-          <p className="mt-1 text-sm opacity-90">{result.trip.label} · demo</p>
+          <p className="mt-1 text-sm opacity-90">Demo: {inputWords(checkedFor)}</p>
         </div>
         <div className="space-y-2 px-5 py-4 text-[15px] leading-relaxed">
           <p>{answer.reason}</p>
@@ -197,38 +197,49 @@ function ResultView({ result }: { result: CommuteResult }) {
 }
 
 export default function CommuteCheck() {
-  const [trip, setTrip] = useState<DemoTripId>("banilad-itpark");
-  const [scenario, setScenario] = useState<ScenarioId>("none");
-  const [rainingHere, setRainingHere] = useState(false);
-  const [state, setState] = useState<State>({ step: "idle" });
-  const latest = useRef(0);
+  const [state, dispatch] = useReducer(
+    commuteReducer<CommuteResult>,
+    initialCommuteState as CommuteState<CommuteResult>,
+  );
+  const { trip, scenario, rainingHere } = state.inputs;
+  const view = state.view;
 
   async function check() {
-    const ticket = ++latest.current;
-    setState({ step: "checking", startedAt: Date.now() });
+    const ticket = state.ticket + 1;
+    const inputs = state.inputs;
+    dispatch({ type: "start", at: Date.now() });
     try {
       const res = await fetch("/api/commute", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "demo", trip, scenario, rainingHere }),
+        body: JSON.stringify({ mode: "demo", ...inputs }),
       });
       const body = await res.json().catch(() => null);
-      if (ticket !== latest.current) return;
       if (!res.ok || !body?.answer) {
-        setState({ step: "failed", message: body?.error ?? "Lusong couldn't run the check. Try again in a minute." });
+        dispatch({ type: "failed", ticket, message: body?.error ?? "Lusong couldn't run the check. Try again in a minute." });
         return;
       }
-      setState({ step: "done", result: body as CommuteResult });
+      dispatch({ type: "answered", ticket, result: body as CommuteResult });
     } catch {
-      if (ticket === latest.current) setState({ step: "failed", message: "Lusong couldn't be reached. Check your connection." });
+      dispatch({ type: "failed", ticket, message: "Lusong couldn't be reached. Check your connection." });
     }
   }
 
   return (
     <div className="space-y-5">
-      <Choice label="Demo trip" options={TRIP_IDS.map((id) => ({ id, label: DEMO_TRIPS[id].label }))} value={trip} onChange={setTrip} />
+      <Choice
+        label="Demo trip"
+        options={TRIP_IDS.map((id) => ({ id, label: DEMO_TRIPS[id].label }))}
+        value={trip}
+        onChange={(id) => dispatch({ type: "change", inputs: { trip: id } })}
+      />
       <div className="space-y-1">
-        <Choice label="Sample reports" options={SCENARIOS} value={scenario} onChange={setScenario} />
+        <Choice
+          label="Sample reports"
+          options={SCENARIOS}
+          value={scenario}
+          onChange={(id) => dispatch({ type: "change", inputs: { scenario: id } })}
+        />
         <p className="text-sm text-zinc-500">
           Samples are labelled test photos from elsewhere, pinned on these streets for the demo. Real checks never use them.
         </p>
@@ -236,7 +247,7 @@ export default function CommuteCheck() {
       <button
         type="button"
         aria-pressed={rainingHere}
-        onClick={() => setRainingHere((r) => !r)}
+        onClick={() => dispatch({ type: "change", inputs: { rainingHere: !rainingHere } })}
         className="w-full rounded-2xl border-2 border-sky-600 px-5 py-3 text-base font-semibold text-sky-700 aria-pressed:bg-sky-600 aria-pressed:text-white dark:text-sky-300"
       >
         {rainingHere ? "Raining here ✓" : "Tap if it's raining here"}
@@ -244,24 +255,24 @@ export default function CommuteCheck() {
       <button
         type="button"
         onClick={check}
-        disabled={state.step === "checking"}
+        disabled={view.step === "checking"}
         className="w-full rounded-2xl bg-sky-600 px-5 py-4 text-lg font-semibold text-white shadow-sm transition hover:bg-sky-700 disabled:opacity-60"
       >
         Check this commute
       </button>
 
       <div aria-live="polite">
-        {state.step === "checking" && (
+        {view.step === "checking" && (
           <p className="text-center text-zinc-600 dark:text-zinc-400">
-            Reading PAGASA&apos;s flood advisory, getting the motorbike route and gathering reports… <Elapsed since={state.startedAt} /> s
+            Reading PAGASA&apos;s flood advisory, getting the motorbike route and gathering reports… <Elapsed since={view.startedAt} /> s
           </p>
         )}
-        {state.step === "failed" && (
+        {view.step === "failed" && (
           <p className="rounded-2xl border border-amber-300 bg-amber-50 px-5 py-4 font-semibold text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
-            {state.message}
+            {view.message}
           </p>
         )}
-        {state.step === "done" && <ResultView result={state.result} />}
+        {view.step === "done" && <ResultView result={view.result} checkedFor={view.for} />}
       </div>
     </div>
   );
