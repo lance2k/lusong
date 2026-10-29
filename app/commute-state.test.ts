@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commuteReducer, initialCommuteState, type CommuteState } from "./commute-state";
+import { commuteReducer, initialCommuteState, OWN_TRIP, type CommuteState } from "./commute-state";
 
 const answered = { answer: { kind: "wait" } } as never;
 
@@ -42,5 +42,20 @@ describe("the commute check's page state", () => {
     expect(away.inputs).toMatchObject({ trip: "mabolo-cbp", scenario: "none" });
     const kept = run({ type: "change", inputs: { scenario: "flooded" } }, { type: "change", inputs: { trip: "mabolo-cbp" } });
     expect(kept.inputs.scenario).toBe("flooded");
+  });
+
+  it("choosing your own trip drops the sample scenario: a real check never uses samples", () => {
+    const state = run({ type: "change", inputs: { scenario: "flooded" } }, { type: "change", inputs: { trip: OWN_TRIP } });
+    expect(state.inputs).toEqual({ trip: OWN_TRIP, scenario: "none", rainingHere: false });
+  });
+
+  it("a newly tapped or cleared trip clears the answer shown for the old one", () => {
+    const state = run(
+      { type: "change", inputs: { trip: OWN_TRIP } },
+      { type: "start", at: 1 },
+      { type: "answered", ticket: 2, result: answered },
+      { type: "change", inputs: {} },
+    );
+    expect(state.view).toEqual({ step: "idle" });
   });
 });

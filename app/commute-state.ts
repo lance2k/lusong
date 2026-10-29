@@ -1,7 +1,10 @@
 import { scenariosFor, type DemoTripId, type ScenarioId } from "../lib/samples";
 
+/** The commuter's own tapped trip, checked for real; any other choice is a demo trip. */
+export const OWN_TRIP = "own";
+
 export interface CommuteInputs {
-  trip: DemoTripId;
+  trip: DemoTripId | typeof OWN_TRIP;
   scenario: ScenarioId;
   rainingHere: boolean;
 }
@@ -35,7 +38,7 @@ export function commuteReducer<R>(state: CommuteState<R>, action: CommuteAction<
   switch (action.type) {
     case "change": {
       const inputs = { ...state.inputs, ...action.inputs };
-      if (!scenariosFor(inputs.trip).some((s) => s.id === inputs.scenario)) inputs.scenario = "none";
+      if (inputs.trip === OWN_TRIP || !scenariosFor(inputs.trip).some((s) => s.id === inputs.scenario)) inputs.scenario = "none";
       return { inputs, ticket: state.ticket + 1, view: { step: "idle" } };
     }
     case "start":
