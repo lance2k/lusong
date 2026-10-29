@@ -87,6 +87,8 @@ export interface RouteJudgement {
   state: RouteState;
   /** Counting, unretired reports within the corridor, in input order. */
   reportIds: string[];
+  /** Of those, the ones that block it. */
+  blockedBy: string[];
 }
 
 export interface ReportJudgement {
@@ -287,7 +289,12 @@ export function decideAnswer(input: {
     route: chosen.route.id,
     decidedBy,
     thinEvidence,
-    routes: [plain, ...detours].map((v) => ({ routeId: v.route.id, state: v.state, reportIds: v.on.map((j) => j.report.id) })),
+    routes: [plain, ...detours].map((v) => ({
+      routeId: v.route.id,
+      state: v.state,
+      reportIds: v.on.map((j) => j.report.id),
+      blockedBy: v.blockers.map((j) => j.report.id),
+    })),
     reports: all.map((j) => ({ id: j.report.id, role: j.role, counts: j.counts, retiredBy: j.retiredBy })),
   };
 }

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   COVER_GAP_M,
@@ -9,6 +10,7 @@ import {
   type ReportReading,
   type RouteCandidate,
 } from "./answer";
+import { decodePolyline6 } from "./router";
 import type { Verdict } from "./verdict";
 
 const NOW = new Date("2026-10-30T07:00:00+08:00");
@@ -365,5 +367,30 @@ describe("the reason and the thin-evidence note", () => {
     { name: "Wait on two photo blockers is not", reports: () => [blocker({ alongM: 0 }), blocker({ alongM: 1_000 })], thin: false },
   ])("$name", ({ reports, thin }) => {
     expect(answerFor(reports()).thinEvidence).toBe(thin);
+  });
+});
+
+describe("the Banilad → IT Park detour Valhalla returned (real records, 2026-10-30)", () => {
+  const lineOf = (file: string) => decodePolyline6(JSON.parse(readFileSync(`test/fixtures/valhalla/${file}`, "utf8")).trip.legs[0].shape);
+  const plain = { id: "plain", line: lineOf("banilad-itpark-plain.json") };
+  const detour = { id: "detour", line: lineOf("banilad-itpark-excluded.json") };
+  const onPlain = blocker({ at: { lat: 10.335398, lon: 123.910908 } });
+
+  it("with nothing reported on it and no rain ⇒ Go another way, the answer about the detour", () => {
+    const result = answerFor([onPlain], { plain, detours: [detour] });
+    expect(result.answer).toBe("go_another_way");
+    expect(result.route).toBe("detour");
+    expect(result.routes.map((r) => [r.routeId, r.state, r.blockedBy])).toEqual([
+      ["plain", "blocked", [onPlain.id]],
+      ["detour", "passable", []],
+    ]);
+  });
+
+  it("a detour that crosses its own blocked report (on Camp Lapu-Lapu Road) ⇒ not Go another way", () => {
+    const onDetour = blocker({ at: detour.line[50] });
+    const result = answerFor([onPlain, onDetour], { plain, detours: [detour] });
+    expect(result.answer).not.toBe("go_another_way");
+    expect(result.answer).toBe("wait");
+    expect(result.routes[1]).toMatchObject({ state: "blocked", blockedBy: [onDetour.id] });
   });
 });
