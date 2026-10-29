@@ -62,7 +62,6 @@ export async function runTick(deps: TickDeps): Promise<TickSummary> {
   const elapsed = deps.elapsedMs ?? (() => Date.now() - started);
   const deadline = started + limits.budgetMs;
   const at = deps.now();
-  const day = phtDay(at);
   const summary: TickSummary = { ok: true, due: 0, checked: 0, sent: 0, failed: 0, deferred: 0 };
 
   let watchers: WatchRecord[];
@@ -82,15 +81,18 @@ export async function runTick(deps: TickDeps): Promise<TickSummary> {
       summary.deferred = due.length - i;
       break;
     }
+    // Earlier checks in this tick take time, so a window open when the tick began may have closed by now.
+    const startAt = deps.now();
+    if (!inWindow(w.window, startAt)) continue;
     try {
-      if (!(await deps.store.claimRun(w.id, w.gen, at.getTime(), limits.minGapMs))) continue;
+      if (!(await deps.store.claimRun(w.id, w.gen, startAt.getTime(), limits.minGapMs))) continue;
     } catch (err) {
       console.error("watch store failed on claim:", err instanceof Error ? err.message : err);
       summary.failed += 1;
       continue;
     }
     summary.checked += 1;
-    const outcome = await runOne(deps, w, { at, day, deadline });
+    const outcome = await runOne(deps, w, { deadline });
     if (outcome === "sent") summary.sent += 1;
     if (outcome === "failed") summary.failed += 1;
   }
@@ -100,7 +102,7 @@ export async function runTick(deps: TickDeps): Promise<TickSummary> {
 async function runOne(
   deps: TickDeps,
   w: WatchRecord,
-  run: { at: Date; day: string; deadline: number },
+  run: { deadline: number },
 ): Promise<"sent" | "quiet" | "failed"> {
   let result: ScheduledCheck;
   try {
@@ -110,18 +112,22 @@ async function runOne(
     return "failed";
   }
   if (!result.ok) return "failed";
-  const opening = w.lastDay !== run.day;
+  // The check can outlast the window: what is sent is decided on the clock as it is now.
+  const at = deps.now();
+  if (!inWindow(w.window, at)) return "quiet";
+  const day = phtDay(at);
+  const opening = w.lastDay !== day;
   if (!opening && result.kind === w.lastKind) return "quiet";
   try {
     // Switched off (or switched on again) while the check ran: this run speaks for no one.
     if (!(await deps.store.isCurrent(w.id, w.gen))) return "quiet";
-    const text = watchMessage({ kind: result.kind, was: opening ? null : w.lastKind, at: run.at, window: w.window, pageUrl: deps.pageUrl });
+    const text = watchMessage({ kind: result.kind, was: opening ? null : w.lastKind, at, window: w.window, pageUrl: deps.pageUrl });
     const sent = await deps.channel.send(w.chatId!, text);
     if (!sent.ok) {
       if (sent.permanent) await deps.store.remove(w.id);
       return "failed";
     }
-    await deps.store.commit(w.id, w.gen, { kind: result.kind, day: run.day });
+    await deps.store.commit(w.id, w.gen, { kind: result.kind, day });
     return "sent";
   } catch (err) {
     console.error("watch store failed:", err instanceof Error ? err.message : err);

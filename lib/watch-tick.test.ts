@@ -151,6 +151,43 @@ describe("the watcher's tick (fake clock, fake channel)", () => {
     expect(store.ttls()).toEqual({});
   });
 
+  it("a check that runs past the window's end sends nothing", async () => {
+    const { clock, store, channel, deps } = setup("2026-10-30T07:59:55+08:00");
+    await linkedWatcher(store);
+    deps.check = async () => {
+      clock.set("2026-10-30T08:00:01+08:00");
+      return { ok: true, kind: "go" };
+    };
+    expect(await runTick(deps)).toMatchObject({ checked: 1, sent: 0 });
+    expect(channel.sent).toEqual([]);
+  });
+
+  it("a later watcher whose window has closed by its turn in the tick isn't checked", async () => {
+    const { clock, store, channel, deps } = setup("2026-10-30T07:59:50+08:00");
+    await linkedWatcher(store, { id: "a".repeat(64) }, "1");
+    await linkedWatcher(store, { id: "b".repeat(64) }, "2");
+    const checked: number[] = [];
+    deps.check = async () => {
+      checked.push(clock.ms());
+      clock.set("2026-10-30T08:00:00+08:00");
+      return { ok: true, kind: "go" };
+    };
+    await runTick(deps);
+    expect(checked).toEqual([Date.parse("2026-10-30T07:59:50+08:00")]);
+    expect(channel.sent).toEqual([]);
+  });
+
+  it("a message tells the time the answer was sent, not the time the tick began", async () => {
+    const { clock, store, channel, deps } = setup("2026-10-30T06:00:00+08:00");
+    await linkedWatcher(store);
+    deps.check = async () => {
+      clock.set("2026-10-30T06:04:30+08:00");
+      return { ok: true, kind: "go" };
+    };
+    await runTick(deps);
+    expect(channel.sent.map((m) => m.text.split("\n")[1])).toEqual(["At 06:04 PHT: Go"]);
+  });
+
   it("a store that can't be read sends nothing and says so", async () => {
     const { store, channel, tick } = setup("2026-10-30T06:00:00+08:00");
     await linkedWatcher(store);
