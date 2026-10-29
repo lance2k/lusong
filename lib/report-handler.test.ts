@@ -92,13 +92,16 @@ function handlerWith(
     now?: () => Date;
     gate?: ValhallaGate;
     admitDelayMs?: number;
+    settleDelayMs?: number;
+    budget?: Budget;
     timing?: Parameters<typeof makeReportHandler>[0]["timing"];
   } = {},
 ) {
-  const budget = createBudget({ store: new MemoryBudgetStore(), budgetUsd: (opts.budgetMicros ?? 10 * R) / 1e6, ipLimit: opts.ipLimit ?? 10 });
+  const budget =
+    opts.budget ?? createBudget({ store: new MemoryBudgetStore(), budgetUsd: (opts.budgetMicros ?? 10 * R) / 1e6, ipLimit: opts.ipLimit ?? 10 });
   const slowBudget: Budget = {
     admit: async (...args) => (await sleep(opts.admitDelayMs ?? 0), budget.admit(...args)),
-    settle: (...args) => budget.settle(...args),
+    settle: async (...args) => (await sleep(opts.settleDelayMs ?? 0), budget.settle(...args)),
   };
   const store = opts.store === undefined ? new MemoryReportStore() : opts.store;
   const valhalla = opts.valhalla ?? locate();
@@ -348,7 +351,8 @@ describe("refused before anything is paid for", () => {
 
 describe("one deadline for the whole request (route maxDuration 120 s)", () => {
   /** Scaled down from 110 s, 12 s and 3 s so the test runs in seconds; the handler logic is the same. */
-  const timing = { budgetMs: 3_000, finishReserveMs: 600, locateMinMs: 800 };
+  /** Save, release and settle get 150 ms each, the response 150 ms: a 600 ms reserve, like 3 × 5 s + 2 s scaled. */
+  const timing = { budgetMs: 3_000, storeCallMs: 150, responseMs: 150, minReadMs: 400, locateMinMs: 800 };
 
   /** A store whose claim is slow, as an Upstash call near its 5 s timeout would be. */
   function slowClaimStore(delayMs: number) {
@@ -404,14 +408,102 @@ describe("one deadline for the whole request (route maxDuration 120 s)", () => {
     expect(await store.recent(NOW)).toEqual([expect.objectContaining({ wayId: null })]);
   }, 20_000);
 
+  /** A multipart body that sends its first bytes and then nothing more, as a stalled upload would. */
+  function stalledUpload(): Request {
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode("--x\r\nContent-Disposition: form-data; name=\"lat\"\r\n\r\n10.33\r\n"));
+      },
+    });
+    return new Request("http://localhost/api/report", {
+      method: "POST",
+      body,
+      headers: { "content-type": "multipart/form-data; boundary=x", "x-forwarded-for": "192.0.2.1" },
+      duplex: "half",
+    } as RequestInit);
+  }
+
+  function watchedBudget() {
+    const budget = createBudget({ store: new MemoryBudgetStore(), budgetUsd: R / 1e6, ipLimit: 10 });
+    const admit = vi.spyOn(budget, "admit");
+    return { budget, admit };
+  }
+
+  it("an upload that stalls is cut off at the deadline: 408, nothing claimed, nothing reserved", async () => {
+    const calls = stubMeta();
+    const store = new MemoryReportStore();
+    const { budget, admit } = watchedBudget();
+    const started = Date.now();
+    const res = await handlerWith({ store, budget, timing })(stalledUpload());
+    expect(res.status).toBe(408);
+    expect(Date.now() - started).toBeLessThan(timing.budgetMs);
+    expect(store.dump()).toEqual({});
+    expect(admit).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(0);
+  }, 10_000);
+
+  it("a claim that leaves no time for admission and a read: 503, the claim freed, nothing reserved, no Meta call", async () => {
+    const calls = stubMeta();
+    const store = slowClaimStore(2_100);
+    const { budget, admit } = watchedBudget();
+    const res = await handlerWith({ store, budget, timing })(post("192.0.2.1"));
+    expect(res.status).toBe(503);
+    expect(admit).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(0);
+    await vi.waitFor(() => expect(store.dump()).toEqual({}), { timeout: 2_000 });
+  }, 10_000);
+
+  it("an admission that leaves no time for a read: 503, no Meta call, the reservation refunded and the claim freed", async () => {
+    const calls = stubMeta();
+    const store = new MemoryReportStore();
+    const { budget, admit } = watchedBudget();
+    const settle = vi.spyOn(budget, "settle");
+    const res = await handlerWith({ store, budget, admitDelayMs: 2_100, timing })(post("192.0.2.1"));
+    expect(res.status).toBe(503);
+    expect(calls).toHaveLength(0);
+    // The late reservation lands after the answer; once it is settled, the budget (room for exactly one) is free again.
+    await vi.waitFor(() => expect(settle).toHaveBeenCalledTimes(1), { timeout: 2_000 });
+    expect(admit).toHaveBeenCalledTimes(1);
+    expect((await budget.admit("192.0.2.9", NOW)).ok).toBe(true);
+    expect(store.dump()).toEqual({});
+  }, 10_000);
+
+  it("a save that never answers: answered within the budget, not stored", async () => {
+    stubMeta();
+    const store = new MemoryReportStore();
+    store.save = () => new Promise(() => {});
+    const started = Date.now();
+    const res = await handlerWith({ store, timing })(post("192.0.2.1"));
+    expect(res.status).toBe(200);
+    expect((await res.json()).stored).toBe(false);
+    expect(Date.now() - started).toBeLessThan(timing.budgetMs);
+  }, 10_000);
+
+  it("a slow failed save, a slow release and a slow settle after a late read all fit in the budget", async () => {
+    stubMeta({ sam: { "flood water": async () => (await sleep(2_300), samEmpty()()) } });
+    const store = new MemoryReportStore();
+    store.save = async () => {
+      await sleep(140);
+      throw new Error("Upstash HTTP 500");
+    };
+    const release = store.releasePhoto.bind(store);
+    store.releasePhoto = async (hash) => (await sleep(140), release(hash));
+    const started = Date.now();
+    const res = await handlerWith({ store, settleDelayMs: 140, timing })(post("192.0.2.1"));
+    expect(res.status).toBe(200);
+    expect((await res.json()).stored).toBe(false);
+    expect(Date.now() - started).toBeLessThan(timing.budgetMs);
+  }, 10_000);
+
   it("the real budget leaves the route's 120 s limit room past the reserve for saving and settling", async () => {
     const { REQUEST_BUDGET_MS, FINISH_RESERVE_MS } = await import("./report-handler");
     // The route module imports through the "@/" alias, which vitest doesn't resolve, so its limit is read from source.
     const maxDuration = Number(/export const maxDuration = (\d+);/.exec(readFileSync("app/api/report/route.ts", "utf8"))?.[1]);
     expect(maxDuration).toBe(120);
     expect(REQUEST_BUDGET_MS).toBeLessThan(maxDuration * 1_000);
-    // Save and settle are each one Upstash call bounded at 5 s.
-    expect(FINISH_RESERVE_MS).toBeGreaterThanOrEqual(2 * 5_000);
+    // A failed save, its release and the settle are each one Upstash call bounded at 5 s, run one after another.
+    expect(FINISH_RESERVE_MS).toBeGreaterThanOrEqual(3 * 5_000);
   });
 });
 

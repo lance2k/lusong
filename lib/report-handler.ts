@@ -10,25 +10,42 @@ import { JpegError, sanitizeJpeg } from "./jpeg";
 import { locateSpot } from "./locate";
 import { MetaApiError } from "./meta";
 import { inMetroCebu } from "./metro-cebu";
+import { beforeDeadline, readBody } from "./deadline";
 import { reportStoreFromEnv, toReport, type ReportStore, type StoredReport } from "./report-store";
 import type { ValhallaGate } from "./router";
 
 const MAX_BYTES = 3 * 1024 * 1024;
+/** The photo plus the form's boundaries and the two coordinates. */
+const MAX_BODY_BYTES = MAX_BYTES + 64 * 1024;
 /** The page shrinks every photo to this; the budget's input-token bound was measured at this size. */
 const MAX_SIDE = 1600;
 
-/** One deadline for the whole request, under the route's 120 s maxDuration, so a paid read is always saved and answered. */
-export const REQUEST_BUDGET_MS = 110_000;
-/** Kept back from every step for saving the report and settling the reservation, each one Upstash call bounded at 5 s. */
-export const FINISH_RESERVE_MS = 12_000;
-/** Below this much time to spare, /locate is skipped and the report is stored without a way id. */
-export const LOCATE_MIN_MS = 3_000;
-
+/**
+ * One deadline for the whole request, from its first byte, under the route's 120 s maxDuration: a paid read is always
+ * saved, settled and answered, and nothing is claimed or reserved that there is no time left to use.
+ */
 export interface Timing {
   budgetMs: number;
-  finishReserveMs: number;
+  /** Each Upstash call (claim, admission, save, release, settle) is bounded at this by its own timeout. */
+  storeCallMs: number;
+  /** Kept back for writing the response. */
+  responseMs: number;
+  /** A photo read isn't started with less than this before it must end. */
+  minReadMs: number;
+  /** Below this much time to spare after the read, /locate is skipped and the report is stored without a way id. */
   locateMinMs: number;
 }
+
+export const TIMING: Timing = { budgetMs: 110_000, storeCallMs: 5_000, responseMs: 2_000, minReadMs: 20_000, locateMinMs: 3_000 };
+export const REQUEST_BUDGET_MS = TIMING.budgetMs;
+
+/** A failed save, its release and the settle run one after another, then the response. */
+function finishReserveMs(t: Timing): number {
+  return 3 * t.storeCallMs + t.responseMs;
+}
+export const FINISH_RESERVE_MS = finishReserveMs(TIMING);
+
+const OUT_OF_TIME = "Lusong ran out of time for this report. Try sending it again in a minute.";
 
 function fail(status: number, message: string): Response {
   return Response.json({ error: message }, { status });
@@ -109,7 +126,7 @@ export function makeReportHandler(deps: {
   now?: () => Date;
   timing?: Timing;
 }) {
-  const timing = deps.timing ?? { budgetMs: REQUEST_BUDGET_MS, finishReserveMs: FINISH_RESERVE_MS, locateMinMs: LOCATE_MIN_MS };
+  const timing = deps.timing ?? TIMING;
   const budget = deps.budget ?? budgetFromEnv;
   const reportStore = deps.store ?? reportStoreFromEnv;
   const doFetch: typeof fetch = (...args) => (deps.fetch ?? fetch)(...args);
@@ -117,11 +134,21 @@ export function makeReportHandler(deps: {
 
   return async function POST(request: Request): Promise<Response> {
     const receivedAt = now();
-    // Epoch ms, like lib/meta.ts's deadlines; everything after the read must still fit before `finishBy`.
-    const finishBy = Date.now() + timing.budgetMs - timing.finishReserveMs;
+    // Epoch ms, like lib/meta.ts's deadlines. Each step must start early enough for every later one to fit.
+    const deadline = Date.now() + timing.budgetMs;
+    const settleBy = deadline - timing.responseMs;
+    const releaseBy = settleBy - timing.storeCallMs;
+    const saveBy = releaseBy - timing.storeCallMs;
+    const finishBy = deadline - finishReserveMs(timing);
+    const admitBy = finishBy - timing.minReadMs;
+    const claimBy = admitBy - timing.storeCallMs;
+
+    const body = await readBody(request, { maxBytes: MAX_BODY_BYTES, deadline: claimBy });
+    if (body === "too_large") return fail(413, "That photo is too large. Try a smaller one.");
+    if (body === "too_slow") return fail(408, "Lusong didn't receive the whole photo in time. Try again on a steadier connection.");
     let form: FormData;
     try {
-      form = await request.formData();
+      form = await new Response(body as Uint8Array<ArrayBuffer>, { headers: { "content-type": request.headers.get("content-type") ?? "" } }).formData();
     } catch {
       return fail(400, "Send the photo as a form upload.");
     }
@@ -147,28 +174,61 @@ export function makeReportHandler(deps: {
 
     const store = reportStore();
     if (!store) return fail(503, "Lusong can't take reports right now.");
-    let claim: Awaited<ReturnType<ReportStore["claimPhoto"]>>;
+    const release = (by: number) =>
+      beforeDeadline(store.releasePhoto(photoHash), by).catch((err: unknown) => {
+        console.error("report store unreachable on release:", err instanceof Error ? err.message : err);
+      });
+
+    if (Date.now() > claimBy) return fail(503, OUT_OF_TIME);
+    const claiming = store.claimPhoto(photoHash);
+    let claim: Awaited<ReturnType<ReportStore["claimPhoto"]>> | "late";
     try {
-      claim = await store.claimPhoto(photoHash);
+      claim = await beforeDeadline(claiming, admitBy);
     } catch (err) {
       console.error("report store unreachable on claim:", err instanceof Error ? err.message : err);
       return fail(503, "Lusong can't take reports right now.");
     }
+    if (claim === "late") {
+      // The claim may still land; free it then, so the photo can be sent again.
+      void claiming.then(
+        async (c) => {
+          if (c.state === "claimed") await release(Infinity);
+        },
+        () => {},
+      );
+      return fail(503, OUT_OF_TIME);
+    }
     if (claim.state === "duplicate") return Response.json({ duplicate: true, stored: true, report: viewOf(claim.report, receivedAt, true) });
     if (claim.state === "in_flight") return fail(409, "Lusong is already reading this photo.");
 
-    const release = () =>
-      store.releasePhoto(photoHash).catch((err: unknown) => {
-        console.error("report store unreachable on release:", err instanceof Error ? err.message : err);
-      });
-
-    const admission = await admit(budget(), { clientIp: clientIp(request), reserveMicros: RESERVE_MICROS, now: receivedAt });
+    if (Date.now() > admitBy) {
+      await release(releaseBy);
+      return fail(503, OUT_OF_TIME);
+    }
+    const admitting = admit(budget(), { clientIp: clientIp(request), reserveMicros: RESERVE_MICROS, now: receivedAt });
+    const admission = await beforeDeadline(admitting, finishBy - timing.minReadMs);
+    if (admission === "late") {
+      // No Meta call will start, so a reservation that lands late is refunded in full.
+      void admitting.then(
+        async (a) => {
+          if (a.ok) await a.run.settle(true);
+        },
+        () => {},
+      );
+      await release(releaseBy);
+      return fail(503, OUT_OF_TIME);
+    }
     if (!admission.ok) {
-      await release();
+      await release(releaseBy);
       return admission.response();
     }
 
     const { run } = admission;
+    if (finishBy - Date.now() < timing.minReadMs) {
+      await release(releaseBy);
+      await beforeDeadline(run.settle(true), settleBy);
+      return fail(503, OUT_OF_TIME);
+    }
     let succeeded = false;
     try {
       const imageDataUrl = `data:image/jpeg;base64,${Buffer.from(jpeg.bytes).toString("base64")}`;
@@ -177,7 +237,7 @@ export function makeReportHandler(deps: {
         verdict = (await checkPhoto(imageDataUrl, { width: jpeg.width, height: jpeg.height }, run.meter, { deadline: finishBy })).verdict;
       } catch (err) {
         console.error("report read failed:", err instanceof MetaApiError ? err.message : err);
-        await release();
+        await release(releaseBy);
         return fail(502, "The measuring service didn't answer. Try again in a minute.");
       }
       succeeded = true;
@@ -197,16 +257,21 @@ export function makeReportHandler(deps: {
         verdict,
         photoHash,
       };
+      let saved: void | "late";
       try {
-        await store.save(report);
+        saved = await beforeDeadline(store.save(report), saveBy);
       } catch (err) {
         console.error("report store unreachable on save:", err instanceof Error ? err.message : err);
-        await release();
+        saved = "late";
+      }
+      if (saved === "late") {
+        await release(releaseBy);
         return Response.json({ duplicate: false, stored: false, report: viewOf(report, receivedAt, false) });
       }
       return Response.json({ duplicate: false, stored: true, report: viewOf(report, receivedAt, true) });
     } finally {
-      await run.settle(succeeded);
+      // A settle cut off here keeps the whole reservation charged: the safe side.
+      await beforeDeadline(run.settle(succeeded), settleBy);
     }
   };
 }

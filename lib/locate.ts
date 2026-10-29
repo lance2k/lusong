@@ -1,4 +1,5 @@
 import { USER_AGENT } from "./advisory";
+import { beforeDeadline } from "./deadline";
 import type { Point } from "./answer";
 import { VALHALLA_CLIENT_ID, VALHALLA_URL, wayIdFromLocate, type ValhallaGate } from "./router";
 
@@ -15,18 +16,6 @@ interface LocateEdge {
 }
 
 const NOWHERE: Spot = { wayId: null, place: null };
-
-/** The gate's answer, or "late" once the deadline (epoch ms) passes first. */
-async function beforeDeadline<T>(work: Promise<T>, deadline: number): Promise<T | "late"> {
-  if (deadline === Infinity) return work;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const late = new Promise<"late">((resolve) => (timer = setTimeout(() => resolve("late"), Math.max(0, deadline - Date.now()))));
-  try {
-    return await Promise.race([work, late]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 /** The first name of each way at the nearest distance: one street, or a corner's two. */
 function placeOf(edges: LocateEdge[]): string | null {
