@@ -1,0 +1,252 @@
+{
+  "status": 200,
+  "ms": 22972,
+  "request": {
+    "model": "muse-spark-1.3",
+    "input": "road closures Cebu City today flood",
+    "tools": [
+      {
+        "type": "web_search"
+      }
+    ],
+    "max_output_tokens": 3000
+  },
+  "body": {
+    "top_logprobs": 0,
+    "temperature": 1,
+    "top_p": 1,
+    "service_tier": "auto",
+    "model": "muse-spark-1.3",
+    "reasoning": {
+      "effort": "high"
+    },
+    "background": false,
+    "tools": [
+      {
+        "type": "web_search"
+      }
+    ],
+    "tool_choice": "auto",
+    "truncation": "disabled",
+    "id": "resp_6ae38218e9959370eb5d4fff",
+    "object": "response",
+    "status": "incomplete",
+    "created_at": 1793294872,
+    "error": null,
+    "incomplete_details": {
+      "reason": "max_output_tokens"
+    },
+    "output": [
+      {
+        "type": "reasoning",
+        "id": "rs_6ae38218e9959370eb5d4fff:rs_72544961-155d-44e3-b4ad-dad711752272",
+        "summary": [],
+        "status": "completed"
+      },
+      {
+        "type": "message",
+        "id": "rs_f1783c35-b486-4701-bc57-81b060736e50",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "I'll search for current flood-related road closures in Cebu City.",
+            "annotations": [],
+            "logprobs": []
+          }
+        ],
+        "phase": "commentary",
+        "status": "completed"
+      },
+      {
+        "type": "web_search_call",
+        "id": "ws_call_60d49e84-fb81-4fba-9397-a98d23a4ae2d",
+        "status": "completed",
+        "action": {
+          "type": "search",
+          "query": "road closures Cebu City today flood"
+        }
+      },
+      {
+        "type": "web_search_call",
+        "id": "ws_call_3783d00e-f784-41a7-b61b-9b902268de28",
+        "status": "completed",
+        "action": {
+          "type": "search",
+          "query": "Cebu City flooded roads closed October 29 2026"
+        }
+      },
+      {
+        "type": "web_search_call",
+        "id": "ws_call_73bc9010-8188-4f44-9517-5348d62c207f",
+        "status": "completed",
+        "action": {
+          "type": "search",
+          "query": "Cebu City traffic advisory road closure flood"
+        }
+      },
+      {
+        "type": "reasoning",
+        "id": "rs_6ae38218e9959370eb5d4fff:rs_66319808-52e8-427f-a6ae-f5c8bf006f8b",
+        "summary": [],
+        "status": "completed"
+      },
+      {
+        "type": "message",
+        "id": "rs_fb4f116c-560c-4a70-b85a-59aa10506a8e",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Initial results look dated, so I'll dig deeper into official advisories and recent typhoon impacts.",
+            "annotations": [],
+            "logprobs": []
+          }
+        ],
+        "phase": "commentary",
+        "status": "completed"
+      },
+      {
+        "type": "web_search_call",
+        "id": "ws_call_60bb4294-cf1d-4df1-9588-0c49e8ab071f",
+        "status": "completed",
+        "action": {
+          "type": "search",
+          "query": "Typhoon Tino Cebu City flooding roads impassable November"
+        }
+      },
+      {
+        "type": "web_search_call",
+        "id": "ws_call_7bfb40a2-d40b-4ec3-977e-7cf27c2d486d",
+        "status": "completed",
+        "action": {
+          "type": "search",
+          "query": "Cebu City Command Center C3 flood advisory October 2026"
+        }
+      },
+      {
+        "type": "web_search_call",
+        "id": "ws_call_731d66b1-3736-47f3-aeea-c69d913d371d",
+        "status": "completed",
+        "action": {
+          "type": "search",
+          "query": "\"Cebu City\" flooded Colon Mabolo impassable roads"
+        }
+      },
+      {
+        "type": "reasoning",
+        "id": "rs_6ae38218e9959370eb5d4fff:rs_b191b83b-f45b-4be0-b615-412d5f9a62e7",
+        "summary": [],
+        "status": "completed"
+      },
+      {
+        "type": "message",
+        "id": "rs_cacaba2e-68fa-4ee1-9d22-f9a833f98042",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "I've gathered background on flood-prone areas and weather alerts; now I'll verify details from official city sources.",
+            "annotations": [],
+            "logprobs": []
+          }
+        ],
+        "phase": "commentary",
+        "status": "completed"
+      },
+      {
+        "type": "web_search_call",
+        "id": "ws_call_c9bb75f4-a1aa-4ba6-b162-c71c6d865977",
+        "status": "completed",
+        "action": {
+          "type": "open_page",
+          "url": "https://news.jeepney.io/2026/10/as-of-800-am-today-29-october-2026-a-low-pressure-area-lpa-10c-is-being-monitored-inside-the/"
+        }
+      },
+      {
+        "type": "web_search_call",
+        "id": "ws_call_69774d99-89a8-4b61-ab0c-b17735c35269",
+        "status": "completed",
+        "action": {
+          "type": "open_page",
+          "url": "https://pco.gov.ph/news_releases/pbbm-orders-assistance-for-cebu-flood-victims/"
+        }
+      },
+      {
+        "type": "web_search_call",
+        "id": "ws_call_2ff08898-0f96-496a-bfcb-93a10bacd6e6",
+        "status": "completed",
+        "action": {
+          "type": "open_page",
+          "url": "https://bucebu.kababayanhomes.com/"
+        }
+      },
+      {
+        "type": "reasoning",
+        "id": "rs_6ae38218e9959370eb5d4fff:rs_a1f2312f-ad88-4788-a6b6-03d56dbd15c5",
+        "summary": [],
+        "status": "completed"
+      },
+      {
+        "type": "web_search_call",
+        "id": "ws_call_66227325-8296-4c5e-b925-95aab6cf5487",
+        "status": "completed",
+        "action": {
+          "type": "open_page",
+          "url": "https://bucebu.kababayanhomes.com/"
+        }
+      },
+      {
+        "type": "reasoning",
+        "id": "rs_6ae38218e9959370eb5d4fff:rs_8280a2b4-a84c-4f62-af2c-0bae4b0b12d3",
+        "summary": [],
+        "status": "completed"
+      },
+      {
+        "type": "message",
+        "id": "rs_394b1ded-11f7-47f1-b2d3-927d57fd7993",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "I've mapped the highest-risk corridors; now I'll confirm the emergency contact numbers before finalizing.",
+            "annotations": [],
+            "logprobs": []
+          }
+        ],
+        "phase": "commentary",
+        "status": "completed"
+      },
+      {
+        "type": "web_search_call",
+        "id": "ws_call_9aab853d-5395-4920-b8d9-637bdff2bb0d",
+        "status": "completed",
+        "action": {
+          "type": "open_page",
+          "url": "https://www.computers1000.com/PH/Mandaue-City/108281860988367/Ligtas-Technologies"
+        }
+      },
+      {
+        "type": "reasoning",
+        "id": "rs_6ae38218e9959370eb5d4fff:rs_25bade92-294d-4726-9410-656f3bf0d926",
+        "summary": [],
+        "status": "incomplete"
+      }
+    ],
+    "instructions": null,
+    "usage": {
+      "input_tokens": 90257,
+      "input_tokens_details": {
+        "cached_tokens": 23352
+      },
+      "output_tokens": 3000,
+      "output_tokens_details": {
+        "reasoning_tokens": 2162
+      },
+      "total_tokens": 93257
+    },
+    "parallel_tool_calls": true,
+    "store": true,
+    "max_output_tokens": 3000
+  }
+}

@@ -1,13 +1,18 @@
 import { createHash, randomUUID } from "node:crypto";
 import { MUSE_MAX_COMPLETION_TOKENS } from "./readings";
 
-/** Meta's list prices (docs, 2026-10): SAM $2.50 per 1,000 images; Muse Spark $1.25 / $4.25 per 1M tokens. */
-const SAM_IMAGE_MICROS = 2_500;
-const MUSE_INPUT_MICROS_PER_TOKEN = 1.25;
-const MUSE_OUTPUT_MICROS_PER_TOKEN = 4.25;
+/**
+ * Meta's list prices (docs, 2026-10): SAM $2.50 per 1,000 images; Muse Spark $1.25 / $4.25 per 1M tokens; web search
+ * grounding "$2.50 per 1,000 search queries, in addition to the request's token cost". Cached input tokens are priced as
+ * full input: the docs give no cached rate.
+ */
+export const SAM_IMAGE_MICROS = 2_500;
+export const MUSE_INPUT_MICROS_PER_TOKEN = 1.25;
+export const MUSE_OUTPUT_MICROS_PER_TOKEN = 4.25;
+export const WEB_SEARCH_QUERY_MICROS = 2_500;
 
 /** lib/meta.ts makes at most this many attempts per call; lib/check.ts makes 4 SAM calls and 1 Muse call. */
-const ATTEMPTS_PER_CALL = 2;
+export const ATTEMPTS_PER_CALL = 2;
 const SAM_CALLS = 4;
 /** 1.5 × the 3,881 input tokens measured on a 1600×1600 photo with 12 objects, the largest the route
  *  accepts (one draw, 2026-10-28; 1600×1200 measured 2,968). */
@@ -26,6 +31,8 @@ export interface MeteredUsage {
   samImages: number;
   museInputTokens: number;
   museOutputTokens: number;
+  /** Every web_search_call item a reply carried, whether it searched or opened a page. */
+  webSearchQueries: number;
   /** False when any call was retried, failed, or came back without a usage block: a billed attempt may
    *  be missing from the counts, so the counts are a floor, not the cost. */
   complete: boolean;
@@ -35,7 +42,8 @@ export function costMicros(usage: MeteredUsage): number {
   return Math.ceil(
     usage.samImages * SAM_IMAGE_MICROS +
       usage.museInputTokens * MUSE_INPUT_MICROS_PER_TOKEN +
-      usage.museOutputTokens * MUSE_OUTPUT_MICROS_PER_TOKEN,
+      usage.museOutputTokens * MUSE_OUTPUT_MICROS_PER_TOKEN +
+      usage.webSearchQueries * WEB_SEARCH_QUERY_MICROS,
   );
 }
 
@@ -122,22 +130,25 @@ export function createBudget(options: { store: BudgetStore | null; budgetUsd: nu
   };
 }
 
-const sharedMemoryStore = (() => {
-  let store: MemoryBudgetStore | null = null;
-  return () => (store ??= new MemoryBudgetStore());
-})();
+const sharedMemoryStores = new Map<string, MemoryBudgetStore>();
 
-function storeFromEnv(env: Record<string, string | undefined>): BudgetStore | null {
+/**
+ * The budget store from the environment, its keys under `prefix`; null when none is configured. A second ledger, such
+ * as the daily web search cap, uses the same database under its own prefix.
+ */
+export function budgetStoreFromEnv(env: Record<string, string | undefined>, prefix = "lusong"): BudgetStore | null {
   if (env.LUSONG_BUDGET_STORE === "memory") {
     const deployed = Boolean(env.VERCEL) || env.NODE_ENV === "production";
-    return deployed ? null : sharedMemoryStore();
+    if (deployed) return null;
+    if (!sharedMemoryStores.has(prefix)) sharedMemoryStores.set(prefix, new MemoryBudgetStore());
+    return sharedMemoryStores.get(prefix)!;
   }
   if (env.UPSTASH_REDIS_REST_URL && env.UPSTASH_REDIS_REST_TOKEN) {
-    return new UpstashBudgetStore(env.UPSTASH_REDIS_REST_URL, env.UPSTASH_REDIS_REST_TOKEN);
+    return new UpstashBudgetStore(env.UPSTASH_REDIS_REST_URL, env.UPSTASH_REDIS_REST_TOKEN, prefix);
   }
   /** The names Vercel's Upstash integration sets when a database is connected to the project. */
   if (env.KV_REST_API_URL && env.KV_REST_API_TOKEN) {
-    return new UpstashBudgetStore(env.KV_REST_API_URL, env.KV_REST_API_TOKEN);
+    return new UpstashBudgetStore(env.KV_REST_API_URL, env.KV_REST_API_TOKEN, prefix);
   }
   return null;
 }
@@ -147,7 +158,7 @@ export function budgetFromEnv(env: Record<string, string | undefined> = process.
   const budgetUsd = Number(env.DAILY_BUDGET_USD ?? "10");
   const ipLimit = Number(env.PER_IP_DAILY ?? "10");
   const readable = Number.isFinite(budgetUsd) && budgetUsd > 0 && Number.isInteger(ipLimit) && ipLimit > 0;
-  return createBudget({ store: readable ? storeFromEnv(env) : null, budgetUsd, ipLimit });
+  return createBudget({ store: readable ? budgetStoreFromEnv(env) : null, budgetUsd, ipLimit });
 }
 
 /** For local development and tests only: each server instance would keep its own ledger. */

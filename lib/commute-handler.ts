@@ -1,18 +1,66 @@
 import { admit } from "./admission";
 import { readAdvisory, type AdvisoryReading } from "./advisory";
-import { decideAnswer, placeOnRoute, ROUTE_CORRIDOR_M, type AnswerKind, type Point, type Report } from "./answer";
+import { placeOnRoute, ROUTE_CORRIDOR_M, type AnswerKind, type Point, type Report } from "./answer";
 import { budgetFromEnv, type Budget } from "./budget";
 import { clientIp } from "./check-handler";
-import { boxAround, detourAvoids, lineForTrip } from "./detour";
+import { boxAround, lineForTrip } from "./detour";
 import { ageWords, depthWords, MMDA_CREDIT, passabilityLine, phtTime } from "./commute-words";
-import { fetchRoute, type Route, type RouteResult, type ValhallaGate } from "./router";
+import { evidenceSentences } from "./evidence-words";
+import { investigate, investigationReserveMicros, PICK_UNAVAILABLE, webFindingCounts, type InvestigationResult } from "./investigation";
+import type { Meter } from "./meta";
+import { fetchRoute, ROUTE_WORST_MS, type Route, type RouteResult, type ValhallaGate } from "./router";
 import { beforeDeadline, readBody } from "./deadline";
 import { inMetroCebu } from "./metro-cebu";
 import { reportStoreFromEnv, toReport, type ReportStore } from "./report-store";
 import { DEMO_TRIPS, sampleReports, scenariosFor, type DemoTripId, type SampleReport, type ScenarioId } from "./samples";
+import {
+  planWebSearch,
+  releaseWebSearch,
+  runWebSearch,
+  searchBudgetFromEnv,
+  searchStoreFromEnv,
+  type ClosureKind,
+  type KvStore,
+  type WebEvidence,
+  type WebFinding,
+  type WebPlan,
+} from "./web-search";
 
-/** A commute check makes no Meta call, so it reserves 1 µ$: enough to pass through the daily admission and its per-address limit. */
+/** PAGASA, Valhalla and the report store are free, so without Muse Spark a check reserves 1 µ$: enough to pass the daily admission and its per-address limit. */
 export const COMMUTE_RESERVE_MICROS = 1;
+
+/**
+ * Every part of a check ends this long after its first byte: the body, the admission, the report read, the advisory,
+ * every routing attempt and gate wait, the web search and the model calls. app/api/commute/route.ts allows 90 s.
+ */
+export const COMMUTE_DEADLINE_MS = 80_000;
+/** Left after the deadline to settle the budget (Upstash times out at 5 s) and send the answer. */
+export const SETTLE_ROOM_MS = 10_000;
+
+/** The one deadline's parts, shortened in tests. */
+export interface CommuteTiming {
+  deadlineMs: number;
+  /** The longest one fetchRoute can take: a way around isn't started with less than this left. */
+  routeWorstMs: number;
+  /** The settle (and the release of an unused web search) is cut off this long after the deadline. */
+  storeCallMs: number;
+}
+export const COMMUTE_TIMING: CommuteTiming = { deadlineMs: COMMUTE_DEADLINE_MS, routeWorstMs: ROUTE_WORST_MS, storeCallMs: 5_000 };
+/** The web search must end with this much of the deadline left, beyond a way around: for the model's pick. */
+export const MODEL_ROOM_MS = 15_000;
+
+export interface MuseDeps {
+  /** False runs the rules alone: no web search, no pick, nothing reserved for Muse Spark. */
+  enabled: boolean;
+  searchStore: () => KvStore | null;
+  searchBudget: () => Budget;
+}
+
+export const MUSE_OFF: MuseDeps = { enabled: false, searchStore: () => null, searchBudget: () => searchBudgetFromEnv({}) };
+
+function museFromEnv(): MuseDeps {
+  return { enabled: Boolean(process.env.MODEL_API_KEY), searchStore: () => searchStoreFromEnv(), searchBudget: () => searchBudgetFromEnv() };
+}
 
 /** A demo trip's plain route, or its detour around a set of spots, is reused this long: the roads don't change, and Valhalla is a shared free server. */
 export const ROUTE_CACHE_MS = 10 * 60_000;
@@ -39,6 +87,52 @@ const ROUTE_ERRORS: Record<Exclude<PlainResult, { ok: true }>["reason"], string>
   out_of_time: "Lusong ran out of time asking the routing server, so it can't give an answer. Try again in a minute.",
   off_trip: "The routing server's route doesn't reach this trip's start and end, so Lusong can't give an answer.",
 };
+
+const AROUND_OUT_OF_TIME = "Lusong ran out of time looking for a way around, so it can't give an answer. Try again in a minute.";
+
+const OUT_OF_TIME = "Lusong ran out of time checking this trip, so it can't give an answer. Try again in a minute.";
+
+/** A check is a few short fields. */
+const MAX_BODY_BYTES = 4 * 1024;
+
+const WEB_WHY: Record<string, string> = {
+  "search failed": "the search failed",
+  "search cut off": "the search ran out of room before it answered",
+  "unreadable reply": "the search's reply couldn't be read",
+  "no shared store": "there is no shared store to keep it in",
+  "store unreachable": "the shared store couldn't be reached",
+};
+
+const CLOSURE_WORDS: Record<ClosureKind, string> = { closed: "Closed", flooded: "Flooded", not_passable: "Not passable", other_blocking: "Blocked" };
+
+/** A web finding is shown as Lusong's description of its checked fields; the source's own words are never kept. */
+function webForPage(web: WebEvidence, now: Date) {
+  const line =
+    web.state === "searched" ? `Searched the web at ${phtTime(web.searchedAt)}` : `Web search skipped: ${WEB_WHY[web.why] ?? web.why}.`;
+  const note = (f: WebFinding) => {
+    if (webFindingCounts(f, now)) return "Dated today and placed on the map: it can block a way, never clear one.";
+    const missing = [f.sourceDate === null ? "no date" : null, f.at === null ? "no place on the map" : null].filter(Boolean);
+    if (missing.length > 0) return `Shown, not counted: it has ${missing.join(" and ")}.`;
+    return `Shown, not counted: it is dated ${f.sourceDate}, not today.`;
+  };
+  return {
+    line,
+    findings: web.findings.map((f) => {
+      const site = new URL(f.url).hostname;
+      const page = f.sourceDate ? `a page on ${site} dated ${f.sourceDate}` : `an undated page on ${site}`;
+      return { place: f.place, url: f.url, site, sourceDate: f.sourceDate, description: `${CLOSURE_WORDS[f.kind]}, says ${page}.`, counted: webFindingCounts(f, now), note: note(f) };
+    }),
+  };
+}
+
+/** The evidence Muse Spark picked, each piece described in Lusong's words from its own checked fields. */
+function pickForPage(result: Extract<InvestigationResult, { ok: true }>, facts: { now: Date; advisory: AdvisoryReading; rainingHere: boolean }) {
+  const label = "Muse Spark picked this evidence";
+  const hidden = { shown: false, label, sentences: [] as string[], note: !result.pick.shown && result.pick.unavailable ? PICK_UNAVAILABLE : null };
+  if (!result.pick.shown) return hidden;
+  const sentences = evidenceSentences(result.pick.evidence, { ...facts, reports: result.reports, web: result.web.findings, routes: result.answer.routes });
+  return sentences ? { shown: true, label, sentences, note: null } : hidden;
+}
 
 function fail(status: number, error: string): Response {
   return Response.json({ error }, { status });
@@ -124,36 +218,21 @@ function thinNote(kind: AnswerKind, reportCount: number, voiceOnly: boolean): st
 /**
  * POST /api/commute. A demo check uses its trip's sample reports and never reads the report store; a real check uses
  * the stored real reports and never a sample. A real trip is used for this answer only: nothing about it is cached
- * or stored.
+ * or stored. Both run Muse Spark's investigation the same way.
  */
-/**
- * One deadline for the whole check, under the route's 60 s maxDuration: the admission, the report read, the advisory
- * and every routing attempt and gate wait must end in time for the settle and the response.
- */
-export interface CommuteTiming {
-  budgetMs: number;
-  /** The admission and the settle are each one Upstash call bounded at this by its own timeout. */
-  storeCallMs: number;
-  responseMs: number;
-}
-export const COMMUTE_TIMING: CommuteTiming = { budgetMs: 50_000, storeCallMs: 5_000, responseMs: 2_000 };
-
-/** A check is a few short fields. */
-const MAX_BODY_BYTES = 4 * 1024;
-
-const OUT_OF_TIME = "Lusong ran out of time checking this trip, so it can't give an answer. Try again in a minute.";
-
 export function makeCommuteHandler(deps: {
   fetch?: typeof fetch;
   now?: () => Date;
   gate: () => ValhallaGate;
   budget?: () => Budget;
   reports?: () => ReportStore | null;
+  muse?: MuseDeps;
   timing?: CommuteTiming;
 }) {
-  const timing = deps.timing ?? COMMUTE_TIMING;
   const budget = deps.budget ?? budgetFromEnv;
   const reportStore = deps.reports ?? reportStoreFromEnv;
+  const muse = () => deps.muse ?? museFromEnv();
+  const timing = deps.timing ?? COMMUTE_TIMING;
   const doFetch: typeof fetch = (...args) => (deps.fetch ?? fetch)(...args);
   const now = deps.now ?? (() => new Date());
   const routes = new Map<DemoTripId, { route: Route; at: number }>();
@@ -169,13 +248,13 @@ export function makeCommuteHandler(deps: {
     return result;
   }
 
-  /** One more request, with a box excluded around each blocked spot; "no route" is an answer, so it is kept too. */
-  async function detourFor(trip: DemoTripId, blockers: readonly Report[], t: number, deadline: number): Promise<RouteResult> {
-    const key = `${trip}|${blockers.map((b) => b.id).sort().join(",")}`;
+  /** One more request, with a box excluded around each spot; "no route" is an answer, so it is kept too. */
+  async function detourFor(trip: DemoTripId, spots: readonly Point[], t: number, deadline: number): Promise<RouteResult> {
+    const key = `${trip}|${spots.map((p) => `${p.lat.toFixed(6)},${p.lon.toFixed(6)}`).sort().join(";")}`;
     const cached = detours.get(key);
     if (cached && t - cached.at < ROUTE_CACHE_MS) return cached.result;
     const result = await fetchRoute(
-      { ...DEMO_TRIPS[trip], excludePolygons: blockers.map((b) => boxAround(b.at)) },
+      { ...DEMO_TRIPS[trip], excludePolygons: spots.map((p) => boxAround(p)) },
       { fetch: doFetch, gate: deps.gate(), deadline },
     );
     if (result.ok || result.reason === "no_route") detours.set(key, { result, at: t });
@@ -193,12 +272,11 @@ export function makeCommuteHandler(deps: {
   }
 
   return async function POST(request: Request): Promise<Response> {
-    // Epoch ms. The admission and the answer must end in time for the settle, and the settle in time for the response.
-    const deadline = Date.now() + timing.budgetMs;
-    const settleBy = deadline - timing.responseMs;
-    const answerBy = settleBy - timing.storeCallMs;
+    // Epoch ms, from the first byte. Every step below ends by it; only the settle runs past it, cut off at settleBy.
+    const deadline = Date.now() + timing.deadlineMs;
+    const settleBy = deadline + timing.storeCallMs;
 
-    const body = await readBody(request, { maxBytes: MAX_BODY_BYTES, deadline: answerBy });
+    const body = await readBody(request, { maxBytes: MAX_BODY_BYTES, deadline });
     if (body === "too_large") return fail(413, "That check is too large.");
     if (body === "too_slow") return fail(408, "Lusong didn't receive the whole check in time.");
     let parsed: unknown;
@@ -212,63 +290,78 @@ export function makeCommuteHandler(deps: {
     if (!demo && !realTrip) return fail(400, "Send a demo trip, or a real trip whose start and end are both in Metro Cebu.");
 
     const at = now();
-    const admitting = admit(budget(), { clientIp: clientIp(request), reserveMicros: COMMUTE_RESERVE_MICROS, now: at });
-    const admission = await beforeDeadline(admitting, answerBy);
+    const museDeps = muse();
+    const plan: WebPlan = museDeps.enabled ? await planWebSearch(museDeps.searchStore(), at, museDeps.searchBudget()) : { kind: "off", why: "Muse Spark is off" };
+    const reserveMicros = COMMUTE_RESERVE_MICROS + (museDeps.enabled ? investigationReserveMicros(plan) : 0);
+    const admitting = admit(budget(), { clientIp: clientIp(request), reserveMicros, now: at });
+    const admission = await beforeDeadline(admitting, deadline);
     if (admission === "late") {
-      // Nothing was asked of anyone, so a reservation that lands late is refunded.
+      // Nothing was asked of anyone, so a reservation that lands late is refunded, and the web search given back.
       void admitting.then(
         async (a) => {
           if (a.ok) await a.run.settle(true);
         },
         () => {},
       );
+      void releaseWebSearch(plan).catch(() => {});
       return fail(503, OUT_OF_TIME);
     }
-    if (!admission.ok) return admission.response();
+    if (!admission.ok) {
+      await beforeDeadline(releaseWebSearch(plan), settleBy);
+      return admission.response();
+    }
+    const run: CheckRun = {
+      plan,
+      store: museDeps.enabled ? museDeps.searchStore() : null,
+      modelOff: museDeps.enabled ? undefined : "Muse Spark is off",
+      meter: admission.run.meter,
+      deadline,
+      searched: false,
+    };
     let answered = false;
     try {
-      const response = demo ? await answerDemo(demo, at, answerBy) : await answerReal(realTrip!, at, answerBy);
+      const response = demo ? await answerDemo(demo, at, run) : await answerReal(realTrip!, at, run);
       answered = response.ok;
       return response;
     } finally {
-      // A settle cut off here keeps the reservation charged: the safe side.
-      await beforeDeadline(admission.run.settle(answered), settleBy);
+      // A settle cut off here keeps the reservation charged: the safe side. A search the check never ran is given back.
+      await beforeDeadline(Promise.all([admission.run.settle(answered), run.searched ? null : releaseWebSearch(plan)]), settleBy);
     }
   };
 
-  function answerDemo(demo: DemoRequest, at: Date, deadline: number): Promise<Response> {
+  function answerDemo(demo: DemoRequest, at: Date, run: CheckRun): Promise<Response> {
     return answerTrip({
       demo: true,
       trip: { ...DEMO_TRIPS[demo.trip], id: demo.trip },
       rainingHere: demo.rainingHere,
       at,
+      run,
       reports: async () => sampleReports(demo.trip, demo.scenario, at),
-      deadline,
-      plain: () => routeFor(demo.trip, at.getTime(), deadline),
-      around: (blockers) => detourFor(demo.trip, blockers, at.getTime(), deadline),
+      plain: () => routeFor(demo.trip, at.getTime(), run.deadline),
+      around: (spots) => detourFor(demo.trip, spots, at.getTime(), run.deadline),
     });
   }
 
   /** Not cached, unlike a demo trip's routes: a real trip's ends are the rider's, and the server keeps nothing of them. */
-  function answerReal(trip: RealRequest, at: Date, deadline: number): Promise<Response> {
+  function answerReal(trip: RealRequest, at: Date, run: CheckRun): Promise<Response> {
     const ends = { from: trip.from, to: trip.to };
     return answerTrip({
       demo: false,
       trip: { ...ends, id: null, label: "Your trip" },
       rainingHere: trip.rainingHere,
       at,
-      deadline,
+      run,
       reports: async () => {
         const store = reportStore();
         if (!store) throw new Error("no report store configured");
         return (await store.recent(at)).map((r) => ({ ...toReport(r), sample: false, origin: null, credit: null, sourceUrl: null }) as const);
       },
       plain: async () => {
-        const result = await fetchRoute(ends, { fetch: doFetch, gate: deps.gate(), deadline });
+        const result = await fetchRoute(ends, { fetch: doFetch, gate: deps.gate(), deadline: run.deadline });
         return result.ok && !lineForTrip(result.route.line, ends) ? { ok: false, reason: "off_trip" } : result;
       },
-      around: (blockers) =>
-        fetchRoute({ ...ends, excludePolygons: blockers.map((b) => boxAround(b.at)) }, { fetch: doFetch, gate: deps.gate(), deadline }),
+      around: (spots) =>
+        fetchRoute({ ...ends, excludePolygons: spots.map((p) => boxAround(p)) }, { fetch: doFetch, gate: deps.gate(), deadline: run.deadline }),
     });
   }
 
@@ -277,57 +370,83 @@ export function makeCommuteHandler(deps: {
     trip: { id: DemoTripId | null; label: string; from: Point; to: Point };
     rainingHere: boolean;
     at: Date;
-    /** Epoch ms by which the answer is ready. */
-    deadline: number;
+    run: CheckRun;
     reports: () => Promise<CheckedReport[]>;
     plain: () => Promise<PlainResult>;
-    around: (blockers: readonly Report[]) => Promise<RouteResult>;
+    around: (spots: readonly Point[]) => Promise<RouteResult>;
   }): Promise<Response> {
-    const { at, trip } = check;
-    // Reports first: if they can't be read there is no answer, so the routing server isn't asked at all.
+    const { at, trip, run } = check;
+    // Reports first: if they can't be read there is no answer, so neither the routing server nor Muse Spark is asked.
     let reports: CheckedReport[] | "late";
     try {
-      reports = await beforeDeadline(check.reports(), check.deadline);
+      reports = await beforeDeadline(check.reports(), run.deadline);
     } catch (err) {
       console.error("report store unreadable:", err instanceof Error ? err.message : err);
       return fail(503, "Lusong couldn't read the reports from the street, so it can't give an answer. Try again in a minute.");
     }
     if (reports === "late") return fail(503, OUT_OF_TIME);
-    const [advisory, routed] = await Promise.all([beforeDeadline(advisoryAt(at), check.deadline), check.plain()]);
+    const gathered: CheckedReport[] = reports;
+
+    // The search ends early enough to leave a way around and the model's pick their time.
+    const searchDeadline = run.deadline - timing.routeWorstMs - MODEL_ROOM_MS;
+    run.searched = true;
+    const [advisory, routed, web] = await Promise.all([
+      beforeDeadline(advisoryAt(at), run.deadline),
+      check.plain(),
+      runWebSearch(run.plan, { store: run.store, now: at, deadline: searchDeadline, meter: run.meter }),
+    ]);
     if (advisory === "late") return fail(503, OUT_OF_TIME);
     if (!routed.ok) return Response.json({ error: ROUTE_ERRORS[routed.reason], routing: routed.reason }, { status: 503 });
 
     const route = routed.route;
     const plainLine = lineForTrip(route.line, trip)!;
-    const judge = (detourLine: Route["line"] | null) =>
-      decideAnswer({
-        plain: { id: "plain", line: plainLine },
-        detours: detourLine ? [{ id: "detour", line: detourLine }] : [],
-        reports,
-        advisory: advisory.state,
-        rainingHere: check.rainingHere,
-        now: at,
-      });
-    let answer = judge(null);
-    let detour: Route | null = null;
-    let detourLine: Route["line"] | null = null;
-    const plainJudged = answer.routes[0];
-    if (plainJudged.state === "blocked") {
-      const blockers = reports.filter((r) => plainJudged.blockedBy.includes(r.id));
-      const around = await check.around(blockers);
-      if (!around.ok && around.reason !== "no_route") {
-        return Response.json({ error: ROUTE_ERRORS[around.reason], routing: around.reason }, { status: 503 });
-      }
-      // A reply that misses the trip's ends, or still meets a blocked spot, is no way around it, whatever Valhalla meant.
-      const line = around.ok ? lineForTrip(around.route.line, trip) : null;
-      if (around.ok && line && detourAvoids(line, blockers.map((b) => b.at))) {
-        detour = around.route;
-        detourLine = line;
-        answer = judge(line);
-      }
+    const routesByLine = new Map<Point[], Route>();
+    // Set inside routeAround, so declared with `as`: TypeScript would otherwise narrow it to null here for good.
+    let routingFailure = null as Exclude<PlainResult, { ok: true }>["reason"] | null;
+
+    const result = await investigate({
+      plainLine,
+      advisory,
+      rainingHere: check.rainingHere,
+      now: at,
+      deadline: run.deadline,
+      meter: run.meter,
+      web,
+      modelOff: run.modelOff,
+      sources: {
+        // Every report this check gathered, for every route: the rules keep the ones within each route's corridor.
+        reportsAlong: async () => ({ ok: true, reports: gathered }),
+        async routeAround(spots) {
+          if (run.deadline - Date.now() < timing.routeWorstMs) {
+            routingFailure = "out_of_time";
+            return { ok: false, reason: "failed" };
+          }
+          const around = await check.around(spots);
+          if (!around.ok) {
+            if (around.reason === "no_route") return { ok: false, reason: "no_route" };
+            routingFailure = around.reason;
+            return { ok: false, reason: "failed" };
+          }
+          // A reply that misses the trip's ends is no way around it, whatever Valhalla meant.
+          const line = lineForTrip(around.route.line, trip);
+          if (!line) return { ok: false, reason: "no_route" };
+          routesByLine.set(line, around.route);
+          return { ok: true, line };
+        },
+      },
+    });
+    if (!result.ok) {
+      const reason = result.failed === "routing" ? (routingFailure ?? "unreachable") : "unreachable";
+      const error = reason === "out_of_time" ? AROUND_OUT_OF_TIME : ROUTE_ERRORS[reason];
+      return Response.json({ error, routing: reason }, { status: 503 });
     }
+
+    const answer = result.answer;
+    const shown = (answer.answer === "go_another_way" ? result.detours.find((d) => d.id === answer.route) : result.detours[0]) ?? null;
+    const detour = shown ? routesByLine.get(shown.line)! : null;
+    const detourLine = shown?.line ?? null;
     const judged = new Map(answer.reports.map((r) => [r.id, r]));
-    const used = reports.filter((r) => answer.decidedBy.includes(r.id));
+    const used = gathered.filter((r) => answer.decidedBy.includes(r.id));
 
     return Response.json({
       demo: check.demo,
@@ -341,7 +460,8 @@ export function makeCommuteHandler(deps: {
       },
       route: { lengthKm: route.lengthKm, timeMin: Math.round(route.timeMin), streets: route.streets, line: route.line },
       detour: detour && {
-        state: answer.routes[1].state,
+        state: answer.routes.find((r) => r.routeId === shown!.id)!.state,
+        proposedBy: shown!.proposedBy,
         lengthKm: detour.lengthKm,
         timeMin: Math.round(detour.timeMin),
         // From the shown figures, so the page's numbers add up.
@@ -351,29 +471,42 @@ export function makeCommuteHandler(deps: {
         line: detour.line,
       },
       advisory: advisoryForPage(advisory),
-      reports: reports.map((r) => {
-        const j = judged.get(r.id)!;
-        const verdict = r.reading.source === "photo" ? r.reading.verdict : null;
-        return {
-          id: r.id,
-          sample: r.sample,
-          place: r.place,
-          at: r.at,
-          age: ageWords(at.getTime() - r.receivedAt.getTime()),
-          depth: verdict ? depthWords(verdict) : null,
-          passability: verdict ? passabilityLine(verdict) : null,
-          origin: r.origin,
-          credit: r.credit,
-          sourceUrl: r.sourceUrl,
-          counts: j.counts,
-          onRoute: placeOnRoute(r.at, plainLine).offM <= ROUTE_CORRIDOR_M,
-          onDetour: detourLine !== null && placeOnRoute(r.at, detourLine).offM <= ROUTE_CORRIDOR_M,
-          role: j.role,
-        };
-      })
+      reports: gathered
+        .map((r) => {
+          const j = judged.get(r.id)!;
+          const verdict = r.reading.source === "photo" ? r.reading.verdict : null;
+          return {
+            id: r.id,
+            sample: r.sample,
+            place: r.place,
+            at: r.at,
+            age: ageWords(at.getTime() - r.receivedAt.getTime()),
+            depth: verdict ? depthWords(verdict) : null,
+            passability: verdict ? passabilityLine(verdict) : null,
+            origin: r.origin,
+            credit: r.credit,
+            sourceUrl: r.sourceUrl,
+            counts: j.counts,
+            onRoute: placeOnRoute(r.at, plainLine).offM <= ROUTE_CORRIDOR_M,
+            onDetour: detourLine !== null && placeOnRoute(r.at, detourLine).offM <= ROUTE_CORRIDOR_M,
+            role: j.role,
+          };
+        })
         // A real report off both routes played no part, and its exact spot is someone else's: it isn't sent.
         .filter((r) => check.demo || r.onRoute || r.onDetour),
+      muse: { pick: pickForPage(result, { now: at, advisory, rainingHere: check.rainingHere }), web: webForPage(result.web, at) },
       mmdaCredit: MMDA_CREDIT,
     });
   }
+}
+
+/** One admitted check's Muse Spark run and its deadline (epoch ms), threaded through every step. */
+interface CheckRun {
+  plan: WebPlan;
+  store: KvStore | null;
+  modelOff?: string;
+  meter: Meter;
+  deadline: number;
+  /** Set once runWebSearch has the plan; until then the handler gives the plan back itself. */
+  searched: boolean;
 }

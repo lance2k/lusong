@@ -32,18 +32,25 @@ function countOf(value: unknown): number | null {
 }
 
 /**
- * What a call was, which decides how its usage is read and priced. web_search and Voice Transcribe
- * join this list once a live probe has shown their usage shape and they have a price in lib/budget.ts.
+ * What a call was, which decides how its usage is read and priced. Voice Transcribe joins this list once a
+ * live probe has shown its usage shape and it has a price in lib/budget.ts.
  */
 export type Operation = "sam" | "spark-chat" | "spark-responses";
 
-/** Responses-API output items billed only through the reply's tokens. Any other item, such as
- *  `web_search_call`, may carry a fee of its own that the meter cannot count yet. */
+/** Responses-API output items billed only through the reply's tokens. Any other item but `web_search_call`
+ *  may carry a fee of its own that the meter cannot count. */
 const TOKEN_PRICED_OUTPUT = new Set(["message", "reasoning", "function_call"]);
+const WEB_SEARCH_CALL = "web_search_call";
 
 type Usage = Record<string, unknown> | undefined;
 /** The counts a reply reports, as a floor; `complete` is false when a billed count may be missing. */
-type Reading = { samImages?: number; museInputTokens?: number; museOutputTokens?: number; complete: boolean };
+type Reading = {
+  samImages?: number;
+  museInputTokens?: number;
+  museOutputTokens?: number;
+  webSearchQueries?: number;
+  complete: boolean;
+};
 
 function tokens(input: number | null, output: number | null): Reading {
   return { museInputTokens: input ?? 0, museOutputTokens: output ?? 0, complete: input !== null && output !== null };
@@ -57,13 +64,16 @@ const READERS: Record<Operation, (usage: Usage, body: unknown) => Reading> = {
   "spark-chat"(usage) {
     return tokens(countOf(usage?.prompt_tokens), countOf(usage?.completion_tokens));
   },
-  // Field names and the `web_search_call` item type from a live probe, 2026-10-30, 3 calls.
+  // Field names and the `web_search_call` item type from a live probe, 2026-10-30, 3 calls. Whether an `open_page`
+  // action bills as a query is not documented, so every web_search_call item is charged as one.
   "spark-responses"(usage, body) {
     const reading = tokens(countOf(usage?.input_tokens), countOf(usage?.output_tokens));
     const output = (body as { output?: unknown } | null)?.output;
-    const unreadable = !Array.isArray(output);
-    const unpriced = !unreadable && output.some((item: { type?: unknown } | null) => !TOKEN_PRICED_OUTPUT.has(String(item?.type)));
-    return unreadable || unpriced ? { ...reading, complete: false } : reading;
+    if (!Array.isArray(output)) return { ...reading, complete: false };
+    const types = output.map((item: { type?: unknown } | null) => String(item?.type));
+    const webSearchQueries = types.filter((t) => t === WEB_SEARCH_CALL).length;
+    const unpriced = types.some((t) => t !== WEB_SEARCH_CALL && !TOKEN_PRICED_OUTPUT.has(t));
+    return { ...reading, webSearchQueries, complete: reading.complete && !unpriced };
   },
 };
 
@@ -72,6 +82,7 @@ export class Meter {
   private samImages = 0;
   private museInputTokens = 0;
   private museOutputTokens = 0;
+  private webSearchQueries = 0;
   private complete = true;
 
   /** A failed attempt may still have been billed, and it is the only way a call gets retried. */
@@ -86,11 +97,22 @@ export class Meter {
     this.samImages += reading.samImages ?? 0;
     this.museInputTokens += reading.museInputTokens ?? 0;
     this.museOutputTokens += reading.museOutputTokens ?? 0;
+    this.webSearchQueries += reading.webSearchQueries ?? 0;
+  }
+
+  /** Adds another meter's counts, such as a web search metered against its own daily cap. */
+  include(other: Meter): void {
+    const u = other.usage();
+    this.samImages += u.samImages;
+    this.museInputTokens += u.museInputTokens;
+    this.museOutputTokens += u.museOutputTokens;
+    this.webSearchQueries += u.webSearchQueries;
+    if (!u.complete) this.complete = false;
   }
 
   usage(): MeteredUsage {
-    const { samImages, museInputTokens, museOutputTokens, complete } = this;
-    return { samImages, museInputTokens, museOutputTokens, complete };
+    const { samImages, museInputTokens, museOutputTokens, webSearchQueries, complete } = this;
+    return { samImages, museInputTokens, museOutputTokens, webSearchQueries, complete };
   }
 }
 
@@ -216,4 +238,14 @@ export async function chatJson(request: {
   if (choice?.finish_reason === "length") throw new OutputCapError();
   if (!choice?.message?.content) throw new MetaApiError("/chat/completions", 0);
   return JSON.parse(choice.message.content);
+}
+
+/** Muse Spark 1.3 on the Responses API (function tools, web_search); returns the raw reply. */
+export async function sparkResponse(
+  body: Record<string, unknown>,
+  attemptTimeoutMs: number,
+  deadline: number,
+  meter: Meter,
+): Promise<unknown> {
+  return postJson("/responses", "spark-responses", { model: "muse-spark-1.3", ...body }, attemptTimeoutMs, deadline, meter);
 }

@@ -1,9 +1,24 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { FEED_URL } from "./advisory";
-import { createBudget, MemoryBudgetStore, type Budget } from "./budget";
-import { ADVISORY_CACHE_MS, COMMUTE_RESERVE_MICROS, makeCommuteHandler, ROUTE_CACHE_MS, UNREADABLE_RETRY_MS } from "./commute-handler";
-import { scenariosFor, type DemoTripId } from "./samples";
+import { createBudget, MemoryBudgetStore, type Budget, type BudgetStore } from "./budget";
+import {
+  ADVISORY_CACHE_MS,
+  COMMUTE_DEADLINE_MS,
+  COMMUTE_RESERVE_MICROS,
+  COMMUTE_TIMING,
+  makeCommuteHandler,
+  MUSE_OFF,
+  ROUTE_CACHE_MS,
+  SETTLE_ROOM_MS,
+  UNREADABLE_RETRY_MS,
+  type CommuteTiming,
+  type MuseDeps,
+} from "./commute-handler";
+import { investigationReserveMicros, PICK_UNAVAILABLE } from "./investigation";
+import { sampleReports, scenariosFor, type DemoTripId } from "./samples";
+import { MemoryKvStore, planWebSearch, SEARCH_RESERVE_MICROS } from "./web-search";
+import { callsReply, fakeMeta, hangs, searchReply, textReply } from "../test/muse-derived";
 import { cutEnd, cutStart, derivedReply } from "../test/valhalla-derived";
 import { CAP_EDITS, CV_GFA5, FEED, feedWith, SAVED } from "../test/pagasa-fixtures";
 import { makeValhallaGate, MemorySlotStore, VALHALLA_URL, type SlotStore } from "./router";
@@ -58,6 +73,8 @@ type Options = {
   /** Hold the plain route's reply this long; a detour that "hangs" answers only when its own timeout aborts it. */
   plainDelayMs?: number;
   detourHangs?: boolean;
+  /** Valhalla answers only after this long. */
+  valhallaDelayMs?: number;
 };
 
 /** PAGASA and Valhalla faked at fetch with their saved records; any CAP link not saved fails as a dropped connection. */
@@ -70,6 +87,7 @@ function network(opts: Options = {}) {
     const pagasa = opts.pagasa ?? { [FEED_URL]: FEED, ...SAVED };
     if (u in pagasa) return new Response(pagasa[u]);
     if (u === `${VALHALLA_URL}/route`) {
+      if (opts.valhallaDelayMs) await new Promise((resolve) => setTimeout(resolve, opts.valhallaDelayMs));
       if (opts.valhalla === "down") throw new TypeError("fetch failed");
       const sent = JSON.parse(String(init!.body));
       const from = `${sent.locations[0].lat},${sent.locations[0].lon}`;
@@ -102,11 +120,20 @@ function handlerAt(
   store: SlotStore = new MemorySlotStore(),
   budget: Budget = openBudget(),
   reports: ReportStore | null = new MemoryReportStore(),
-  timing?: Parameters<typeof makeCommuteHandler>[0]["timing"],
+  muse: MuseDeps = MUSE_OFF,
+  timing?: Partial<CommuteTiming>,
 ) {
   const net = network(opts);
   const gate = makeValhallaGate(store);
-  const handler = makeCommuteHandler({ fetch: net.fetch, now: () => now, gate: () => gate, budget: () => budget, reports: () => reports, timing });
+  const handler = makeCommuteHandler({
+    fetch: net.fetch,
+    now: () => now,
+    gate: () => gate,
+    budget: () => budget,
+    reports: () => reports,
+    muse,
+    timing: timing && { ...COMMUTE_TIMING, ...timing },
+  });
   return { handler, ...net };
 }
 
@@ -747,17 +774,18 @@ describe.each([
   });
 });
 
-describe("one deadline for the whole commute check (route maxDuration 60 s)", () => {
-  /** Scaled down from 50 s, 5 s and 2 s so the test runs in seconds. */
-  const timing = { budgetMs: 2_500, storeCallMs: 200, responseMs: 100 };
+describe("one deadline for the whole commute check, real trips included (#6)", () => {
+  /** Scaled down from 80 s, 28 s and 5 s so the test runs in seconds. */
+  const timing: CommuteTiming = { deadlineMs: 2_200, routeWorstMs: 500, storeCallMs: 200 };
+  const limit = timing.deadlineMs + timing.storeCallMs;
 
   it("a slow plain route, then a detour that never answers: no answer, within the budget", async () => {
     const store = new MemoryReportStore();
     await store.save(storedReport(NO_ADVISORY));
-    const { handler, valhallaCalls } = handlerAt(NO_ADVISORY, { plainDelayMs: 1_200, detourHangs: true }, new MemorySlotStore(), openBudget(), store, timing);
+    const { handler, valhallaCalls } = handlerAt(NO_ADVISORY, { plainDelayMs: 1_200, detourHangs: true }, new MemorySlotStore(), openBudget(), store, MUSE_OFF, timing);
     const started = Date.now();
     const res = await handler(real());
-    expect(Date.now() - started).toBeLessThan(timing.budgetMs);
+    expect(Date.now() - started).toBeLessThan(limit);
     expect(res.status).toBe(503);
     const body = await res.json();
     expect(body.answer).toBeUndefined();
@@ -766,10 +794,10 @@ describe("one deadline for the whole commute check (route maxDuration 60 s)", ()
   }, 30_000);
 
   it("a demo check's detour that never answers is cut off the same way", async () => {
-    const { handler } = handlerAt(NO_ADVISORY, { plainDelayMs: 1_200, detourHangs: true }, new MemorySlotStore(), openBudget(), new MemoryReportStore(), timing);
+    const { handler } = handlerAt(NO_ADVISORY, { plainDelayMs: 1_200, detourHangs: true }, new MemorySlotStore(), openBudget(), new MemoryReportStore(), MUSE_OFF, timing);
     const started = Date.now();
     const res = await handler(demo("banilad-itpark", "flooded"));
-    expect(Date.now() - started).toBeLessThan(timing.budgetMs);
+    expect(Date.now() - started).toBeLessThan(limit);
     expect(res.status).toBe(503);
     expect((await res.json()).answer).toBeUndefined();
   }, 30_000);
@@ -777,21 +805,317 @@ describe("one deadline for the whole commute check (route maxDuration 60 s)", ()
   it("a report store that never answers: no answer, within the budget, and Valhalla isn't asked", async () => {
     const store = new MemoryReportStore();
     store.recent = () => new Promise(() => {});
-    const { handler, valhallaCalls } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store, timing);
+    const { handler, valhallaCalls } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store, MUSE_OFF, timing);
     const started = Date.now();
     const res = await handler(real());
-    expect(Date.now() - started).toBeLessThan(timing.budgetMs);
+    expect(Date.now() - started).toBeLessThan(limit);
     expect(res.status).toBe(503);
     expect((await res.json()).answer).toBeUndefined();
     expect(valhallaCalls()).toHaveLength(0);
   }, 10_000);
 
-  it("the real budget leaves the route's 60 s limit room for the settle and the response", async () => {
-    const { COMMUTE_TIMING } = await import("./commute-handler");
+  it("the real deadline and the settle's cut-off leave the route's 90 s limit room for the response", () => {
     // The route module imports through the "@/" alias, which vitest doesn't resolve, so its limit is read from source.
     const maxDuration = Number(/export const maxDuration = (\d+);/.exec(readFileSync("app/api/commute/route.ts", "utf8"))?.[1]);
-    expect(maxDuration).toBe(60);
-    expect(COMMUTE_TIMING.budgetMs).toBeLessThan(maxDuration * 1_000);
+    expect(maxDuration).toBe(90);
+    expect(COMMUTE_TIMING.deadlineMs + COMMUTE_TIMING.storeCallMs).toBeLessThan(maxDuration * 1_000);
     expect(COMMUTE_TIMING.storeCallMs).toBeGreaterThanOrEqual(5_000);
+    expect(COMMUTE_TIMING.storeCallMs).toBeLessThan(SETTLE_ROOM_MS);
+  });
+});
+
+describe("Muse Spark in the demo check (#7)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  process.env.MODEL_API_KEY = "test-key";
+
+  const roomy = () => createBudget({ store: new MemoryBudgetStore(), budgetUsd: 100, ipLimit: 1 });
+  const museOn = (kv = new MemoryKvStore(), searchBudget: Budget = roomy()): MuseDeps => ({ enabled: true, searchStore: () => kv, searchBudget: () => searchBudget });
+  const FLOODED = () => sampleReports("banilad-itpark", "flooded", NO_ADVISORY)[0].id;
+  /** NO_ADVISORY is 2026-10-29 in PHT. */
+  const closures = JSON.stringify({
+    closures: [
+      { place: "A. S. Fortuna St, Mandaue", lat: 10.335, lon: 123.935, url: "https://news.example.ph/fortuna", date: "2026-10-29", kind: "closed", summary: "Closed by flooding." },
+      { place: "Colon St", lat: null, lon: null, url: "https://example.ph/colon", date: null, kind: "flooded", summary: "Flooded." },
+    ],
+  });
+  const pickOf = (answer: string, evidence: unknown[], extra: Record<string, unknown> = {}) => JSON.stringify({ answer, evidence, ...extra });
+  const loop = () => [
+    callsReply("resp_1", [{ name: "reports_near_route", args: { route: "plain" } }]),
+    textReply("resp_2", pickOf("go_another_way", [FLOODED(), "detour"])),
+  ];
+  const LABEL = "Muse Spark picked this evidence";
+
+  it("shows the rules' reason, then the evidence Muse Spark picked in Lusong's words, and the web findings with their links and search time", async () => {
+    const meta = fakeMeta({ search: [searchReply(closures)], turns: loop() });
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), new MemoryReportStore(), museOn());
+
+    const res = await handler(demo("banilad-itpark", "flooded"));
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.answer.kind).toBe("go_another_way");
+    expect(body.answer.reason).toMatch(/^Your usual way is blocked at /);
+    expect(body.muse.pick).toEqual({
+      shown: true,
+      label: LABEL,
+      sentences: [
+        "A sample report 40 min ago on Governor M. Cuenco Avenue at Jose Maria Del Mar Avenue reads half-knee- to knee-deep (27–39 cm): not passable to light vehicles (MMDA gauge, Metro Manila).",
+        "Nothing reported blocks the other way.",
+      ],
+      note: null,
+    });
+    expect(body.muse.web.line).toBe("Searched the web at 29 Oct, 12:00 p.m. PHT");
+    expect(body.muse.web.findings).toEqual([
+      { place: "A. S. Fortuna St, Mandaue", url: "https://news.example.ph/fortuna", site: "news.example.ph", sourceDate: "2026-10-29", description: "Closed, says a page on news.example.ph dated 2026-10-29.", counted: true, note: "Dated today and placed on the map: it can block a way, never clear one." },
+      { place: "Colon St", url: "https://example.ph/colon", site: "example.ph", sourceDate: null, description: "Flooded, says an undated page on example.ph.", counted: false, note: "Shown, not counted: it has no date and no place on the map." },
+    ]);
+    expect(meta.searchRequests).toHaveLength(1);
+    expect(meta.requests).toHaveLength(2);
+  });
+
+  it("when Muse Spark fails, the rules' answer and its evidence stand and the page says the explanation is unavailable", async () => {
+    fakeMeta({ search: [searchReply(closures)], turns: [new Response("{}", { status: 500 }), new Response("{}", { status: 500 })] });
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), new MemoryReportStore(), museOn());
+
+    const body = await (await handler(demo("banilad-itpark", "flooded"))).json();
+
+    expect(body.answer.kind).toBe("go_another_way");
+    expect(body.reports.length).toBeGreaterThan(0);
+    expect(body.muse.pick).toEqual({ shown: false, label: LABEL, sentences: [], note: PICK_UNAVAILABLE });
+  });
+
+  it("a pick that fails its checks is just not shown", async () => {
+    fakeMeta({ search: [searchReply(closures)], turns: [textReply("resp_1", pickOf("wait", [FLOODED()]))] });
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), new MemoryReportStore(), museOn());
+
+    const body = await (await handler(demo("banilad-itpark", "flooded"))).json();
+
+    expect(body.muse.pick).toEqual({ shown: false, label: LABEL, sentences: [], note: null });
+  });
+
+  it("a web finding's own words never reach the response, and it still blocks the way when dated today and placed on it (review 🔴2)", async () => {
+    const spot = sampleReports("banilad-itpark", "flooded", NO_ADVISORY)[0].at;
+    const words = "The road is passable to all types of vehicles.";
+    const onRoute = JSON.stringify({
+      closures: [{ place: "Gov. M. Cuenco Ave", lat: spot.lat, lon: spot.lon, url: "https://example.ph/cuenco", date: "2026-10-29", kind: "flooded", summary: words, note: words }],
+    });
+    fakeMeta({ search: [searchReply(onRoute)], turns: [textReply("resp_1", pickOf("go_another_way", ["web-0"]))] });
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), new MemoryReportStore(), museOn());
+
+    const text = await (await handler(demo("banilad-itpark", "none"))).text();
+    const body = JSON.parse(text);
+
+    expect(text.toLowerCase()).not.toContain("passable to all");
+    expect(body.answer.kind).toBe("go_another_way");
+    expect(body.answer.reason).toContain("Gov. M. Cuenco Ave");
+    expect(body.muse.pick.sentences).toEqual(["A page on example.ph dated 2026-10-29 reports Gov. M. Cuenco Ave flooded."]);
+  });
+
+  it("a web finding's link must be a page the search tool opened, and is given without its fragment; one it never opened never reaches the response (review 🔴T7-8)", async () => {
+    const words = ["Start-your-trip-now", "the-road-is-open-to-every-vehicle", "Proceed+with+your+trip", "Wala-nang-baha"];
+    const colon = { place: "Colon St", lat: null, lon: null, date: null, kind: "flooded" };
+    const found = JSON.stringify({
+      closures: [
+        { ...colon, url: "https://example.ph/colon#Start-your-trip-now" },
+        { ...colon, url: "https://the-road-is-open-to-every-vehicle.example.ph/colon" },
+        { ...colon, url: "https://example.ph/the-road-is-open-to-every-vehicle" },
+        { ...colon, url: "https://example.ph/colon?Proceed+with+your+trip" },
+        { ...colon, url: "https://example.ph/mabolo#Wala-nang-baha" },
+      ],
+    });
+    fakeMeta({ search: [searchReply(found, 11, undefined, ["https://example.ph/colon"])], turns: loop() });
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), new MemoryReportStore(), museOn());
+
+    const text = await (await handler(demo("banilad-itpark", "flooded"))).text();
+
+    for (const w of words) expect(text.toLowerCase()).not.toContain(w.toLowerCase());
+    expect(JSON.parse(text).muse.web.findings).toEqual([
+      { place: "Colon St", url: "https://example.ph/colon", site: "example.ph", sourceDate: null, description: "Flooded, says an undated page on example.ph.", counted: false, note: "Shown, not counted: it has no date and no place on the map." },
+    ]);
+  });
+
+  describe("no word Muse Spark writes reaches the response (review 🔴1)", () => {
+    // Each passed a phrase check under Wait in an earlier round (gpt-6-astra, two review rounds).
+    const PHRASES = [
+      "Start your trip now.",
+      "The road is open to every vehicle.",
+      "Wala nang baha. Bumiyahe ka na.",
+      "Pwede na, walang baha.",
+      "Proceed with your trip.",
+      "There is no need to wait.",
+      "The road is passable to all types of vehicles.",
+    ];
+    const saying = (reply: { output: Record<string, unknown>[] }, words: string) => ({
+      ...reply,
+      output: reply.output.map((item) =>
+        item.type === "message" && item.phase === "commentary"
+          ? { ...item, content: (item.content as Record<string, unknown>[]).map((c) => ({ ...c, text: words })) }
+          : item,
+      ),
+    });
+    const scripts = (p: string) => [
+      // A pick that passes, with the words in every other field, in the commentary and in a tool call's arguments.
+      [
+        saying(callsReply("resp_1", [{ name: "reports_near_route", args: { route: "plain" } }, { name: "reports_near_route", args: { route: p } }]), p),
+        textReply("resp_2", pickOf("go_another_way", [FLOODED(), "detour"], { sentences: [{ text: p, evidence: [FLOODED()] }], note: p, [p]: p })),
+      ],
+      [textReply("resp_1", pickOf("go_another_way", [p]))],
+      [textReply("resp_1", pickOf(p, [FLOODED()]))],
+      [textReply("resp_1", p)],
+    ];
+
+    it.each(PHRASES)("%s", async (p) => {
+      const shown: boolean[] = [];
+      for (const turns of scripts(p)) {
+        fakeMeta({ search: [searchReply(closures)], turns });
+        const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), new MemoryReportStore(), museOn());
+
+        const text = await (await handler(demo("banilad-itpark", "flooded"))).text();
+
+        expect(text.toLowerCase()).not.toContain(p.toLowerCase());
+        shown.push(JSON.parse(text).muse.pick.shown);
+        vi.unstubAllGlobals();
+      }
+      expect(shown).toEqual([true, false, false, false]);
+    }, 20_000);
+  });
+
+  it("a cold check reserves the search and the loop on top of its 1 µ$, a warm one only the loop; both settle at the metered cost", async () => {
+    const admits: number[] = [];
+    const settled: { queries: number; complete: boolean; ok: boolean }[] = [];
+    const inner = openBudget();
+    const watched: Budget = {
+      admit: (ip, at, reserve) => (admits.push(reserve!), inner.admit(ip, at, reserve)),
+      settle: (a, usage, ok) => (settled.push({ queries: usage.webSearchQueries, complete: usage.complete, ok }), inner.settle(a, usage, ok)),
+    };
+    const kv = new MemoryKvStore();
+    fakeMeta({ search: [searchReply(closures)], turns: [...loop(), ...loop()] });
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), watched, new MemoryReportStore(), museOn(kv));
+
+    expect((await handler(demo("banilad-itpark", "flooded"))).status).toBe(200);
+    expect((await handler(demo("banilad-itpark", "flooded"))).status).toBe(200);
+
+    expect(admits).toEqual([
+      COMMUTE_RESERVE_MICROS + investigationReserveMicros({ kind: "search" }),
+      COMMUTE_RESERVE_MICROS + investigationReserveMicros({ kind: "cached" }),
+    ]);
+    expect(settled).toEqual([
+      { queries: 11, complete: true, ok: true },
+      { queries: 0, complete: true, ok: true },
+    ]);
+  });
+
+  describe("settles through the shared admission at what Meta's replies report", () => {
+    function charging() {
+      const charged: number[] = [];
+      const store: BudgetStore = { admit: async () => "admitted", settle: async (x) => (charged.push(x.chargeMicros), true) };
+      return { budget: createBudget({ store, budgetUsd: 10, ipLimit: 10 }), charged };
+    }
+    const COLD = COMMUTE_RESERVE_MICROS + investigationReserveMicros({ kind: "search" });
+
+    it.each([
+      // 90,257 × 1.25 + 3,000 × 4.25 + 11 × 2,500 + 2 × (679 × 1.25 + 327 × 4.25) = 157,548.25 µ$
+      ["success: the search's tokens and queries and the loop's tokens", () => ({ search: [searchReply(closures)], turns: loop() }), 157_549],
+      ["retry: a retried call keeps the whole reservation", () => ({ search: [searchReply(closures)], turns: [new Response("{}", { status: 503 }), ...loop()] }), COLD],
+      ["partial: usage without output tokens keeps it", () => ({ search: [searchReply(closures)], turns: [loop()[0], { ...loop()[1], usage: { input_tokens: 679 } }] }), COLD],
+      ["usage missing: a search reply without usage keeps it", () => ({ search: [searchReply(closures, 11, null)], turns: loop() }), COLD],
+      // 400,000 × 1.25 + 4,000 × 4.25 + 1,000 × 2,500 + 4,477 = 3,021,477 µ$, past the 849,126 µ$ reserved
+      ["search overrun: charged in full past the reservation", () => ({ search: [searchReply(closures, 1_000, { input_tokens: 400_000, output_tokens: 4_000 })], turns: loop() }), 3_021_477],
+    ] as const)("%s", async (_name, script, expected) => {
+      const { budget, charged } = charging();
+      fakeMeta(script());
+      const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), budget, new MemoryReportStore(), museOn());
+
+      expect((await handler(demo("banilad-itpark", "flooded"))).status).toBe(200);
+
+      expect(charged).toEqual([expected]);
+    });
+  });
+
+  it("a check the daily budget refuses makes no Meta call and gives its search reservation back", async () => {
+    const meta = fakeMeta({});
+    const kv = new MemoryKvStore();
+    const searchBudget = createBudget({ store: new MemoryBudgetStore(), budgetUsd: SEARCH_RESERVE_MICROS / 1e6, ipLimit: 1 });
+    const broke = createBudget({ store: new MemoryBudgetStore(), budgetUsd: 0.000_01, ipLimit: 10 });
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), broke, new MemoryReportStore(), museOn(kv, searchBudget));
+
+    expect((await handler(demo("banilad-itpark", "flooded"))).status).toBe(503);
+
+    expect(meta.fetchMock).not.toHaveBeenCalled();
+    expect(await planWebSearch(kv, NO_ADVISORY, searchBudget)).toMatchObject({ kind: "search" });
+  });
+
+  it("past today's web search cap the check runs without web search and says so", async () => {
+    const meta = fakeMeta({ turns: loop() });
+    const spent = createBudget({ store: new MemoryBudgetStore(), budgetUsd: (SEARCH_RESERVE_MICROS - 1) / 1e6, ipLimit: 1 });
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), new MemoryReportStore(), museOn(new MemoryKvStore(), spent));
+
+    const body = await (await handler(demo("banilad-itpark", "flooded"))).json();
+
+    expect(meta.searchRequests).toHaveLength(0);
+    expect(body.answer.kind).toBe("go_another_way");
+    expect(body.muse.web).toEqual({ line: "Web search skipped: today's web search budget is used up.", findings: [] });
+  });
+
+  it("with Muse Spark off the check reserves 1 µ$, calls no model, and says the explanation is unavailable", async () => {
+    const meta = fakeMeta({});
+    const { handler } = handlerAt(NO_ADVISORY);
+
+    const body = await (await handler(demo("banilad-itpark", "flooded"))).json();
+
+    expect(meta.fetchMock).not.toHaveBeenCalled();
+    expect(body.muse.pick.note).toBe(PICK_UNAVAILABLE);
+    expect(body.muse.web.line).toBe("Web search skipped: Muse Spark is off.");
+  });
+});
+
+describe("one deadline for the whole commute check", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  process.env.MODEL_API_KEY = "test-key";
+  const museOn = (): MuseDeps => ({
+    enabled: true,
+    searchStore: () => new MemoryKvStore(),
+    searchBudget: () => createBudget({ store: new MemoryBudgetStore(), budgetUsd: 100, ipLimit: 1 }),
+  });
+
+  it(`fits the route's maxDuration with ${SETTLE_ROOM_MS / 1000} s left to settle`, () => {
+    const maxDuration = Number(/export const maxDuration = (\d+);/.exec(read("app/api/commute/route.ts"))![1]);
+    expect(maxDuration).toBe(90);
+    expect(COMMUTE_DEADLINE_MS + SETTLE_ROOM_MS).toBeLessThanOrEqual(maxDuration * 1000);
+  });
+
+  it("a slow plain route that leaves no time for the way around fails in a controlled way, before the deadline", async () => {
+    const settles: boolean[] = [];
+    const inner = openBudget();
+    const watched: Budget = { admit: inner.admit, settle: (a, u, ok) => (settles.push(ok), inner.settle(a, u, ok)) };
+    fakeMeta({ search: [hangs] });
+    const { handler } = handlerAt(NO_ADVISORY, { valhallaDelayMs: 1_200 }, new MemorySlotStore(), watched, new MemoryReportStore(), museOn(), { deadlineMs: 2_000, routeWorstMs: 1_000 });
+
+    const started = Date.now();
+    const res = await handler(demo("banilad-itpark", "flooded"));
+
+    expect(Date.now() - started).toBeLessThan(2_500);
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toBe("Lusong ran out of time looking for a way around, so it can't give an answer. Try again in a minute.");
+    expect(settles).toEqual([false]);
+  });
+
+  it("a slow plain route, a slow detour and a model that never answers still give the rules' answer by the deadline", async () => {
+    fakeMeta({ search: [hangs], turns: [hangs] });
+    const { handler } = handlerAt(NO_ADVISORY, { valhallaDelayMs: 400 }, new MemorySlotStore(), openBudget(), new MemoryReportStore(), museOn(), { deadlineMs: 2_500, routeWorstMs: 600 });
+
+    const started = Date.now();
+    const res = await handler(demo("banilad-itpark", "flooded"));
+
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.answer.kind).toBe("go_another_way");
+    expect(body.muse.pick.note).toBe(PICK_UNAVAILABLE);
+    expect(body.muse.web.line).toBe("Web search skipped: the search failed.");
   });
 });
