@@ -55,6 +55,9 @@ type Options = {
   /** A reply to send instead of the saved plain route or the saved detour (derived fixtures). */
   plainReply?: string;
   detourReply?: string;
+  /** Hold the plain route's reply this long; a detour that "hangs" answers only when its own timeout aborts it. */
+  plainDelayMs?: number;
+  detourHangs?: boolean;
 };
 
 /** PAGASA and Valhalla faked at fetch with their saved records; any CAP link not saved fails as a dropped connection. */
@@ -70,7 +73,14 @@ function network(opts: Options = {}) {
       if (opts.valhalla === "down") throw new TypeError("fetch failed");
       const sent = JSON.parse(String(init!.body));
       const from = `${sent.locations[0].lat},${sent.locations[0].lon}`;
-      if (!sent.exclude_polygons) return new Response(opts.plainReply ?? ROUTES[from], { status: 200 });
+      if (!sent.exclude_polygons) {
+        if (opts.plainDelayMs) await new Promise((resolve) => setTimeout(resolve, opts.plainDelayMs));
+        return new Response(opts.plainReply ?? ROUTES[from], { status: 200 });
+      }
+      if (opts.detourHangs) {
+        const signal = init!.signal!;
+        return new Promise<Response>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
+      }
       if (opts.detour === "down") throw new TypeError("fetch failed");
       if (opts.detourReply) return new Response(opts.detourReply, { status: 200 });
       if (opts.detour === "no_route") return new Response(NO_ROUTE, { status: 400 });
@@ -92,10 +102,11 @@ function handlerAt(
   store: SlotStore = new MemorySlotStore(),
   budget: Budget = openBudget(),
   reports: ReportStore | null = new MemoryReportStore(),
+  timing?: Parameters<typeof makeCommuteHandler>[0]["timing"],
 ) {
   const net = network(opts);
   const gate = makeValhallaGate(store);
-  const handler = makeCommuteHandler({ fetch: net.fetch, now: () => now, gate: () => gate, budget: () => budget, reports: () => reports });
+  const handler = makeCommuteHandler({ fetch: net.fetch, now: () => now, gate: () => gate, budget: () => budget, reports: () => reports, timing });
   return { handler, ...net };
 }
 
@@ -730,5 +741,54 @@ describe.each([
     expect(after).toEqual(before);
     const everything = JSON.stringify(after);
     for (const coordinate of ["10.346", "123.911", "10.3307", "123.9058"]) expect(everything).not.toContain(coordinate);
+  });
+});
+
+describe("one deadline for the whole commute check (route maxDuration 60 s)", () => {
+  /** Scaled down from 50 s, 5 s and 2 s so the test runs in seconds. */
+  const timing = { budgetMs: 2_500, storeCallMs: 200, responseMs: 100 };
+
+  it("a slow plain route, then a detour that never answers: no answer, within the budget", async () => {
+    const store = new MemoryReportStore();
+    await store.save(storedReport(NO_ADVISORY));
+    const { handler, valhallaCalls } = handlerAt(NO_ADVISORY, { plainDelayMs: 1_200, detourHangs: true }, new MemorySlotStore(), openBudget(), store, timing);
+    const started = Date.now();
+    const res = await handler(real());
+    expect(Date.now() - started).toBeLessThan(timing.budgetMs);
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.answer).toBeUndefined();
+    expect(body.routing).toBe("out_of_time");
+    expect(valhallaCalls()).toHaveLength(2);
+  }, 30_000);
+
+  it("a demo check's detour that never answers is cut off the same way", async () => {
+    const { handler } = handlerAt(NO_ADVISORY, { plainDelayMs: 1_200, detourHangs: true }, new MemorySlotStore(), openBudget(), new MemoryReportStore(), timing);
+    const started = Date.now();
+    const res = await handler(demo("banilad-itpark", "flooded"));
+    expect(Date.now() - started).toBeLessThan(timing.budgetMs);
+    expect(res.status).toBe(503);
+    expect((await res.json()).answer).toBeUndefined();
+  }, 30_000);
+
+  it("a report store that never answers: no answer, within the budget, and Valhalla isn't asked", async () => {
+    const store = new MemoryReportStore();
+    store.recent = () => new Promise(() => {});
+    const { handler, valhallaCalls } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store, timing);
+    const started = Date.now();
+    const res = await handler(real());
+    expect(Date.now() - started).toBeLessThan(timing.budgetMs);
+    expect(res.status).toBe(503);
+    expect((await res.json()).answer).toBeUndefined();
+    expect(valhallaCalls()).toHaveLength(0);
+  }, 10_000);
+
+  it("the real budget leaves the route's 60 s limit room for the settle and the response", async () => {
+    const { COMMUTE_TIMING } = await import("./commute-handler");
+    // The route module imports through the "@/" alias, which vitest doesn't resolve, so its limit is read from source.
+    const maxDuration = Number(/export const maxDuration = (\d+);/.exec(readFileSync("app/api/commute/route.ts", "utf8"))?.[1]);
+    expect(maxDuration).toBe(60);
+    expect(COMMUTE_TIMING.budgetMs).toBeLessThan(maxDuration * 1_000);
+    expect(COMMUTE_TIMING.storeCallMs).toBeGreaterThanOrEqual(5_000);
   });
 });

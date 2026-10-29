@@ -6,6 +6,7 @@ import { clientIp } from "./check-handler";
 import { boxAround, detourAvoids, lineForTrip } from "./detour";
 import { ageWords, depthWords, MMDA_CREDIT, passabilityLine, phtTime } from "./commute-words";
 import { fetchRoute, type Route, type RouteResult, type ValhallaGate } from "./router";
+import { beforeDeadline, readBody } from "./deadline";
 import { inMetroCebu } from "./metro-cebu";
 import { reportStoreFromEnv, toReport, type ReportStore } from "./report-store";
 import { DEMO_TRIPS, sampleReports, scenariosFor, type DemoTripId, type SampleReport, type ScenarioId } from "./samples";
@@ -35,6 +36,7 @@ const ROUTE_ERRORS: Record<Exclude<PlainResult, { ok: true }>["reason"], string>
   busy: "The routing server is busy with other checks, so Lusong can't give an answer. Try again in a few seconds.",
   gate_unavailable: "Lusong can't pace its requests to the routing server right now, so it sent none and can't give an answer.",
   no_route: "The routing server found no motorbike route for this trip, so Lusong can't give an answer.",
+  out_of_time: "Lusong ran out of time asking the routing server, so it can't give an answer. Try again in a minute.",
   off_trip: "The routing server's route doesn't reach this trip's start and end, so Lusong can't give an answer.",
 };
 
@@ -124,13 +126,32 @@ function thinNote(kind: AnswerKind, reportCount: number, voiceOnly: boolean): st
  * the stored real reports and never a sample. A real trip is used for this answer only: nothing about it is cached
  * or stored.
  */
+/**
+ * One deadline for the whole check, under the route's 60 s maxDuration: the admission, the report read, the advisory
+ * and every routing attempt and gate wait must end in time for the settle and the response.
+ */
+export interface CommuteTiming {
+  budgetMs: number;
+  /** The admission and the settle are each one Upstash call bounded at this by its own timeout. */
+  storeCallMs: number;
+  responseMs: number;
+}
+export const COMMUTE_TIMING: CommuteTiming = { budgetMs: 50_000, storeCallMs: 5_000, responseMs: 2_000 };
+
+/** A check is a few short fields. */
+const MAX_BODY_BYTES = 4 * 1024;
+
+const OUT_OF_TIME = "Lusong ran out of time checking this trip, so it can't give an answer. Try again in a minute.";
+
 export function makeCommuteHandler(deps: {
   fetch?: typeof fetch;
   now?: () => Date;
   gate: () => ValhallaGate;
   budget?: () => Budget;
   reports?: () => ReportStore | null;
+  timing?: CommuteTiming;
 }) {
+  const timing = deps.timing ?? COMMUTE_TIMING;
   const budget = deps.budget ?? budgetFromEnv;
   const reportStore = deps.reports ?? reportStoreFromEnv;
   const doFetch: typeof fetch = (...args) => (deps.fetch ?? fetch)(...args);
@@ -139,23 +160,23 @@ export function makeCommuteHandler(deps: {
   const detours = new Map<string, { result: RouteResult; at: number }>();
   let advisoryCache: { reading: AdvisoryReading; at: number } | null = null;
 
-  async function routeFor(trip: DemoTripId, t: number): Promise<PlainResult> {
+  async function routeFor(trip: DemoTripId, t: number, deadline: number): Promise<PlainResult> {
     const cached = routes.get(trip);
     if (cached && t - cached.at < ROUTE_CACHE_MS) return { ok: true, route: cached.route };
-    const result = await fetchRoute(DEMO_TRIPS[trip], { fetch: doFetch, gate: deps.gate() });
+    const result = await fetchRoute(DEMO_TRIPS[trip], { fetch: doFetch, gate: deps.gate(), deadline });
     if (result.ok && !lineForTrip(result.route.line, DEMO_TRIPS[trip])) return { ok: false, reason: "off_trip" };
     if (result.ok) routes.set(trip, { route: result.route, at: t });
     return result;
   }
 
   /** One more request, with a box excluded around each blocked spot; "no route" is an answer, so it is kept too. */
-  async function detourFor(trip: DemoTripId, blockers: readonly Report[], t: number): Promise<RouteResult> {
+  async function detourFor(trip: DemoTripId, blockers: readonly Report[], t: number, deadline: number): Promise<RouteResult> {
     const key = `${trip}|${blockers.map((b) => b.id).sort().join(",")}`;
     const cached = detours.get(key);
     if (cached && t - cached.at < ROUTE_CACHE_MS) return cached.result;
     const result = await fetchRoute(
       { ...DEMO_TRIPS[trip], excludePolygons: blockers.map((b) => boxAround(b.at)) },
-      { fetch: doFetch, gate: deps.gate() },
+      { fetch: doFetch, gate: deps.gate(), deadline },
     );
     if (result.ok || result.reason === "no_route") detours.set(key, { result, at: t });
     return result;
@@ -172,9 +193,17 @@ export function makeCommuteHandler(deps: {
   }
 
   return async function POST(request: Request): Promise<Response> {
+    // Epoch ms. The admission and the answer must end in time for the settle, and the settle in time for the response.
+    const deadline = Date.now() + timing.budgetMs;
+    const settleBy = deadline - timing.responseMs;
+    const answerBy = settleBy - timing.storeCallMs;
+
+    const body = await readBody(request, { maxBytes: MAX_BODY_BYTES, deadline: answerBy });
+    if (body === "too_large") return fail(413, "That check is too large.");
+    if (body === "too_slow") return fail(408, "Lusong didn't receive the whole check in time.");
     let parsed: unknown;
     try {
-      parsed = await request.json();
+      parsed = JSON.parse(new TextDecoder().decode(body));
     } catch {
       return fail(400, "Send the check as JSON.");
     }
@@ -183,49 +212,63 @@ export function makeCommuteHandler(deps: {
     if (!demo && !realTrip) return fail(400, "Send a demo trip, or a real trip whose start and end are both in Metro Cebu.");
 
     const at = now();
-    const admission = await admit(budget(), { clientIp: clientIp(request), reserveMicros: COMMUTE_RESERVE_MICROS, now: at });
+    const admitting = admit(budget(), { clientIp: clientIp(request), reserveMicros: COMMUTE_RESERVE_MICROS, now: at });
+    const admission = await beforeDeadline(admitting, answerBy);
+    if (admission === "late") {
+      // Nothing was asked of anyone, so a reservation that lands late is refunded.
+      void admitting.then(
+        async (a) => {
+          if (a.ok) await a.run.settle(true);
+        },
+        () => {},
+      );
+      return fail(503, OUT_OF_TIME);
+    }
     if (!admission.ok) return admission.response();
     let answered = false;
     try {
-      const response = demo ? await answerDemo(demo, at) : await answerReal(realTrip!, at);
+      const response = demo ? await answerDemo(demo, at, answerBy) : await answerReal(realTrip!, at, answerBy);
       answered = response.ok;
       return response;
     } finally {
-      await admission.run.settle(answered);
+      // A settle cut off here keeps the reservation charged: the safe side.
+      await beforeDeadline(admission.run.settle(answered), settleBy);
     }
   };
 
-  function answerDemo(demo: DemoRequest, at: Date): Promise<Response> {
+  function answerDemo(demo: DemoRequest, at: Date, deadline: number): Promise<Response> {
     return answerTrip({
       demo: true,
       trip: { ...DEMO_TRIPS[demo.trip], id: demo.trip },
       rainingHere: demo.rainingHere,
       at,
       reports: async () => sampleReports(demo.trip, demo.scenario, at),
-      plain: () => routeFor(demo.trip, at.getTime()),
-      around: (blockers) => detourFor(demo.trip, blockers, at.getTime()),
+      deadline,
+      plain: () => routeFor(demo.trip, at.getTime(), deadline),
+      around: (blockers) => detourFor(demo.trip, blockers, at.getTime(), deadline),
     });
   }
 
   /** Not cached, unlike a demo trip's routes: a real trip's ends are the rider's, and the server keeps nothing of them. */
-  function answerReal(trip: RealRequest, at: Date): Promise<Response> {
+  function answerReal(trip: RealRequest, at: Date, deadline: number): Promise<Response> {
     const ends = { from: trip.from, to: trip.to };
     return answerTrip({
       demo: false,
       trip: { ...ends, id: null, label: "Your trip" },
       rainingHere: trip.rainingHere,
       at,
+      deadline,
       reports: async () => {
         const store = reportStore();
         if (!store) throw new Error("no report store configured");
         return (await store.recent(at)).map((r) => ({ ...toReport(r), sample: false, origin: null, credit: null, sourceUrl: null }) as const);
       },
       plain: async () => {
-        const result = await fetchRoute(ends, { fetch: doFetch, gate: deps.gate() });
+        const result = await fetchRoute(ends, { fetch: doFetch, gate: deps.gate(), deadline });
         return result.ok && !lineForTrip(result.route.line, ends) ? { ok: false, reason: "off_trip" } : result;
       },
       around: (blockers) =>
-        fetchRoute({ ...ends, excludePolygons: blockers.map((b) => boxAround(b.at)) }, { fetch: doFetch, gate: deps.gate() }),
+        fetchRoute({ ...ends, excludePolygons: blockers.map((b) => boxAround(b.at)) }, { fetch: doFetch, gate: deps.gate(), deadline }),
     });
   }
 
@@ -234,20 +277,24 @@ export function makeCommuteHandler(deps: {
     trip: { id: DemoTripId | null; label: string; from: Point; to: Point };
     rainingHere: boolean;
     at: Date;
+    /** Epoch ms by which the answer is ready. */
+    deadline: number;
     reports: () => Promise<CheckedReport[]>;
     plain: () => Promise<PlainResult>;
     around: (blockers: readonly Report[]) => Promise<RouteResult>;
   }): Promise<Response> {
     const { at, trip } = check;
     // Reports first: if they can't be read there is no answer, so the routing server isn't asked at all.
-    let reports: CheckedReport[];
+    let reports: CheckedReport[] | "late";
     try {
-      reports = await check.reports();
+      reports = await beforeDeadline(check.reports(), check.deadline);
     } catch (err) {
       console.error("report store unreadable:", err instanceof Error ? err.message : err);
       return fail(503, "Lusong couldn't read the reports from the street, so it can't give an answer. Try again in a minute.");
     }
-    const [advisory, routed] = await Promise.all([advisoryAt(at), check.plain()]);
+    if (reports === "late") return fail(503, OUT_OF_TIME);
+    const [advisory, routed] = await Promise.all([beforeDeadline(advisoryAt(at), check.deadline), check.plain()]);
+    if (advisory === "late") return fail(503, OUT_OF_TIME);
     if (!routed.ok) return Response.json({ error: ROUTE_ERRORS[routed.reason], routing: routed.reason }, { status: 503 });
 
     const route = routed.route;
