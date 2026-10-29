@@ -4,6 +4,7 @@ import { FEED_URL } from "./advisory";
 import { createBudget, MemoryBudgetStore, type Budget } from "./budget";
 import { ADVISORY_CACHE_MS, COMMUTE_RESERVE_MICROS, makeCommuteHandler, ROUTE_CACHE_MS, UNREADABLE_RETRY_MS } from "./commute-handler";
 import { scenariosFor, type DemoTripId } from "./samples";
+import { cutEnd, cutStart, derivedReply } from "../test/valhalla-derived";
 import { CAP_EDITS, CV_GFA5, FEED, feedWith, SAVED } from "../test/pagasa-fixtures";
 import { makeValhallaGate, MemorySlotStore, VALHALLA_URL, type SlotStore } from "./router";
 
@@ -49,6 +50,9 @@ type Options = {
   detour?: "ok" | "no_route" | "plain" | "down";
   feed?: "ok" | "down";
   pagasa?: Record<string, string>;
+  /** A reply to send instead of the saved plain route or the saved detour (derived fixtures). */
+  plainReply?: string;
+  detourReply?: string;
 };
 
 /** PAGASA and Valhalla faked at fetch with their saved records; any CAP link not saved fails as a dropped connection. */
@@ -64,8 +68,9 @@ function network(opts: Options = {}) {
       if (opts.valhalla === "down") throw new TypeError("fetch failed");
       const sent = JSON.parse(String(init!.body));
       const from = `${sent.locations[0].lat},${sent.locations[0].lon}`;
-      if (!sent.exclude_polygons) return new Response(ROUTES[from], { status: 200 });
+      if (!sent.exclude_polygons) return new Response(opts.plainReply ?? ROUTES[from], { status: 200 });
       if (opts.detour === "down") throw new TypeError("fetch failed");
+      if (opts.detourReply) return new Response(opts.detourReply, { status: 200 });
       if (opts.detour === "no_route") return new Response(NO_ROUTE, { status: 400 });
       if (opts.detour === "plain") return new Response(ROUTES[from], { status: 200 });
       const saved = detourRecordFor(sent);
@@ -460,4 +465,53 @@ describe("go another way", () => {
     }
     expect([...reached].sort()).toEqual(["go", "go_another_way", "no_one_knows", "wait"]);
   }, 10_000);
+});
+
+describe("a route must reach the trip's own start and end (🔴1)", () => {
+  const SAVED_BANILAD_PLAIN = ROUTES["10.346,123.911"];
+  const SAVED_BANILAD_DETOUR = DETOUR_RECORDS[0].reply;
+  // The saved routes loop round IT Park at the end, passing 13 m from it, so the cuts are by measured effect:
+  // 675 m off the end leaves the line ~330 m from IT Park and wholly outside its 330 m box; 300 m off leaves it 37 m away.
+  const DERIVED_DETOUR_ENDING_330_M_FROM_IT_PARK = derivedReply(SAVED_BANILAD_DETOUR, (l) => cutEnd(l, 675));
+  const DERIVED_DETOUR_STARTING_300_M_IN = derivedReply(SAVED_BANILAD_DETOUR, (l) => cutStart(l, 300));
+  const DERIVED_PLAIN_ENDING_330_M_FROM_IT_PARK = derivedReply(SAVED_BANILAD_PLAIN, (l) => cutEnd(l, 675));
+  const DERIVED_PLAIN_STARTING_300_M_IN = derivedReply(SAVED_BANILAD_PLAIN, (l) => cutStart(l, 300));
+  const DERIVED_PLAIN_ENDING_37_M_FROM_IT_PARK = derivedReply(SAVED_BANILAD_PLAIN, (l) => cutEnd(l, 300));
+
+  it("a detour that stops 330 m short of a flooded IT Park is no way around it ⇒ Wait, not Go another way", async () => {
+    const { handler } = handlerAt(NO_ADVISORY, { detourReply: DERIVED_DETOUR_ENDING_330_M_FROM_IT_PARK });
+    const res = await handler(demo("banilad-itpark", "no_way_around"));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.answer.kind).toBe("wait");
+    expect(body.detour).toBeNull();
+  });
+
+  it("a detour that starts 300 m along the way is no way around ⇒ Wait", async () => {
+    const { handler } = handlerAt(NO_ADVISORY, { detourReply: DERIVED_DETOUR_STARTING_300_M_IN });
+    const body = await (await handler(demo("banilad-itpark", "flooded"))).json();
+    expect(body.answer.kind).toBe("wait");
+    expect(body.detour).toBeNull();
+  });
+
+  it.each([
+    ["stops 330 m short of IT Park", DERIVED_PLAIN_ENDING_330_M_FROM_IT_PARK],
+    ["starts 300 m from Banilad", DERIVED_PLAIN_STARTING_300_M_IN],
+  ])("a plain route that %s gives no answer, never one judged on part of the trip", async (_what, reply) => {
+    for (const scenario of ["none", "no_way_around"]) {
+      const { handler } = handlerAt(NO_ADVISORY, { plainReply: reply });
+      const res = await handler(demo("banilad-itpark", scenario));
+      expect(res.status, scenario).toBe(503);
+      const body = await res.json();
+      expect(body.answer).toBeUndefined();
+      expect(body.routing).toBe("off_trip");
+    }
+  });
+
+  it("a plain route ending 37 m from IT Park is used, and the gap to IT Park is judged with it: the flooded spot there blocks it", async () => {
+    const { handler } = handlerAt(NO_ADVISORY, { plainReply: DERIVED_PLAIN_ENDING_37_M_FROM_IT_PARK });
+    const body = await (await handler(demo("banilad-itpark", "no_way_around"))).json();
+    expect(body.answer.kind).toBe("wait");
+    expect(body.reports[0]).toMatchObject({ onRoute: true, role: "block" });
+  });
 });

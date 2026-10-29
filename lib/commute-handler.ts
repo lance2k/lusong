@@ -3,7 +3,7 @@ import { readAdvisory, type AdvisoryReading } from "./advisory";
 import { decideAnswer, placeOnRoute, ROUTE_CORRIDOR_M, type AnswerKind, type Report } from "./answer";
 import { budgetFromEnv, type Budget } from "./budget";
 import { clientIp } from "./check-handler";
-import { boxAround, detourAvoids } from "./detour";
+import { boxAround, detourAvoids, lineForTrip } from "./detour";
 import { ageWords, depthWords, MMDA_CREDIT, passabilityLine, phtTime } from "./commute-words";
 import { fetchRoute, type Route, type RouteResult, type ValhallaGate } from "./router";
 import { DEMO_TRIPS, sampleReports, scenariosFor, type DemoTripId, type ScenarioId } from "./samples";
@@ -25,11 +25,15 @@ const TITLES: Record<AnswerKind, string> = {
   no_one_knows: "No one knows",
 };
 
-const ROUTE_ERRORS: Record<Exclude<RouteResult, { ok: true }>["reason"], string> = {
+/** A route that doesn't reach the trip's own ends is never judged: part of a trip can't answer for all of it. */
+type PlainResult = RouteResult | { ok: false; reason: "off_trip" };
+
+const ROUTE_ERRORS: Record<Exclude<PlainResult, { ok: true }>["reason"], string> = {
   unreachable: "Lusong couldn't reach the routing server, so it can't give an answer. Try again in a minute.",
   busy: "The routing server is busy with other checks, so Lusong can't give an answer. Try again in a few seconds.",
   gate_unavailable: "Lusong can't pace its requests to the routing server right now, so it sent none and can't give an answer.",
   no_route: "The routing server found no motorbike route for this trip, so Lusong can't give an answer.",
+  off_trip: "The routing server's route doesn't reach this trip's start and end, so Lusong can't give an answer.",
 };
 
 function fail(status: number, error: string): Response {
@@ -103,10 +107,11 @@ export function makeCommuteHandler(deps: {
   const detours = new Map<string, { result: RouteResult; at: number }>();
   let advisoryCache: { reading: AdvisoryReading; at: number } | null = null;
 
-  async function routeFor(trip: DemoTripId, t: number): Promise<RouteResult> {
+  async function routeFor(trip: DemoTripId, t: number): Promise<PlainResult> {
     const cached = routes.get(trip);
     if (cached && t - cached.at < ROUTE_CACHE_MS) return { ok: true, route: cached.route };
     const result = await fetchRoute(DEMO_TRIPS[trip], { fetch: doFetch, gate: deps.gate() });
+    if (result.ok && !lineForTrip(result.route.line, DEMO_TRIPS[trip])) return { ok: false, reason: "off_trip" };
     if (result.ok) routes.set(trip, { route: result.route, at: t });
     return result;
   }
@@ -162,10 +167,12 @@ export function makeCommuteHandler(deps: {
     if (!routed.ok) return Response.json({ error: ROUTE_ERRORS[routed.reason], routing: routed.reason }, { status: 503 });
 
     const route = routed.route;
+    const trip = DEMO_TRIPS[demo.trip];
+    const plainLine = lineForTrip(route.line, trip)!;
     const reports = sampleReports(demo.trip, demo.scenario, at);
     const judge = (detourLine: Route["line"] | null) =>
       decideAnswer({
-        plain: { id: "plain", line: route.line },
+        plain: { id: "plain", line: plainLine },
         detours: detourLine ? [{ id: "detour", line: detourLine }] : [],
         reports,
         advisory: advisory.state,
@@ -174,6 +181,7 @@ export function makeCommuteHandler(deps: {
       });
     let answer = judge(null);
     let detour: Route | null = null;
+    let detourLine: Route["line"] | null = null;
     const plainJudged = answer.routes[0];
     if (plainJudged.state === "blocked") {
       const blockers = reports.filter((r) => plainJudged.blockedBy.includes(r.id));
@@ -181,10 +189,12 @@ export function makeCommuteHandler(deps: {
       if (!around.ok && around.reason !== "no_route") {
         return Response.json({ error: ROUTE_ERRORS[around.reason], routing: around.reason }, { status: 503 });
       }
-      // A reply that still meets a blocked spot is no way around it, whatever Valhalla meant by it.
-      if (around.ok && detourAvoids(around.route.line, blockers.map((b) => b.at))) {
+      // A reply that misses the trip's ends, or still meets a blocked spot, is no way around it, whatever Valhalla meant.
+      const line = around.ok ? lineForTrip(around.route.line, trip) : null;
+      if (around.ok && line && detourAvoids(line, blockers.map((b) => b.at))) {
         detour = around.route;
-        answer = judge(detour.line);
+        detourLine = line;
+        answer = judge(line);
       }
     }
     const judged = new Map(answer.reports.map((r) => [r.id, r]));
@@ -226,8 +236,8 @@ export function makeCommuteHandler(deps: {
           credit: r.credit,
           sourceUrl: r.sourceUrl,
           counts: j.counts,
-          onRoute: placeOnRoute(r.at, route.line).offM <= ROUTE_CORRIDOR_M,
-          onDetour: detour !== null && placeOnRoute(r.at, detour.line).offM <= ROUTE_CORRIDOR_M,
+          onRoute: placeOnRoute(r.at, plainLine).offM <= ROUTE_CORRIDOR_M,
+          onDetour: detourLine !== null && placeOnRoute(r.at, detourLine).offM <= ROUTE_CORRIDOR_M,
           role: j.role,
         };
       }),

@@ -1,4 +1,4 @@
-import { placeOnRoute, ROUTE_CORRIDOR_M, type Point } from "./answer";
+import { distanceM, placeOnRoute, ROUTE_CORRIDOR_M, type Point } from "./answer";
 
 /** Side of the square excluded around each blocked spot; the 2026-10-30 probe found a way around with 330 m. */
 export const EXCLUDE_BOX_M = 330;
@@ -80,4 +80,21 @@ export function detourAvoids(line: readonly Point[], blockedSpots: readonly Poin
   return blockedSpots.every(
     (spot) => !lineEntersArea(line, boxAround(spot, sideM)) && placeOnRoute(spot, line).offM > ROUTE_CORRIDOR_M,
   );
+}
+
+/**
+ * How far a route's first and last points may lie from the trip's start and end. Valhalla snaps each end to the
+ * nearest road: 26.7 m at Banilad was the largest gap in the saved routes.
+ */
+export const ROUTE_END_TOLERANCE_M = 50;
+
+/**
+ * The line a route is judged on: the trip's start, the route, the trip's end, so a gap at either end is checked like
+ * the rest of the route. Null when either end of the route is too far from the trip's to stand for the whole trip.
+ */
+export function lineForTrip(line: readonly Point[], trip: { from: Point; to: Point }): Point[] | null {
+  if (line.length === 0) return null;
+  if (distanceM(line[0], trip.from) > ROUTE_END_TOLERANCE_M) return null;
+  if (distanceM(line[line.length - 1], trip.to) > ROUTE_END_TOLERANCE_M) return null;
+  return [trip.from, ...line, trip.to];
 }
