@@ -270,6 +270,23 @@ describe("one search is shared by every check for a while", () => {
     expect(await planWebSearch(store, NOW, roomy())).toMatchObject({ kind: "search" });
   });
 
+  it("a search with links to Unicode paths is stored and read back from the cache, with no second search (review 🟡T7-9)", async () => {
+    const accented = "https://example.ph/balita/baha-sa-Osmeña-Blvd";
+    // 119 characters as the model writes it, 919 once percent-encoded: past the 500 limit only in its stored form.
+    const thai = `https://example.ph/${"ข่าว".repeat(25)}`;
+    let now = NOW;
+    const store = new MemoryKvStore(() => now.getTime());
+    const meta = fakeMeta({ search: [searchReply(closures([{ ...MABOLO, url: accented }, { ...MABOLO, url: thai }])), searchReply(closures([]))] });
+
+    const first = await searchOnce(store, now);
+    now = new Date(NOW.getTime() + 60_000);
+    const second = await searchOnce(store, now);
+
+    expect(first.findings.map((f) => f.url)).toEqual(["https://example.ph/balita/baha-sa-Osme%C3%B1a-Blvd"]);
+    expect(second).toEqual(first);
+    expect(meta.searchRequests).toHaveLength(1);
+  });
+
   it("a stored record that can't be read is searched again", async () => {
     const store = new MemoryKvStore();
     await store.set(WEB_SEARCH_KEY, "{not json", 60_000);
