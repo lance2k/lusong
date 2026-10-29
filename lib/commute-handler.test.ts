@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { FEED_URL } from "./advisory";
 import { createBudget, MemoryBudgetStore, type Budget } from "./budget";
-import { ADVISORY_CACHE_MS, COMMUTE_RESERVE_MICROS, makeCommuteHandler, ROUTE_CACHE_MS } from "./commute-handler";
+import { ADVISORY_CACHE_MS, COMMUTE_RESERVE_MICROS, makeCommuteHandler, ROUTE_CACHE_MS, UNREADABLE_RETRY_MS } from "./commute-handler";
 import { CAP_EDITS, CV_GFA5, FEED, feedWith, SAVED } from "../test/pagasa-fixtures";
 import { makeValhallaGate, MemorySlotStore, VALHALLA_URL, type SlotStore } from "./router";
 
@@ -178,7 +178,7 @@ describe("the demo commute check", () => {
     expect(net.valhallaCalls()).toHaveLength(2);
   });
 
-  it("reuses a readable PAGASA reading for 5 minutes, but asks again after an unreadable one", async () => {
+  it("reuses a readable PAGASA reading for 5 minutes", async () => {
     let now = NO_ADVISORY;
     const net = network();
     const gate = makeValhallaGate(new MemorySlotStore());
@@ -190,12 +190,33 @@ describe("the demo commute check", () => {
     now = new Date(NO_ADVISORY.getTime() + ADVISORY_CACHE_MS);
     await handler(demo("banilad-itpark", "none"));
     expect(feedCalls()).toBe(2);
+  }, 10_000);
 
+  it("while PAGASA is down, demo clicks ask it again only once a minute", async () => {
+    let now = NO_ADVISORY;
     const down = network({ feed: "down" });
-    const flaky = makeCommuteHandler({ fetch: down.fetch, now: () => NO_ADVISORY, gate: () => gate, budget: openBudget });
-    await flaky(demo("banilad-itpark", "none"));
-    await flaky(demo("banilad-itpark", "none"));
-    expect(down.calls.filter((c) => c.url === FEED_URL)).toHaveLength(2);
+    const gate = makeValhallaGate(new MemorySlotStore());
+    const handler = makeCommuteHandler({ fetch: down.fetch, now: () => now, gate: () => gate, budget: openBudget });
+    const feedCalls = () => down.calls.filter((c) => c.url === FEED_URL).length;
+    for (const scenario of ["none", "flooded", "unclear", "none"]) {
+      expect((await (await handler(demo("banilad-itpark", scenario))).json()).advisory.state).toBe("unreadable");
+    }
+    expect(feedCalls()).toBe(1);
+    now = new Date(NO_ADVISORY.getTime() + UNREADABLE_RETRY_MS);
+    await handler(demo("banilad-itpark", "none"));
+    expect(feedCalls()).toBe(2);
+    expect(UNREADABLE_RETRY_MS).toBe(60_000);
+  });
+
+  it("clicking through every demo choice asks Valhalla once per trip and PAGASA's feed once", async () => {
+    const { handler, calls, valhallaCalls } = handlerAt(NO_ADVISORY);
+    for (const trip of ["banilad-itpark", "mabolo-cbp"]) {
+      for (const scenario of ["none", "flooded", "unclear"]) {
+        for (const rain of [false, true]) expect((await handler(demo(trip, scenario, rain))).status).toBe(200);
+      }
+    }
+    expect(valhallaCalls()).toHaveLength(2);
+    expect(calls.filter((c) => c.url === FEED_URL)).toHaveLength(1);
   }, 10_000);
 
   it("a commute check goes through the daily admission, reserving a small positive amount from the client's address", async () => {

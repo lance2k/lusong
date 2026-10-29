@@ -14,6 +14,8 @@ export const COMMUTE_RESERVE_MICROS = 1;
 export const ROUTE_CACHE_MS = 10 * 60_000;
 /** A readable PAGASA reading is reused this long, so a busy demo doesn't fetch the feed on every check. */
 export const ADVISORY_CACHE_MS = 5 * 60_000;
+/** An unreadable reading is reused this long, so demo clicks while PAGASA is down don't each fetch it again. */
+export const UNREADABLE_RETRY_MS = 60_000;
 
 const TITLES: Record<AnswerKind, string> = {
   go: "Go",
@@ -105,9 +107,12 @@ export function makeCommuteHandler(deps: {
   }
 
   async function advisoryAt(at: Date): Promise<AdvisoryReading> {
-    if (advisoryCache && at.getTime() - advisoryCache.at < ADVISORY_CACHE_MS) return advisoryCache.reading;
+    if (advisoryCache) {
+      const keep = advisoryCache.reading.state === "unreadable" ? UNREADABLE_RETRY_MS : ADVISORY_CACHE_MS;
+      if (at.getTime() - advisoryCache.at < keep) return advisoryCache.reading;
+    }
     const reading = await readAdvisory({ fetch: doFetch, now: at });
-    advisoryCache = reading.state === "unreadable" ? null : { reading, at: at.getTime() };
+    advisoryCache = { reading, at: at.getTime() };
     return reading;
   }
 
