@@ -229,3 +229,13 @@ export async function chatJson(request: {
   if (!choice?.message?.content) throw new MetaApiError("/chat/completions", 0);
   return JSON.parse(choice.message.content);
 }
+
+/** Muse Spark 1.3 on the Responses API (function tools, web_search); returns the raw reply. */
+export async function sparkResponse(
+  body: Record<string, unknown>,
+  attemptTimeoutMs: number,
+  deadline: number,
+  meter: Meter,
+): Promise<unknown> {
+  return postJson("/responses", "spark-responses", { model: "muse-spark-1.3", ...body }, attemptTimeoutMs, deadline, meter);
+}
