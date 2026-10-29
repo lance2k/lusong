@@ -320,6 +320,7 @@ describe("refused before anything is paid for", () => {
     ["no location", { lat: "", lon: "" }, 400],
     ["a location that is not a number", { lat: "abc", lon: "123.9" }, 400],
     ["a location outside the Philippines", { lat: 35.68, lon: 139.76 }, 400],
+    ["a location in Metro Manila, outside Metro Cebu", { lat: 14.5547, lon: 121.0244 }, 400],
   ])("%s", async (_why, pin, status) => {
     const calls = stubMeta();
     const form = post("192.0.2.1", pin);

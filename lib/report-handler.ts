@@ -9,6 +9,7 @@ import { readCaptureTime } from "./exif";
 import { JpegError, sanitizeJpeg } from "./jpeg";
 import { locateSpot } from "./locate";
 import { MetaApiError } from "./meta";
+import { inMetroCebu } from "./metro-cebu";
 import { reportStoreFromEnv, toReport, type ReportStore, type StoredReport } from "./report-store";
 import type { ValhallaGate } from "./router";
 
@@ -29,9 +30,6 @@ export interface Timing {
   locateMinMs: number;
 }
 
-/** Lusong's reports are for Philippine streets; a pin outside this box is refused before anything is paid for. */
-const PHILIPPINES = { south: 4.5, north: 21.5, west: 116, east: 127 };
-
 function fail(status: number, message: string): Response {
   return Response.json({ error: message }, { status });
 }
@@ -41,10 +39,6 @@ function pinFrom(form: FormData): Point | null {
   const lon = Number(form.get("lon"));
   if (form.get("lat") === null || form.get("lon") === null || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
   return { lat, lon };
-}
-
-function inThePhilippines(p: Point): boolean {
-  return p.lat >= PHILIPPINES.south && p.lat <= PHILIPPINES.north && p.lon >= PHILIPPINES.west && p.lon <= PHILIPPINES.east;
 }
 
 /** What the reporter is shown: Lusong's reading in the commute check's words, and what it can do for others. */
@@ -133,7 +127,7 @@ export function makeReportHandler(deps: {
     }
     const at = pinFrom(form);
     if (!at) return fail(400, "Lusong needs your phone's location to place the report.");
-    if (!inThePhilippines(at)) return fail(400, "Lusong takes reports from streets in the Philippines only.");
+    if (!inMetroCebu(at)) return fail(400, "Lusong takes reports from streets in Metro Cebu only.");
     const photo = form.get("photo");
     if (!(photo instanceof File)) return fail(400, "No photo was attached.");
     if (photo.size > MAX_BYTES) return fail(413, "That photo is too large. Try a smaller one.");

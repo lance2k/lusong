@@ -645,7 +645,7 @@ describe("a real commute check (#6)", () => {
     ["no start", { mode: "real", to: IT_PARK }],
     ["a start that isn't a number", { mode: "real", from: { lat: "10.3", lon: 123.9 }, to: IT_PARK }],
     ["an end outside the Philippines", { mode: "real", from: BANILAD, to: { lat: 35.68, lon: 139.76 } }],
-    ["a trip over 50 km", { mode: "real", from: BANILAD, to: { lat: 10.95, lon: 124.0 } }],
+    ["an end north of Metro Cebu", { mode: "real", from: BANILAD, to: { lat: 10.95, lon: 124.0 } }],
     ["a rain tap that isn't true or false", { mode: "real", from: BANILAD, to: IT_PARK, rainingHere: "yes" }],
   ])("%s is refused before any request", async (_why, body) => {
     const store = new MemoryReportStore();
@@ -654,6 +654,27 @@ describe("a real commute check (#6)", () => {
     expect((await handler(check(body))).status).toBe(400);
     expect(calls).toHaveLength(0);
     expect(recent).not.toHaveBeenCalled();
+  });
+
+  it("a trip outside Metro Cebu is refused before any request: the advisory Lusong reads is Cebu's only", async () => {
+    const store = new MemoryReportStore();
+    const recent = vi.spyOn(store, "recent");
+    const { handler, calls } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
+    // Quezon City to Makati, Metro Manila: PAGASA's Cebu advisory says nothing about it.
+    const res = await handler(real({ lat: 14.676, lon: 121.0437 }, { lat: 14.5547, lon: 121.0244 }));
+    expect(res.status).toBe(400);
+    expect(calls).toHaveLength(0);
+    expect(recent).not.toHaveBeenCalled();
+    // Toledo City, Cebu province but outside Metro Cebu, to Cebu IT Park.
+    expect((await handler(real({ lat: 10.3773, lon: 123.6386 }, IT_PARK))).status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("a Lapu-Lapu → Cebu IT Park trip is taken", async () => {
+    const { handler, valhallaCalls } = handlerAt(NO_ADVISORY);
+    const res = await handler(real({ lat: 10.3103, lon: 123.9494 }, IT_PARK));
+    expect(res.status).not.toBe(400);
+    expect(valhallaCalls()).toHaveLength(1);
   });
 
   it("asks Valhalla for the trip as sent", async () => {

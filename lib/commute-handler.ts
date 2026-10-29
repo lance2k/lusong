@@ -1,11 +1,12 @@
 import { admit } from "./admission";
 import { readAdvisory, type AdvisoryReading } from "./advisory";
-import { decideAnswer, distanceM, placeOnRoute, ROUTE_CORRIDOR_M, type AnswerKind, type Point, type Report } from "./answer";
+import { decideAnswer, placeOnRoute, ROUTE_CORRIDOR_M, type AnswerKind, type Point, type Report } from "./answer";
 import { budgetFromEnv, type Budget } from "./budget";
 import { clientIp } from "./check-handler";
 import { boxAround, detourAvoids, lineForTrip } from "./detour";
 import { ageWords, depthWords, MMDA_CREDIT, passabilityLine, phtTime } from "./commute-words";
 import { fetchRoute, type Route, type RouteResult, type ValhallaGate } from "./router";
+import { inMetroCebu } from "./metro-cebu";
 import { reportStoreFromEnv, toReport, type ReportStore } from "./report-store";
 import { DEMO_TRIPS, sampleReports, scenariosFor, type DemoTripId, type SampleReport, type ScenarioId } from "./samples";
 
@@ -57,11 +58,6 @@ function parseDemo(body: unknown): DemoRequest | null {
   return { trip: b.trip as DemoTripId, scenario: b.scenario as ScenarioId, rainingHere: b.rainingHere === true };
 }
 
-/** Real trips are Philippine streets; a pin outside this box is refused before anything is asked of anyone. */
-const PHILIPPINES = { south: 4.5, north: 21.5, west: 116, east: 127 };
-/** A commute is one city's worth of road; a longer trip is refused rather than sent to the shared free router. */
-export const MAX_TRIP_M = 50_000;
-
 interface RealRequest {
   from: Point;
   to: Point;
@@ -72,8 +68,7 @@ function pointFrom(value: unknown): Point | null {
   if (typeof value !== "object" || value === null) return null;
   const { lat, lon } = value as Record<string, unknown>;
   if (typeof lat !== "number" || typeof lon !== "number" || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-  const inside = lat >= PHILIPPINES.south && lat <= PHILIPPINES.north && lon >= PHILIPPINES.west && lon <= PHILIPPINES.east;
-  return inside ? { lat, lon } : null;
+  return inMetroCebu({ lat, lon }) ? { lat, lon } : null;
 }
 
 function parseReal(body: unknown): RealRequest | null {
@@ -82,7 +77,7 @@ function parseReal(body: unknown): RealRequest | null {
   if (b.mode !== "real") return null;
   const from = pointFrom(b.from);
   const to = pointFrom(b.to);
-  if (!from || !to || distanceM(from, to) > MAX_TRIP_M) return null;
+  if (!from || !to) return null;
   if (b.rainingHere !== undefined && typeof b.rainingHere !== "boolean") return null;
   return { from, to, rainingHere: b.rainingHere === true };
 }
@@ -185,7 +180,7 @@ export function makeCommuteHandler(deps: {
     }
     const demo = parseDemo(parsed);
     const realTrip = demo ? null : parseReal(parsed);
-    if (!demo && !realTrip) return fail(400, "Send a demo trip, or a real trip's start and end in the Philippines, up to 50 km apart.");
+    if (!demo && !realTrip) return fail(400, "Send a demo trip, or a real trip whose start and end are both in Metro Cebu.");
 
     const at = now();
     const admission = await admit(budget(), { clientIp: clientIp(request), reserveMicros: COMMUTE_RESERVE_MICROS, now: at });
