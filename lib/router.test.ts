@@ -5,6 +5,7 @@ import {
   fetchRoute,
   makeValhallaGate,
   MemorySlotStore,
+  slotStoreFromEnv,
   UpstashSlotStore,
   VALHALLA_SLOT_KEY,
   VALHALLA_URL,
@@ -186,5 +187,18 @@ describe("OSM way ids from Valhalla /locate (🔴P4)", () => {
     expect(wayIdFromLocate({ edges: [edge(1, 0.5), edge(2, 0.5), edge(3, 9)] })).toBeNull();
     expect(wayIdFromLocate({ edges: [edge(1, 0.5), edge(2, 3)] })).toBe(1);
     expect(wayIdFromLocate({ edges: null })).toBeNull();
+  });
+});
+
+describe("the slot store from the environment", () => {
+  it.each([
+    { name: "Upstash REST variables", env: { UPSTASH_REDIS_REST_URL: "https://u.example", UPSTASH_REDIS_REST_TOKEN: "t" }, kind: "UpstashSlotStore" },
+    { name: "Vercel's KV variables", env: { KV_REST_API_URL: "https://u.example", KV_REST_API_TOKEN: "t" }, kind: "UpstashSlotStore" },
+    { name: "the local memory switch", env: { LUSONG_BUDGET_STORE: "memory" }, kind: "MemorySlotStore" },
+    { name: "the memory switch on Vercel", env: { LUSONG_BUDGET_STORE: "memory", VERCEL: "1" }, kind: null },
+    { name: "nothing set", env: {}, kind: null },
+  ])("$name ⇒ $kind", ({ env, kind }) => {
+    const store = slotStoreFromEnv(env);
+    expect(store ? store.constructor.name : null).toBe(kind);
   });
 });

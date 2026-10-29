@@ -50,6 +50,22 @@ export class UpstashSlotStore implements SlotStore {
   }
 }
 
+const sharedMemorySlots = (() => {
+  let store: MemorySlotStore | null = null;
+  return () => (store ??= new MemorySlotStore());
+})();
+
+/** The same store and switches as the budget (lib/budget.ts); anything missing means no store, so no request. */
+export function slotStoreFromEnv(env: Record<string, string | undefined> = process.env): SlotStore | null {
+  if (env.LUSONG_BUDGET_STORE === "memory") {
+    const deployed = Boolean(env.VERCEL) || env.NODE_ENV === "production";
+    return deployed ? null : sharedMemorySlots();
+  }
+  if (env.UPSTASH_REDIS_REST_URL && env.UPSTASH_REDIS_REST_TOKEN) return new UpstashSlotStore(env.UPSTASH_REDIS_REST_URL, env.UPSTASH_REDIS_REST_TOKEN);
+  if (env.KV_REST_API_URL && env.KV_REST_API_TOKEN) return new UpstashSlotStore(env.KV_REST_API_URL, env.KV_REST_API_TOKEN);
+  return null;
+}
+
 export type GateOutcome = "ok" | "busy" | "unavailable";
 
 export interface ValhallaGate {
