@@ -806,3 +806,15 @@ describe("with no model to ask", () => {
     expect(result.summary).toEqual({ shown: false, why: "Muse Spark is off", unavailable: true });
   });
 });
+
+describe("the rain tap is evidence the model may pick whenever the rider gave it (review 🟡4)", () => {
+  it.each([true, false])("rainingHere %s: rain_tap is among the gathered ids", async (rainingHere) => {
+    const { sources } = sourcesOf();
+    fakeMeta({ turns: [textReply("resp_1", summaryOf(rainingHere ? "no_one_knows" : "go", ["You told Lusong about the rain here.", ["rain_tap"]]))] });
+
+    const result = await investigate(inputOf(sources, { rainingHere }));
+
+    if (!result.ok) throw new Error("expected an answer");
+    expect(result.summary.shown).toBe(true);
+  });
+});

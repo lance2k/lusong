@@ -497,7 +497,8 @@ export async function investigate(input: InvestigationInput): Promise<Investigat
     ...evidence.reports.keys(),
     ...input.web.findings.map((f) => f.id),
     "advisory",
-    ...(input.rainingHere ? ["rain_tap"] : []),
+    // The rider always answers the rain tap, so "not tapped" is evidence too.
+    "rain_tap",
     ...answer.routes.map((r) => r.routeId),
   ]);
   const summary: Summary =
