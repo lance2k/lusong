@@ -44,10 +44,11 @@ export interface CommuteTiming {
   routeWorstMs: number;
   /** The settle (and the release of an unused web search) is cut off this long after the deadline. */
   storeCallMs: number;
+  /** The web search's model call ends with this much of the deadline left, beyond a way around: for the model's pick. */
+  modelRoomMs: number;
 }
-export const COMMUTE_TIMING: CommuteTiming = { deadlineMs: COMMUTE_DEADLINE_MS, routeWorstMs: ROUTE_WORST_MS, storeCallMs: 5_000 };
-/** The web search must end with this much of the deadline left, beyond a way around: for the model's pick. */
 export const MODEL_ROOM_MS = 15_000;
+export const COMMUTE_TIMING: CommuteTiming = { deadlineMs: COMMUTE_DEADLINE_MS, routeWorstMs: ROUTE_WORST_MS, storeCallMs: 5_000, modelRoomMs: MODEL_ROOM_MS };
 
 export interface MuseDeps {
   /** False runs the rules alone: no web search, no pick, nothing reserved for Muse Spark. */
@@ -396,7 +397,7 @@ export function makeCommuteHandler(deps: {
     const gathered: CheckedReport[] = reports;
 
     // The search ends early enough to leave a way around and the model's pick their time.
-    const searchDeadline = run.deadline - timing.routeWorstMs - MODEL_ROOM_MS;
+    const searchDeadline = run.deadline - timing.routeWorstMs - timing.modelRoomMs;
     run.searched = true;
     const [advisory, routed, web] = await Promise.all([
       beforeDeadline(advisoryAt(at), run.deadline),

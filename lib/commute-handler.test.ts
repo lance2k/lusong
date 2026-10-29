@@ -782,7 +782,7 @@ describe.each([
 
 describe("one deadline for the whole commute check, real trips included (#6)", () => {
   /** Scaled down from 80 s, 28 s and 5 s so the test runs in seconds. */
-  const timing: CommuteTiming = { deadlineMs: 2_200, routeWorstMs: 500, storeCallMs: 200 };
+  const timing: CommuteTiming = { deadlineMs: 2_200, routeWorstMs: 500, storeCallMs: 200, modelRoomMs: 300 };
   const limit = timing.deadlineMs + timing.storeCallMs;
 
   it("a slow plain route, then a detour that never answers: no answer, within the budget", async () => {
@@ -1098,8 +1098,8 @@ describe("one deadline for the whole commute check", () => {
     const settles: boolean[] = [];
     const inner = openBudget();
     const watched: Budget = { admit: inner.admit, settle: (a, u, ok) => (settles.push(ok), inner.settle(a, u, ok)) };
-    fakeMeta({ search: [hangs] });
-    const { handler } = handlerAt(NO_ADVISORY, { valhallaDelayMs: 1_200 }, new MemorySlotStore(), watched, new MemoryReportStore(), museOn(), { deadlineMs: 2_000, routeWorstMs: 1_000 });
+    const meta = fakeMeta({ search: [hangs] });
+    const { handler } = handlerAt(NO_ADVISORY, { valhallaDelayMs: 1_200 }, new MemorySlotStore(), watched, new MemoryReportStore(), museOn(), { deadlineMs: 2_000, routeWorstMs: 1_000, modelRoomMs: 400 });
 
     const started = Date.now();
     const res = await handler(demo("banilad-itpark", "flooded"));
@@ -1108,11 +1108,12 @@ describe("one deadline for the whole commute check", () => {
     expect(res.status).toBe(503);
     expect((await res.json()).error).toBe("Lusong ran out of time looking for a way around, so it can't give an answer. Try again in a minute.");
     expect(settles).toEqual([false]);
+    expect(meta.searchRequests).toHaveLength(1);
   });
 
   it("a slow plain route, a slow detour and a model that never answers still give the rules' answer by the deadline", async () => {
-    fakeMeta({ search: [hangs], turns: [hangs] });
-    const { handler } = handlerAt(NO_ADVISORY, { valhallaDelayMs: 400 }, new MemorySlotStore(), openBudget(), new MemoryReportStore(), museOn(), { deadlineMs: 2_500, routeWorstMs: 600 });
+    const meta = fakeMeta({ search: [hangs], turns: [hangs] });
+    const { handler } = handlerAt(NO_ADVISORY, { valhallaDelayMs: 400 }, new MemorySlotStore(), openBudget(), new MemoryReportStore(), museOn(), { deadlineMs: 2_500, routeWorstMs: 600, modelRoomMs: 500 });
 
     const started = Date.now();
     const res = await handler(demo("banilad-itpark", "flooded"));
@@ -1123,6 +1124,8 @@ describe("one deadline for the whole commute check", () => {
     expect(body.answer.kind).toBe("go_another_way");
     expect(body.muse.pick.note).toBe(PICK_UNAVAILABLE);
     expect(body.muse.web.line).toBe("Web search skipped: the search failed.");
+    expect(meta.searchRequests).toHaveLength(1);
+    expect(meta.requests).toHaveLength(1);
   });
 });
 
@@ -1260,7 +1263,7 @@ describe("Muse Spark in a real check (#6 with #7)", () => {
   });
 
   describe("a real check that stalls returns by the deadline with its reservation settled", () => {
-    const timing: CommuteTiming = { deadlineMs: 1_500, routeWorstMs: 500, storeCallMs: 200 };
+    const timing: CommuteTiming = { deadlineMs: 1_500, routeWorstMs: 500, storeCallMs: 200, modelRoomMs: 300 };
     const limit = timing.deadlineMs + timing.storeCallMs;
 
     it("a report store that never answers: no answer, Valhalla and Meta never asked, the web search given back", async () => {
@@ -1287,7 +1290,7 @@ describe("Muse Spark in a real check (#6 with #7)", () => {
     it("a routing server that never answers, with a web search that never answers: no answer, out of time", async () => {
       const store = new MemoryReportStore();
       await store.save(storedReport(NO_ADVISORY));
-      fakeMeta({ search: [hangs] });
+      const meta = fakeMeta({ search: [hangs] });
       const { settles, budget } = watched();
       const { handler } = handlerAt(NO_ADVISORY, { plainHangs: true }, new MemorySlotStore(), budget, store, museOn(), timing);
 
@@ -1300,11 +1303,12 @@ describe("Muse Spark in a real check (#6 with #7)", () => {
       expect(body.answer).toBeUndefined();
       expect(body.routing).toBe("out_of_time");
       expect(settles).toEqual([false]);
+      expect(meta.searchRequests).toHaveLength(1);
     }, 10_000);
 
     it("a Valhalla slot store that never answers: no answer, out of time, and Valhalla never asked", async () => {
       const slots: SlotStore = { claim: () => new Promise(() => {}) };
-      fakeMeta({ search: [hangs] });
+      const meta = fakeMeta({ search: [hangs] });
       const { settles, budget } = watched();
       const { handler, valhallaCalls } = handlerAt(NO_ADVISORY, {}, slots, budget, new MemoryReportStore(), museOn(), timing);
 
@@ -1316,6 +1320,7 @@ describe("Muse Spark in a real check (#6 with #7)", () => {
       expect((await res.json()).routing).toBe("out_of_time");
       expect(valhallaCalls()).toHaveLength(0);
       expect(settles).toEqual([false]);
+      expect(meta.searchRequests).toHaveLength(1);
     }, 10_000);
   });
 });
