@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { Meter, MetaApiError, segment, segmentReply, transcribe } from "./meta";
+import { readSamReplyStrict } from "./sam";
 
 const ok = () => new Response(JSON.stringify({ output: [{ content: [{ type: "output_text", text: "" }] }] }), { status: 200 });
 const busy = (retryAfter?: string) =>
@@ -91,6 +92,32 @@ describe("segmentReply keeps Meta's own status for a SAM reply", () => {
   ])("does not call it completed when %s", async (_case, body, status) => {
     reply(body);
     expect((await segmentReply("data:image/jpeg;base64,", "person", Date.now() + 30_000, new Meter())).status).toBe(status);
+  });
+
+  const item = recorded.output[0];
+  it.each([
+    ["the body is a bare completed status", { status: "completed" }],
+    ["the output list is empty", { ...recorded, output: [] }],
+    ["the output is not a list", { ...recorded, output: { ...item } }],
+    ["the only content is a refusal", { ...recorded, output: [{ ...item, content: [{ type: "refusal", refusal: "I can't help with that." }] }] }],
+    ["a refusal sits beside the text", { ...recorded, output: [{ ...item, content: [...item.content, { type: "refusal", refusal: "no" }] }] }],
+    ["an output_text item has no text", { ...recorded, output: [{ ...item, content: [{ type: "output_text" }] }] }],
+    ["an output_text item's text is not a string", { ...recorded, output: [{ ...item, content: [{ type: "output_text", text: null }] }] }],
+    ["the message has no content", { ...recorded, output: [{ ...item, content: null }] }],
+    ["the message carries no status of its own", { ...recorded, output: [{ type: "message", role: "assistant", content: item.content }] }],
+    ["the body is not an object", null],
+  ])("treats the call as failed, not as zero objects, when %s", async (_case, body) => {
+    reply(body as object);
+    const got = await segmentReply("data:image/jpeg;base64,", "person", Date.now() + 30_000, new Meter());
+    expect(got.status).not.toBe("completed");
+    expect(readSamReplyStrict(got).ok).toBe(false);
+  });
+
+  it("reads a recorded completed reply with explicitly empty text as zero objects", async () => {
+    reply(JSON.parse(readFileSync("test/fixtures/sam/quiapo-2__person.json", "utf8")));
+    const got = await segmentReply("data:image/jpeg;base64,", "person", Date.now() + 30_000, new Meter());
+    expect(got).toEqual({ text: "", status: "completed" });
+    expect(readSamReplyStrict(got)).toEqual({ ok: true, objects: [] });
   });
 });
 

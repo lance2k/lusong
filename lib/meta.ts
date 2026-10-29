@@ -205,7 +205,7 @@ export async function segmentReply(imageDataUrl: string, phrase: string, deadlin
     deadline,
     meter,
   );
-  return samReplyOf(body as Parameters<typeof samReplyOf>[0]);
+  return samReplyOf(body);
 }
 
 interface ChatCompletion {

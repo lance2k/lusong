@@ -38,22 +38,45 @@ interface ResponsesBody {
 /** One SAM reply as Meta sent it: the output text and the Responses API's own status for the response. */
 export interface SamReply {
   text: string;
-  /** "completed" only when the response and every output item say so; null when the body carries no status. */
+  /**
+   * "completed" only when the response and every output item say so and the envelope holds nothing but output_text
+   * strings; "malformed" when the envelope does not have that shape; null when the body carries no status.
+   */
   status: string | null;
 }
 
-export function samReplyOf(body: ResponsesBody): SamReply {
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+/**
+ * A completed envelope can still hide objects: a refusal, an output_text with no string text, or no output at all
+ * would read as empty text, which is a real zero-match answer. Only explicit output_text strings count.
+ */
+function envelopeProblem(output: unknown): string | null {
+  if (!Array.isArray(output) || output.length === 0) return "malformed";
+  for (const item of output) {
+    if (!isRecord(item)) return "malformed";
+    if (item.status !== "completed") return typeof item.status === "string" ? item.status : "malformed";
+    if (!Array.isArray(item.content) || item.content.length === 0) return "malformed";
+    for (const part of item.content) {
+      if (!isRecord(part) || part.type !== "output_text" || typeof part.text !== "string") return "malformed";
+    }
+  }
+  return null;
+}
+
+export function samReplyOf(body: unknown): SamReply {
+  if (!isRecord(body)) return { text: "", status: "malformed" };
+  const text = Array.isArray(body.output) ? outputTextOf(body as ResponsesBody) : "";
   const top = typeof body.status === "string" ? body.status : null;
-  const unfinishedItem = (body.output ?? []).map((item) => item.status).find((s) => s !== undefined && s !== "completed");
-  const status = top === "completed" && unfinishedItem !== undefined ? (typeof unfinishedItem === "string" ? unfinishedItem : null) : top;
-  return { text: outputTextOf(body), status };
+  if (top !== "completed") return { text, status: top };
+  return { text, status: envelopeProblem(body.output) ?? "completed" };
 }
 
 export function outputTextOf(body: ResponsesBody): string {
   let text = "";
   for (const item of body.output ?? []) {
-    for (const part of item.content ?? []) {
-      if (part.type === "output_text") text += part.text ?? "";
+    for (const part of Array.isArray(item?.content) ? item.content : []) {
+      if (part?.type === "output_text" && typeof part.text === "string") text += part.text;
     }
   }
   return text;

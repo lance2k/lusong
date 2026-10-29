@@ -5,7 +5,7 @@ import { vi } from "vitest";
 type Reply = () => Response | Promise<Response>;
 
 export const samEmpty = (): Reply => () =>
-  Response.json({ status: "completed", output: [{ content: [{ type: "output_text", text: "" }] }], usage: { images_processed: 1 } });
+  Response.json({ status: "completed", output: [{ status: "completed", content: [{ type: "output_text", text: "" }] }], usage: { images_processed: 1 } });
 /** A completed SAM reply with this segmentation text. */
 export const samText = (text: string): Reply => () =>
   Response.json({ status: "completed", output: [{ status: "completed", content: [{ type: "output_text", text }] }], usage: { images_processed: 1 } });
