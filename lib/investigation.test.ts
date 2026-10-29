@@ -8,16 +8,20 @@ import {
   EXPLANATION_UNAVAILABLE,
   FIRST_TURN_MAX_BYTES,
   investigate,
+  investigationReserveMicros,
+  PROMPT_MAX_BYTES,
   LOOP_MAX_OUTPUT_TOKENS,
   LOOP_TURN_CAP,
   TOOL_CALLS_PER_TURN,
   TOOL_CALLS_TOTAL,
   TOOL_RESULT_MAX_BYTES, vetExplanation, type AroundResult, type InvestigationSources, type WebEvidence } from "./investigation";
+import { admit } from "./admission";
+import { createBudget, type BudgetStore } from "./budget";
 import { Meter } from "./meta";
 import { decodePolyline6 } from "./router";
 import { DEMO_TRIPS } from "./samples";
-import type { WebFinding } from "./web-search";
-import { callsReply, fakeMeta, hangs, textReply } from "../test/muse-derived";
+import { MemoryKvStore, planWebSearch, runWebSearch, type WebFinding, type WebPlan } from "./web-search";
+import { callsReply, fakeMeta, hangs, searchReply, textReply } from "../test/muse-derived";
 
 const read = (path: string) => readFileSync(path, "utf8");
 const shape = (name: string) => decodePolyline6(JSON.parse(read(`test/fixtures/valhalla/${name}.json`)).trip.legs[0].shape);
@@ -586,5 +590,127 @@ describe("web findings: they can block a way, never clear one (criterion 3, 🔴
     if (!result.ok) throw new Error("expected an answer");
     expect(result.web).toMatchObject({ state: "failed" });
     expect(result.answer.answer).toBe("go");
+  });
+});
+
+describe("the investigation's reservation", () => {
+  const cost = (u: { input: number; output: number; queries?: number }) => u.input * 1.25 + u.output * 4.25 + (u.queries ?? 0) * 2_500;
+
+  it("is the worked figure: the loop's bound alone, plus the search's when this check will search", () => {
+    // Worked by hand in the commit that set the caps; a change to any cap must change these on purpose.
+    expect(investigationReserveMicros({ kind: "cached", evidence: NO_WEB })).toBe(LOOP_RESERVE_LITERAL);
+    expect(investigationReserveMicros({ kind: "off", why: "no shared store" })).toBe(LOOP_RESERVE_LITERAL);
+    expect(investigationReserveMicros({ kind: "search" })).toBe(LOOP_RESERVE_LITERAL + SEARCH_RESERVE_LITERAL);
+  });
+
+  it("its prompt bound holds the instructions and tool definitions actually sent", async () => {
+    const { sources } = sourcesOf();
+    const meta = fakeMeta({ turns: [textReply("resp_1", "Nobody has reported your way.")] });
+    await investigate(inputOf(sources));
+    const sent = meta.requests[0];
+    const instructions = (sent.input as string).split("This check: ")[0];
+    expect(Buffer.byteLength(instructions + JSON.stringify(sent.tools), "utf8")).toBeLessThanOrEqual(PROMPT_MAX_BYTES);
+  });
+
+  it("holds the measured probe calls with room: the function-tool loop, and the search with its fee", () => {
+    const probeLoop = cost({ input: 560 + 679, output: 109 + 327 });
+    const probeSearch = cost({ input: 90_257, output: 3_000, queries: 11 });
+    expect(LOOP_RESERVE_LITERAL).toBeGreaterThan(10 * probeLoop);
+    expect(SEARCH_RESERVE_LITERAL).toBeGreaterThan(2 * probeSearch);
+  });
+});
+
+// Loop: first turn 1,000 framing + 4,000 prompt + 3,000 summary = 8,000 tokens; each later turn adds 3,000 output +
+// 3 × (2,000 + 50) results = 9,150; three turns read 3 × 8,000 + 9,150 × (0 + 1 + 2) = 51,450 tokens and write 9,000:
+// (51,450 × 1.25 + 9,000 × 4.25) × 2 attempts = 205,125 µ$.
+// Search: (200,000 × 1.25 + 4,000 × 4.25 + 22 queries × 2,500) × 2 attempts = 644,000 µ$.
+const LOOP_RESERVE_LITERAL = 205_125;
+const SEARCH_RESERVE_LITERAL = 644_000;
+
+describe("settling an investigation through the shared admission", () => {
+  /** Records what each settlement charged; admits everything. */
+  function recordingBudget() {
+    const charged: number[] = [];
+    const store: BudgetStore = {
+      admit: async () => "admitted",
+      settle: async (s) => {
+        charged.push(s.chargeMicros);
+        return true;
+      },
+    };
+    return { budget: createBudget({ store, budgetUsd: 10, ipLimit: 10 }), charged };
+  }
+
+  async function check(meta: Parameters<typeof fakeMeta>[0], plan?: WebPlan) {
+    const { budget, charged } = recordingBudget();
+    const kv = new MemoryKvStore();
+    const thePlan = plan ?? (await planWebSearch(kv, NOW));
+    const reserved = investigationReserveMicros(thePlan);
+    const admission = await admit(budget, { clientIp: "192.0.2.1", reserveMicros: reserved, now: NOW });
+    if (!admission.ok) throw new Error("expected an admission");
+    fakeMeta(meta);
+    const deadline = Date.now() + 40_000;
+    const web = await runWebSearch(thePlan, { store: kv, now: NOW, deadline, meter: admission.run.meter });
+    const { sources } = sourcesOf();
+    const result = await investigate(inputOf(sources, { web, meter: admission.run.meter, deadline }));
+    await admission.run.settle(result.ok);
+    return { reserved, charged: charged[0], result };
+  }
+
+  const loop = [callsReply("resp_1", [{ name: "read_advisory", args: {} }]), textReply("resp_2", "Nobody has reported your way.")];
+  const found = JSON.stringify({ closures: [] });
+
+  it("success: the search's tokens and its 11 queries, and the loop's tokens, are what is charged", async () => {
+    const { charged, reserved } = await check({ search: [searchReply(found)], turns: loop });
+
+    // 90,257 × 1.25 + 3,000 × 4.25 + 11 × 2,500 + 2 × (679 × 1.25 + 327 × 4.25) = 157,548.25 µ$
+    expect(charged).toBe(157_549);
+    expect(reserved).toBe(LOOP_RESERVE_LITERAL + SEARCH_RESERVE_LITERAL);
+  });
+
+  it("success with a cached search: only the loop is reserved and charged", async () => {
+    const plan: WebPlan = { kind: "cached", evidence: { state: "searched", searchedAt: NOW.toISOString(), findings: [] } };
+    const { charged, reserved } = await check({ turns: loop }, plan);
+
+    expect(reserved).toBe(LOOP_RESERVE_LITERAL);
+    expect(charged).toBe(4_477);
+  });
+
+  it("retry: a call that was retried keeps the whole reservation", async () => {
+    const { charged, reserved } = await check({ search: [searchReply(found)], turns: [new Response("{}", { status: 503 }), ...loop] });
+
+    expect(charged).toBe(reserved);
+  });
+
+  it("partial: a reply whose usage lacks its output tokens keeps the whole reservation", async () => {
+    const partial = { ...textReply("resp_2", "Nobody has reported your way."), usage: { input_tokens: 679 } };
+    const { charged, reserved } = await check({ search: [searchReply(found)], turns: [loop[0], partial] });
+
+    expect(charged).toBe(reserved);
+  });
+
+  it("usage missing: a search reply with no usage keeps the whole reservation", async () => {
+    const { charged, reserved } = await check({ search: [searchReply(found, 11, null)], turns: loop });
+
+    expect(charged).toBe(reserved);
+  });
+
+  it("search overrun: more queries and tokens than reserved are charged in full", async () => {
+    const big = searchReply(found, 60, { input_tokens: 400_000, output_tokens: 4_000 });
+    const { charged, reserved } = await check({ search: [big], turns: loop });
+
+    // 400,000 × 1.25 + 4,000 × 4.25 + 60 × 2,500 + 2 × (679 × 1.25 + 327 × 4.25) = 671,477 µ$
+    expect(charged).toBe(671_477);
+    expect(charged).toBeGreaterThan(SEARCH_RESERVE_LITERAL);
+    expect(charged).toBeLessThan(reserved);
+  });
+
+  it("search overrun past the whole reservation is still charged in full", async () => {
+    const huge = searchReply(found, 200, { input_tokens: 1_000_000, output_tokens: 4_000 });
+    const { charged, reserved } = await check({ search: [huge], turns: loop });
+
+    // 1,000,000 × 1.25 + 4,000 × 4.25 + 200 × 2,500 + 4,477 = 1,771,477 µ$
+    expect(charged).toBe(1_771_477);
+    expect(charged).toBeGreaterThan(reserved);
   });
 });
