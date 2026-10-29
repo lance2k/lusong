@@ -18,6 +18,8 @@ export const GATE_WAIT_MS = 4_000;
 const GATE_POLL_MS = 100;
 const REQUEST_TIMEOUT_MS = 10_000;
 const ATTEMPTS = 2;
+/** The longest one fetchRoute can take: each attempt waits for the slot, then for Valhalla. */
+export const ROUTE_WORST_MS = ATTEMPTS * (GATE_WAIT_MS + REQUEST_TIMEOUT_MS);
 
 /** `SET key 1 NX PX ttl`: true when this caller took the slot. */
 export interface SlotStore {

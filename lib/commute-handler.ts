@@ -1,15 +1,48 @@
 import { admit } from "./admission";
 import { readAdvisory, type AdvisoryReading } from "./advisory";
-import { decideAnswer, placeOnRoute, ROUTE_CORRIDOR_M, type AnswerKind, type Report } from "./answer";
+import { placeOnRoute, ROUTE_CORRIDOR_M, type AnswerKind, type Point } from "./answer";
 import { budgetFromEnv, type Budget } from "./budget";
 import { clientIp } from "./check-handler";
-import { boxAround, detourAvoids, lineForTrip } from "./detour";
+import { boxAround, lineForTrip } from "./detour";
 import { ageWords, depthWords, MMDA_CREDIT, passabilityLine, phtTime } from "./commute-words";
-import { fetchRoute, type Route, type RouteResult, type ValhallaGate } from "./router";
+import { investigate, investigationReserveMicros, SUMMARY_UNAVAILABLE, webFindingCounts, type InvestigationResult } from "./investigation";
+import type { Meter } from "./meta";
+import { fetchRoute, ROUTE_WORST_MS, type Route, type RouteResult, type ValhallaGate } from "./router";
 import { DEMO_TRIPS, sampleReports, scenariosFor, type DemoTripId, type ScenarioId } from "./samples";
+import {
+  planWebSearch,
+  releaseWebSearch,
+  runWebSearch,
+  searchBudgetFromEnv,
+  searchStoreFromEnv,
+  type KvStore,
+  type WebEvidence,
+  type WebFinding,
+  type WebPlan,
+} from "./web-search";
 
-/** The demo check makes no Meta call, so it reserves 1 µ$: enough to pass through the daily admission and its per-address limit. */
+/** PAGASA and Valhalla are free, so without Muse Spark a check reserves 1 µ$: enough to pass the daily admission and its per-address limit. */
 export const COMMUTE_RESERVE_MICROS = 1;
+
+/** Every part of a check, model calls included, ends this long after it starts; app/api/commute/route.ts allows 90 s. */
+export const COMMUTE_DEADLINE_MS = 80_000;
+/** Left after the deadline to settle the budget (Upstash times out at 5 s) and send the answer. */
+export const SETTLE_ROOM_MS = 10_000;
+/** The web search must end with this much of the deadline left, beyond a way around: for the model's summary. */
+export const MODEL_ROOM_MS = 15_000;
+
+export interface MuseDeps {
+  /** False runs the rules alone: no web search, no summary, nothing reserved for Muse Spark. */
+  enabled: boolean;
+  searchStore: () => KvStore | null;
+  searchBudget: () => Budget;
+}
+
+export const MUSE_OFF: MuseDeps = { enabled: false, searchStore: () => null, searchBudget: () => searchBudgetFromEnv({}) };
+
+function museFromEnv(): MuseDeps {
+  return { enabled: Boolean(process.env.MODEL_API_KEY), searchStore: () => searchStoreFromEnv(), searchBudget: () => searchBudgetFromEnv() };
+}
 
 /** A demo trip's plain route, or its detour around a set of spots, is reused this long: the roads don't change, and Valhalla is a shared free server. */
 export const ROUTE_CACHE_MS = 10 * 60_000;
@@ -26,7 +59,7 @@ const TITLES: Record<AnswerKind, string> = {
 };
 
 /** A route that doesn't reach the trip's own ends is never judged: part of a trip can't answer for all of it. */
-type PlainResult = RouteResult | { ok: false; reason: "off_trip" };
+type PlainResult = RouteResult | { ok: false; reason: "off_trip" | "out_of_time" };
 
 const ROUTE_ERRORS: Record<Exclude<PlainResult, { ok: true }>["reason"], string> = {
   unreachable: "Lusong couldn't reach the routing server, so it can't give an answer. Try again in a minute.",
@@ -34,7 +67,37 @@ const ROUTE_ERRORS: Record<Exclude<PlainResult, { ok: true }>["reason"], string>
   gate_unavailable: "Lusong can't pace its requests to the routing server right now, so it sent none and can't give an answer.",
   no_route: "The routing server found no motorbike route for this trip, so Lusong can't give an answer.",
   off_trip: "The routing server's route doesn't reach this trip's start and end, so Lusong can't give an answer.",
+  out_of_time: "Lusong ran out of time looking for a way around, so it can't give an answer. Try again in a minute.",
 };
+
+const WEB_WHY: Record<string, string> = {
+  "search failed": "the search failed",
+  "search cut off": "the search ran out of room before it answered",
+  "unreadable reply": "the search's reply couldn't be read",
+  "no shared store": "there is no shared store to keep it in",
+  "store unreachable": "the shared store couldn't be reached",
+};
+
+function webForPage(web: WebEvidence, now: Date) {
+  const line =
+    web.state === "searched" ? `Searched the web at ${phtTime(web.searchedAt)}` : `Web search skipped: ${WEB_WHY[web.why] ?? web.why}.`;
+  const note = (f: WebFinding) => {
+    if (webFindingCounts(f, now)) return "Dated today and placed on the map: it can block a way, never clear one.";
+    const missing = [f.sourceDate === null ? "no date" : null, f.at === null ? "no place on the map" : null].filter(Boolean);
+    if (missing.length > 0) return `Shown, not counted: it has ${missing.join(" and ")}.`;
+    return `Shown, not counted: it is dated ${f.sourceDate}, not today.`;
+  };
+  return {
+    line,
+    findings: web.findings.map((f) => ({ place: f.place, url: f.url, sourceDate: f.sourceDate, summary: f.summary, counted: webFindingCounts(f, now), note: note(f) })),
+  };
+}
+
+function summaryForPage(result: Extract<InvestigationResult, { ok: true }>) {
+  const label = "Muse Spark's summary";
+  if (result.summary.shown) return { shown: true, label, sentences: result.summary.sentences.map((s) => s.text), note: null };
+  return { shown: false, label, sentences: [], note: result.summary.unavailable ? SUMMARY_UNAVAILABLE : null };
+}
 
 function fail(status: number, error: string): Response {
   return Response.json({ error }, { status });
@@ -99,8 +162,13 @@ export function makeCommuteHandler(deps: {
   now?: () => Date;
   gate: () => ValhallaGate;
   budget?: () => Budget;
+  muse?: MuseDeps;
+  /** The deadline and the longest a Valhalla request can take, shortened in tests. */
+  timing?: { deadlineMs: number; routeWorstMs: number };
 }) {
   const budget = deps.budget ?? budgetFromEnv;
+  const muse = () => deps.muse ?? museFromEnv();
+  const timing = deps.timing ?? { deadlineMs: COMMUTE_DEADLINE_MS, routeWorstMs: ROUTE_WORST_MS };
   const doFetch: typeof fetch = (...args) => (deps.fetch ?? fetch)(...args);
   const now = deps.now ?? (() => new Date());
   const routes = new Map<DemoTripId, { route: Route; at: number }>();
@@ -116,13 +184,13 @@ export function makeCommuteHandler(deps: {
     return result;
   }
 
-  /** One more request, with a box excluded around each blocked spot; "no route" is an answer, so it is kept too. */
-  async function detourFor(trip: DemoTripId, blockers: readonly Report[], t: number): Promise<RouteResult> {
-    const key = `${trip}|${blockers.map((b) => b.id).sort().join(",")}`;
+  /** One more request, with a box excluded around each spot; "no route" is an answer, so it is kept too. */
+  async function detourFor(trip: DemoTripId, spots: readonly Point[], t: number): Promise<RouteResult> {
+    const key = `${trip}|${spots.map((p) => `${p.lat.toFixed(6)},${p.lon.toFixed(6)}`).sort().join(";")}`;
     const cached = detours.get(key);
     if (cached && t - cached.at < ROUTE_CACHE_MS) return cached.result;
     const result = await fetchRoute(
-      { ...DEMO_TRIPS[trip], excludePolygons: blockers.map((b) => boxAround(b.at)) },
+      { ...DEMO_TRIPS[trip], excludePolygons: spots.map((p) => boxAround(p)) },
       { fetch: doFetch, gate: deps.gate() },
     );
     if (result.ok || result.reason === "no_route") detours.set(key, { result, at: t });
@@ -149,12 +217,20 @@ export function makeCommuteHandler(deps: {
     const demo = parseDemo(parsed);
     if (!demo) return fail(400, "Only the demo trips can be checked so far.");
 
+    const started = Date.now();
+    const deadline = started + timing.deadlineMs;
     const at = now();
-    const admission = await admit(budget(), { clientIp: clientIp(request), reserveMicros: COMMUTE_RESERVE_MICROS, now: at });
-    if (!admission.ok) return admission.response();
+    const museDeps = muse();
+    const plan: WebPlan = museDeps.enabled ? await planWebSearch(museDeps.searchStore(), at, museDeps.searchBudget()) : { kind: "off", why: "Muse Spark is off" };
+    const reserveMicros = COMMUTE_RESERVE_MICROS + (museDeps.enabled ? investigationReserveMicros(plan) : 0);
+    const admission = await admit(budget(), { clientIp: clientIp(request), reserveMicros, now: at });
+    if (!admission.ok) {
+      await releaseWebSearch(plan);
+      return admission.response();
+    }
     let answered = false;
     try {
-      const response = await answerDemo(demo, at);
+      const response = await answerDemo(demo, at, { plan, store: museDeps.enabled ? museDeps.searchStore() : null, modelOff: museDeps.enabled ? undefined : "Muse Spark is off", meter: admission.run.meter, deadline });
       answered = response.ok;
       return response;
     } finally {
@@ -162,47 +238,73 @@ export function makeCommuteHandler(deps: {
     }
   };
 
-  async function answerDemo(demo: DemoRequest, at: Date): Promise<Response> {
-    const [advisory, routed] = await Promise.all([advisoryAt(at), routeFor(demo.trip, at.getTime())]);
+  async function answerDemo(
+    demo: DemoRequest,
+    at: Date,
+    run: { plan: WebPlan; store: KvStore | null; modelOff?: string; meter: Meter; deadline: number },
+  ): Promise<Response> {
+    const trip = DEMO_TRIPS[demo.trip];
+    // The search ends early enough to leave a way around and the model's summary their time.
+    const searchDeadline = run.deadline - timing.routeWorstMs - MODEL_ROOM_MS;
+    const [advisory, routed, web] = await Promise.all([
+      advisoryAt(at),
+      routeFor(demo.trip, at.getTime()),
+      runWebSearch(run.plan, { store: run.store, now: at, deadline: searchDeadline, meter: run.meter }),
+    ]);
     if (!routed.ok) return Response.json({ error: ROUTE_ERRORS[routed.reason], routing: routed.reason }, { status: 503 });
 
     const route = routed.route;
-    const trip = DEMO_TRIPS[demo.trip];
     const plainLine = lineForTrip(route.line, trip)!;
     const reports = sampleReports(demo.trip, demo.scenario, at);
-    const judge = (detourLine: Route["line"] | null) =>
-      decideAnswer({
-        plain: { id: "plain", line: plainLine },
-        detours: detourLine ? [{ id: "detour", line: detourLine }] : [],
-        reports,
-        advisory: advisory.state,
-        rainingHere: demo.rainingHere,
-        now: at,
-      });
-    let answer = judge(null);
-    let detour: Route | null = null;
-    let detourLine: Route["line"] | null = null;
-    const plainJudged = answer.routes[0];
-    if (plainJudged.state === "blocked") {
-      const blockers = reports.filter((r) => plainJudged.blockedBy.includes(r.id));
-      const around = await detourFor(demo.trip, blockers, at.getTime());
-      if (!around.ok && around.reason !== "no_route") {
-        return Response.json({ error: ROUTE_ERRORS[around.reason], routing: around.reason }, { status: 503 });
-      }
-      // A reply that misses the trip's ends, or still meets a blocked spot, is no way around it, whatever Valhalla meant.
-      const line = around.ok ? lineForTrip(around.route.line, trip) : null;
-      if (around.ok && line && detourAvoids(line, blockers.map((b) => b.at))) {
-        detour = around.route;
-        detourLine = line;
-        answer = judge(line);
-      }
+    const routesByLine = new Map<Point[], Route>();
+    let routingFailure: Exclude<PlainResult, { ok: true }>["reason"] | null = null;
+
+    const result = await investigate({
+      plainLine,
+      advisory,
+      rainingHere: demo.rainingHere,
+      now: at,
+      deadline: run.deadline,
+      meter: run.meter,
+      web,
+      modelOff: run.modelOff,
+      sources: {
+        // A demo trip's reports are its samples; the rules keep the ones within the corridor of each route.
+        reportsAlong: async () => ({ ok: true, reports }),
+        async routeAround(spots) {
+          if (run.deadline - Date.now() < timing.routeWorstMs) {
+            routingFailure = "out_of_time";
+            return { ok: false, reason: "failed" };
+          }
+          const around = await detourFor(demo.trip, spots, at.getTime());
+          if (!around.ok) {
+            if (around.reason === "no_route") return { ok: false, reason: "no_route" };
+            routingFailure = around.reason;
+            return { ok: false, reason: "failed" };
+          }
+          // A reply that misses the trip's ends is no way around it, whatever Valhalla meant.
+          const line = lineForTrip(around.route.line, trip);
+          if (!line) return { ok: false, reason: "no_route" };
+          routesByLine.set(line, around.route);
+          return { ok: true, line };
+        },
+      },
+    });
+    if (!result.ok) {
+      const reason = result.failed === "routing" ? (routingFailure ?? "unreachable") : "unreachable";
+      return Response.json({ error: ROUTE_ERRORS[reason], routing: reason }, { status: 503 });
     }
+
+    const answer = result.answer;
+    const shown = (answer.answer === "go_another_way" ? result.detours.find((d) => d.id === answer.route) : result.detours[0]) ?? null;
+    const detour = shown ? routesByLine.get(shown.line)! : null;
+    const detourLine = shown?.line ?? null;
     const judged = new Map(answer.reports.map((r) => [r.id, r]));
     const used = reports.filter((r) => answer.decidedBy.includes(r.id));
 
     return Response.json({
       demo: true,
-      trip: { id: demo.trip, label: DEMO_TRIPS[demo.trip].label },
+      trip: { id: demo.trip, label: trip.label },
       rainingHere: demo.rainingHere,
       answer: {
         kind: answer.answer,
@@ -212,7 +314,8 @@ export function makeCommuteHandler(deps: {
       },
       route: { lengthKm: route.lengthKm, timeMin: Math.round(route.timeMin), streets: route.streets, line: route.line },
       detour: detour && {
-        state: answer.routes[1].state,
+        state: answer.routes.find((r) => r.routeId === shown!.id)!.state,
+        proposedBy: shown!.proposedBy,
         lengthKm: detour.lengthKm,
         timeMin: Math.round(detour.timeMin),
         // From the shown figures, so the page's numbers add up.
@@ -241,6 +344,7 @@ export function makeCommuteHandler(deps: {
           role: j.role,
         };
       }),
+      muse: { summary: summaryForPage(result), web: webForPage(result.web, at) },
       mmdaCredit: MMDA_CREDIT,
     });
   }

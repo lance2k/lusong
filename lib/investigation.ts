@@ -158,6 +158,8 @@ export interface InvestigationInput {
   meter: Meter;
   web: WebEvidence;
   sources: InvestigationSources;
+  /** Why no model is asked at all (e.g. no API key): the rules answer alone and the summary is unavailable. */
+  modelOff?: string;
 }
 
 /** Model calls in one investigation, the first included. */
@@ -185,17 +187,8 @@ export const FRAMING_TOKENS_PER_CALL = 1_000;
 export const ITEM_FRAMING_TOKENS = 50;
 const LAST_TURN_NOTE = "No more tool calls: write the summary now.";
 
-/**
- * Model calls (the web search included) must finish this long after the check starts. Valhalla requests are bounded
- * on their own: two 10 s attempts and a 4 s slot wait.
- */
-export const INVESTIGATION_BUDGET_MS = 45_000;
 /** A way around is asked for only with this much time left: a cached Valhalla slot and one attempt, with room to explain. */
 export const ROUTE_AROUND_MIN_MS = 12_000;
-
-export function investigationDeadline(checkStartedAt: number): number {
-  return checkStartedAt + INVESTIGATION_BUDGET_MS;
-}
 
 /** At most this many ways around the model may ask for in one check: each is a request to the shared Valhalla server. */
 export const ROUTE_AROUND_CAP = 1;
@@ -365,12 +358,15 @@ function phtDay(t: Date): string {
  * 🔴P8: a web finding enters the rules only when it is located and dated today in PHT. Any other finding is shown and
  * never counted, not even as neutral, so it can't turn a Go into No one knows.
  */
+export function webFindingCounts(f: WebFinding, now: Date): f is WebFinding & { at: Point } {
+  return f.at !== null && f.sourceDate === phtDay(now);
+}
+
 function webReportsOf(web: WebEvidence, now: Date): Report[] {
   if (web.searchedAt === null) return [];
   const receivedAt = new Date(web.searchedAt);
-  const today = phtDay(now);
   return web.findings
-    .filter((f): f is WebFinding & { at: Point } => f.at !== null && f.sourceDate === today)
+    .filter((f): f is WebFinding & { at: Point } => webFindingCounts(f, now))
     .map((f) => ({ id: f.id, at: f.at, wayId: null, receivedAt, place: f.place, reading: { source: "web", says: "closed", sourceDate: f.sourceDate } }));
 }
 
@@ -551,6 +547,7 @@ type Written = { text: string } | { unavailable: string };
 
 /** The model's final text, or why there is none. */
 async function explain(input: InvestigationInput, evidence: Evidence, runTool: (call: FunctionCall) => Promise<Record<string, unknown>>): Promise<Written> {
+  if (input.modelOff) return { unavailable: input.modelOff };
   let turnInput: Parameters<typeof respond>[0]["input"] = `${INSTRUCTIONS}${CONTEXT_LEAD}${cappedJson(contextOf(evidence, input.web), CONTEXT_MAX_BYTES)}`;
   let previousResponseId: string | undefined;
   let callsSoFar = 0;

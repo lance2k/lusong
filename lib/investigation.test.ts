@@ -6,9 +6,7 @@ import { lineForTrip } from "./detour";
 import {
   FIRST_TURN_MAX_BYTES,
   investigate,
-  investigationDeadline,
   investigationReserveMicros,
-  INVESTIGATION_BUDGET_MS,
   ROUTE_AROUND_MIN_MS,
   PROMPT_MAX_BYTES,
   LOOP_MAX_OUTPUT_TOKENS,
@@ -795,8 +793,16 @@ describe("settling an investigation through the shared admission", () => {
   });
 });
 
-describe("the investigation's deadline", () => {
-  it(`ends ${INVESTIGATION_BUDGET_MS / 1000} s after the check starts`, () => {
-    expect(investigationDeadline(1_000_000)).toBe(1_000_000 + INVESTIGATION_BUDGET_MS);
+describe("with no model to ask", () => {
+  it("the rules answer alone and the summary is unavailable, with no Meta call", async () => {
+    const { sources } = sourcesOf({ reports: [voice("v1", BLOCKED_SPOT, "not_passable")] });
+    const meta = fakeMeta({});
+
+    const result = await investigate(inputOf(sources, { modelOff: "Muse Spark is off" }));
+
+    expect(meta.fetchMock).not.toHaveBeenCalled();
+    if (!result.ok) throw new Error("expected an answer");
+    expect(result.answer.answer).toBe("go_another_way");
+    expect(result.summary).toEqual({ shown: false, why: "Muse Spark is off", unavailable: true });
   });
 });
