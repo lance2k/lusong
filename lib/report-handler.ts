@@ -11,7 +11,7 @@ import { locateSpot } from "./locate";
 import { MetaApiError } from "./meta";
 import { inMetroCebu } from "./metro-cebu";
 import { beforeDeadline, readBody } from "./deadline";
-import { reportStoreFromEnv, toReport, type ReportStore, type StoredReport } from "./report-store";
+import { reportStoreFromEnv, toReport, type ReportStore, type StoredPhotoReport } from "./report-store";
 import type { ValhallaGate } from "./router";
 
 const MAX_BYTES = 3 * 1024 * 1024;
@@ -81,7 +81,7 @@ function durationWords(ms: number): string {
   return h === 0 ? `${m} min` : m === 0 ? `${h} h` : `${h} h ${m} min`;
 }
 
-function effectOf(report: StoredReport, role: Role, leftMs: number): string {
+function effectOf(report: StoredPhotoReport, role: Role, leftMs: number): string {
   const left = durationWords(leftMs);
   if (role === "clear") return `Others checking a trip through here will count this spot as clear for the next ${left}.`;
   if (role === "block") {
@@ -95,7 +95,7 @@ function effectOf(report: StoredReport, role: Role, leftMs: number): string {
 }
 
 /** What the report does for others as of `now`: nothing if it wasn't saved or its 3 h are up. */
-function viewOf(report: StoredReport, now: Date, stored: boolean): ReportView {
+function viewOf(report: StoredPhotoReport, now: Date, stored: boolean): ReportView {
   const asRule = toReport(report);
   const role = roleOf(asRule, now);
   const live = stored && counts(asRule, now);
@@ -232,7 +232,7 @@ export function makeReportHandler(deps: {
     let succeeded = false;
     try {
       const imageDataUrl = `data:image/jpeg;base64,${Buffer.from(jpeg.bytes).toString("base64")}`;
-      let verdict: StoredReport["verdict"];
+      let verdict: StoredPhotoReport["verdict"];
       try {
         verdict = (await checkPhoto(imageDataUrl, { width: jpeg.width, height: jpeg.height }, run.meter, { deadline: finishBy })).verdict;
       } catch (err) {
@@ -246,7 +246,7 @@ export function makeReportHandler(deps: {
         finishBy - Date.now() >= timing.locateMinMs
           ? await locateSpot(at, { fetch: doFetch, gate: deps.gate() }, { deadline: finishBy })
           : { wayId: null, place: null };
-      const report: StoredReport = {
+      const report: StoredPhotoReport = {
         id: randomUUID(),
         kind: "photo",
         at,

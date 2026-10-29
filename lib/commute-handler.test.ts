@@ -7,7 +7,7 @@ import { scenariosFor, type DemoTripId } from "./samples";
 import { cutEnd, cutStart, derivedReply } from "../test/valhalla-derived";
 import { CAP_EDITS, CV_GFA5, FEED, feedWith, SAVED } from "../test/pagasa-fixtures";
 import { makeValhallaGate, MemorySlotStore, VALHALLA_URL, type SlotStore } from "./router";
-import { MemoryReportStore, UpstashReportStore, type ReportStore, type StoredReport } from "./report-store";
+import { MemoryReportStore, UpstashReportStore, type ReportStore, type StoredPhotoReport } from "./report-store";
 import { randomUUID } from "node:crypto";
 
 const read = (path: string) => readFileSync(path, "utf8");
@@ -551,7 +551,7 @@ const IT_PARK = { lat: 10.3307, lon: 123.9058 };
 const real = (from = BANILAD, to = IT_PARK, rainingHere = false) => check({ mode: "real", from, to, rainingHere });
 
 /** A real photo report, NPLV, 40 min old, at the same spot as the demo's flooded sample (so the saved detour answers). */
-function storedReport(at: Date, overrides: Partial<StoredReport> = {}): StoredReport {
+function storedReport(at: Date, overrides: Partial<StoredPhotoReport> = {}): StoredPhotoReport {
   return {
     id: randomUUID(),
     kind: "photo",

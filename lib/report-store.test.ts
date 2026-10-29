@@ -7,14 +7,16 @@ import {
   REPORT_TTL_MARGIN_MS,
   REPORT_TTL_MS,
   reportStoreFromEnv,
+  toReport,
   UpstashReportStore,
   type ReportStore,
-  type StoredReport,
+  type StoredPhotoReport,
+  type StoredVoiceReport,
 } from "./report-store";
 
 const T0 = new Date("2026-10-30T00:00:00Z");
 
-function report(overrides: Partial<StoredReport> = {}): StoredReport {
+function report(overrides: Partial<StoredPhotoReport> = {}): StoredPhotoReport {
   return {
     id: randomUUID(),
     kind: "photo",
@@ -25,6 +27,20 @@ function report(overrides: Partial<StoredReport> = {}): StoredReport {
     capturedAt: "2026-10-29T23:40:00.000Z",
     verdict: { kind: "no_flood" },
     photoHash: randomUUID().replaceAll("-", ""),
+    ...overrides,
+  };
+}
+
+function voiceReport(overrides: Partial<StoredVoiceReport> = {}): StoredVoiceReport {
+  return {
+    id: randomUUID(),
+    kind: "voice",
+    at: { lat: 10.338566, lon: 123.911461 },
+    wayId: 1116002958,
+    place: "Governor M. Cuenco Avenue",
+    receivedAt: T0.toISOString(),
+    claim: { place: "Cuenco", depth: "knee_or_deeper", passable: "no" },
+    audioHash: randomUUID().replaceAll("-", ""),
     ...overrides,
   };
 }
@@ -94,6 +110,44 @@ describe.each(stores)("%s", (_name, makeStore) => {
     await store.claimPhoto("abc");
     await store.releasePhoto("abc");
     expect(await store.claimPhoto("abc")).toEqual({ state: "claimed" });
+  });
+
+  it("a voice report is read back with its claim beside the photo reports", async () => {
+    const store = makeStore();
+    const photo = report();
+    const voice = voiceReport({ receivedAt: new Date(T0.getTime() + 1_000).toISOString() });
+    await store.save(photo);
+    await store.save(voice);
+    expect(await store.recent(new Date(T0.getTime() + 60_000))).toEqual([photo, voice]);
+  });
+
+  it("a voice note is claimed by its audio's hash: once, then in flight, then a duplicate of its report", async () => {
+    const store = makeStore();
+    const saved = voiceReport({ audioHash: "abc" });
+    expect(await store.claimVoice("abc")).toEqual({ state: "claimed" });
+    expect(await store.claimVoice("abc")).toEqual({ state: "in_flight" });
+    await store.save(saved);
+    expect(await store.claimVoice("abc")).toEqual({ state: "duplicate", report: saved });
+    await store.releaseVoice("abc");
+    expect(await store.claimVoice("abc")).toEqual({ state: "duplicate", report: saved });
+  });
+
+  it("a photo and a voice note with the same hash never stand for each other", async () => {
+    const store = makeStore();
+    await store.claimVoice("abc");
+    await store.save(voiceReport({ audioHash: "abc" }));
+    expect(await store.claimPhoto("abc")).toEqual({ state: "claimed" });
+    await store.releaseVoice("def");
+    expect(await store.claimVoice("def")).toEqual({ state: "claimed" });
+  });
+});
+
+describe("a stored voice report in the answer rules' terms", () => {
+  it.each([
+    [{ place: null, depth: "knee_or_deeper", passable: "no" }, "knee_deep_or_deeper"],
+    [{ place: null, depth: "below_knee", passable: "yes" }, "passable"],
+  ] as const)("%o says %s, and carries no photo reading", (claim, says) => {
+    expect(toReport(voiceReport({ claim }))).toMatchObject({ reading: { source: "voice", says }, place: "Governor M. Cuenco Avenue" });
   });
 });
 

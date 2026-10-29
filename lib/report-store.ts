@@ -1,5 +1,6 @@
 import { REPORT_LIFETIME_MS, type Point, type Report } from "./answer";
 import type { Verdict } from "./verdict";
+import { VOICE_DEPTHS, VOICE_PASSABLE, voiceSays, type VoiceClaim } from "./voice-claim";
 
 /**
  * Records outlive the 3 h a report counts by this much, so a commute check that started just before a report's
@@ -8,12 +9,12 @@ import type { Verdict } from "./verdict";
 export const REPORT_TTL_MARGIN_MS = 10 * 60_000;
 export const REPORT_TTL_MS = REPORT_LIFETIME_MS + REPORT_TTL_MARGIN_MS;
 
-/** A photo being read holds its hash this long; longer than the report route's 120 s limit, so a read that died
- *  mid-way frees the photo for a resend without waiting out the 3 h. */
+/** A photo or voice note being read holds its hash this long; longer than either report route's 120 s limit, so a
+ *  read that died mid-way frees it for a resend without waiting out the 3 h. */
 export const PHOTO_CLAIM_MS = 150_000;
 
 /** What Lusong keeps of a photo report. Never the photo or any of its bytes: only their SHA-256, to spot a resend. */
-export interface StoredReport {
+export interface StoredPhotoReport {
   id: string;
   kind: "photo";
   at: Point;
@@ -28,13 +29,32 @@ export interface StoredReport {
   photoHash: string;
 }
 
-export type PhotoClaim = { state: "claimed" } | { state: "in_flight" } | { state: "duplicate"; report: StoredReport };
+/** What Lusong keeps of a voice report: the claim's fixed choices and spoken place. Never the audio or the transcript. */
+export interface StoredVoiceReport {
+  id: string;
+  kind: "voice";
+  at: Point;
+  wayId: number | null;
+  place: string | null;
+  receivedAt: string;
+  claim: VoiceClaim;
+  /** SHA-256 of the 16-bit samples, to spot a resend. */
+  audioHash: string;
+}
+
+export type StoredReport = StoredPhotoReport | StoredVoiceReport;
+
+export type Claim<R extends StoredReport> = { state: "claimed" } | { state: "in_flight" } | { state: "duplicate"; report: R };
+export type PhotoClaim = Claim<StoredPhotoReport>;
 
 export interface ReportStore {
   /** Atomic: takes the photo's hash for one read, or says a read is under way, or hands back the report it made. */
   claimPhoto(hash: string): Promise<PhotoClaim>;
   /** Frees an unfinished claim. A hash that already names a saved report is left alone. */
   releasePhoto(hash: string): Promise<void>;
+  /** The same as claimPhoto, for a voice note's audio, under keys of its own. */
+  claimVoice(hash: string): Promise<Claim<StoredVoiceReport>>;
+  releaseVoice(hash: string): Promise<void>;
   /** Writes the record, the index entry and the hash with one expiry, REPORT_TTL_MS. */
   save(report: StoredReport): Promise<void>;
   /** Reports received under REPORT_LIFETIME_MS before `now`. Throws when the store can't be read. */
@@ -49,22 +69,44 @@ export function toReport(stored: StoredReport): Report {
     wayId: stored.wayId,
     receivedAt: new Date(stored.receivedAt),
     place: stored.place ?? "a reported spot",
-    reading: { source: "photo", verdict: stored.verdict, capturedAt: stored.capturedAt ? new Date(stored.capturedAt) : null },
+    reading:
+      stored.kind === "voice"
+        ? { source: "voice", says: voiceSays(stored.claim) }
+        : { source: "photo", verdict: stored.verdict, capturedAt: stored.capturedAt ? new Date(stored.capturedAt) : null },
   };
+}
+
+/** The media hash a record is found by on a resend, under its own kind's key. */
+function hashKey(prefix: string, report: StoredReport): string {
+  return report.kind === "voice" ? `${prefix}:report-voice:${report.audioHash}` : `${prefix}:report-photo:${report.photoHash}`;
+}
+
+function isVoiceClaim(c: unknown): c is VoiceClaim {
+  const claim = c as VoiceClaim;
+  return (
+    typeof claim === "object" &&
+    claim !== null &&
+    (claim.place === null || typeof claim.place === "string") &&
+    (VOICE_DEPTHS as readonly string[]).includes(claim.depth) &&
+    (VOICE_PASSABLE as readonly string[]).includes(claim.passable)
+  );
 }
 
 function isStoredReport(value: unknown): value is StoredReport {
   const r = value as StoredReport;
-  return (
+  const common =
     typeof r === "object" &&
     r !== null &&
     typeof r.id === "string" &&
-    r.kind === "photo" &&
     Number.isFinite(r.at?.lat) &&
     Number.isFinite(r.at?.lon) &&
     (r.wayId === null || Number.isSafeInteger(r.wayId)) &&
     (r.place === null || typeof r.place === "string") &&
-    !Number.isNaN(Date.parse(r.receivedAt)) &&
+    !Number.isNaN(Date.parse(r.receivedAt));
+  if (!common) return false;
+  if (r.kind === "voice") return isVoiceClaim(r.claim) && typeof r.audioHash === "string";
+  return (
+    r.kind === "photo" &&
     (r.capturedAt === null || !Number.isNaN(Date.parse(r.capturedAt))) &&
     typeof r.verdict?.kind === "string" &&
     typeof r.photoHash === "string"
@@ -124,8 +166,7 @@ export class MemoryReportStore implements ReportStore {
     return out;
   }
 
-  async claimPhoto(hash: string): Promise<PhotoClaim> {
-    const key = `${this.prefix}:report-photo:${hash}`;
+  private claim<R extends StoredReport>(key: string): Claim<R> {
     const held = this.get(key);
     if (held === null) {
       this.set(key, PENDING, PHOTO_CLAIM_MS);
@@ -136,14 +177,29 @@ export class MemoryReportStore implements ReportStore {
     return record === null ? { state: "in_flight" } : { state: "duplicate", report: JSON.parse(record) };
   }
 
-  async releasePhoto(hash: string) {
-    const key = `${this.prefix}:report-photo:${hash}`;
+  private release(key: string) {
     if (this.get(key) === PENDING) this.values.delete(key);
+  }
+
+  async claimPhoto(hash: string) {
+    return this.claim<StoredPhotoReport>(`${this.prefix}:report-photo:${hash}`);
+  }
+
+  async releasePhoto(hash: string) {
+    this.release(`${this.prefix}:report-photo:${hash}`);
+  }
+
+  async claimVoice(hash: string) {
+    return this.claim<StoredVoiceReport>(`${this.prefix}:report-voice:${hash}`);
+  }
+
+  async releaseVoice(hash: string) {
+    this.release(`${this.prefix}:report-voice:${hash}`);
   }
 
   async save(report: StoredReport) {
     this.set(`${this.prefix}:report:${report.id}`, JSON.stringify(report), this.ttlMs);
-    this.set(`${this.prefix}:report-photo:${report.photoHash}`, report.id, this.ttlMs);
+    this.set(hashKey(this.prefix, report), report.id, this.ttlMs);
     if (this.index.expiresAt <= this.now()) this.index.ids.clear();
     for (const id of this.index.ids) if (this.get(`${this.prefix}:report:${id}`) === null) this.index.ids.delete(id);
     this.index.ids.add(report.id);
@@ -228,24 +284,34 @@ export class UpstashReportStore implements ReportStore {
     return value;
   }
 
-  async claimPhoto(hash: string): Promise<PhotoClaim> {
-    const result = await this.evalScript(
-      CLAIM_SCRIPT,
-      [`${this.prefix}:report-photo:${hash}`, `${this.prefix}:report:`],
-      [PHOTO_CLAIM_MS],
-    );
+  private async claim<R extends StoredReport>(key: string, kind: R["kind"]): Promise<Claim<R>> {
+    const result = await this.evalScript(CLAIM_SCRIPT, [key, `${this.prefix}:report:`], [PHOTO_CLAIM_MS]);
     if (result === "claimed" || result === "in_flight") return { state: result };
-    return { state: "duplicate", report: this.parse(result) };
+    const report = this.parse(result);
+    if (report.kind !== kind) throw new Error("malformed report record");
+    return { state: "duplicate", report: report as R };
+  }
+
+  async claimPhoto(hash: string) {
+    return this.claim<StoredPhotoReport>(`${this.prefix}:report-photo:${hash}`, "photo");
   }
 
   async releasePhoto(hash: string) {
     await this.evalScript(RELEASE_SCRIPT, [`${this.prefix}:report-photo:${hash}`], []);
   }
 
+  async claimVoice(hash: string) {
+    return this.claim<StoredVoiceReport>(`${this.prefix}:report-voice:${hash}`, "voice");
+  }
+
+  async releaseVoice(hash: string) {
+    await this.evalScript(RELEASE_SCRIPT, [`${this.prefix}:report-voice:${hash}`], []);
+  }
+
   async save(report: StoredReport) {
     await this.evalScript(
       SAVE_SCRIPT,
-      [`${this.prefix}:report:${report.id}`, `${this.prefix}:report-photo:${report.photoHash}`, `${this.prefix}:reports`],
+      [`${this.prefix}:report:${report.id}`, hashKey(this.prefix, report), `${this.prefix}:reports`],
       [JSON.stringify(report), this.ttlMs, report.id, Date.parse(report.receivedAt), Date.now() - this.ttlMs],
     );
   }

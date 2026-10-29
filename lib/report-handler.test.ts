@@ -5,7 +5,7 @@ import { samEmpty, samFixture, serverError, stubMeta } from "../test/meta-stub";
 import { withExifTime } from "./exif";
 import { createBudget, MemoryBudgetStore, RESERVE_MICROS as R, type Budget } from "./budget";
 import { makeReportHandler } from "./report-handler";
-import { MemoryReportStore, UpstashReportStore, type ReportStore } from "./report-store";
+import { MemoryReportStore, UpstashReportStore, type ReportStore, type StoredPhotoReport } from "./report-store";
 import { REPORT_LIFETIME_MS } from "./answer";
 import type { ValhallaGate } from "./router";
 
@@ -215,7 +215,7 @@ describe("a dry photo counts as clear only when it was taken within the hour bef
     const store = new MemoryReportStore();
     const res = await handlerWith({ store })(post("192.0.2.1", { bytes: withExifTime(photo, exifTime) }));
     expect((await res.json()).report.role).toBe(role);
-    const [stored] = await store.recent(NOW);
+    const [stored] = (await store.recent(NOW)) as StoredPhotoReport[];
     expect(stored.capturedAt).toBe(new Date(`${exifTime.replace(/^(\d{4}):(\d{2}):(\d{2}) /, "$1-$2-$3T")}+08:00`).toISOString());
   });
 
@@ -226,7 +226,7 @@ describe("a dry photo counts as clear only when it was taken within the hour bef
     const body = await res.json();
     expect(body.report).toMatchObject({ role: "neutral", captured: "24 Jul, 5:25 p.m. PHT" });
     expect(body.report.effect).toContain("isn't within the hour before you sent it");
-    expect((await store.recent(NOW))[0].capturedAt).toBe("2024-07-24T09:25:53.000Z");
+    expect(((await store.recent(NOW)) as StoredPhotoReport[])[0].capturedAt).toBe("2024-07-24T09:25:53.000Z");
   });
 
   it("a deep-water photo blocks whatever its capture time", async () => {
