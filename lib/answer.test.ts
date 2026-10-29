@@ -262,7 +262,7 @@ describe("under rain, Go needs every point of the route within 500 m (along it) 
     { name: "clears at 400, 1399 and 2398 m cover it", alongs: [400, 1_399, 2_398], expected: "go" },
     { name: "the same, given in reverse order", alongs: [2_398, 1_399, 400], expected: "go" },
     { name: "a 1001 m gap between clears leaves a point 500.5 m from both", alongs: [400, 1_401, 2_400], expected: "no_one_knows" },
-    { name: "the first clear 501 m from the start", alongs: [501, 1_400, 2_400], expected: "no_one_knows" },
+    { name: "the first clear 501 m from the start", alongs: [501, 1_400, 2_399], expected: "no_one_knows" },
     { name: "the last clear 501 m before the end", alongs: [400, 1_000, 1_999], expected: "no_one_knows" },
     { name: "clears only at both ends", alongs: [0, 2_500], expected: "no_one_knows" },
   ])("$name ⇒ $expected", ({ alongs, expected }) => {
