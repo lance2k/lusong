@@ -2,7 +2,7 @@ import type { AdvisoryReading } from "./advisory";
 import { decideAnswer, type Answer, type AnswerKind, type Point, type Report, type RouteCandidate } from "./answer";
 import { detourAvoids } from "./detour";
 import type { Meter } from "./meta";
-import { respond, type FunctionCall, type FunctionTool } from "./spark-responses";
+import { respond, type FunctionCall, type FunctionTool, type SparkReply } from "./spark-responses";
 
 /**
  * Muse Spark's investigation of one commute check (lance2k/lusong#7, plan review 🔴P5/P6/P8).
@@ -290,14 +290,17 @@ export async function investigate(input: InvestigationInput): Promise<Investigat
 
   const written = await explain(input, evidence, runTool);
   const answer = evidence.answer();
-  const explanation = written === null ? null : vetExplanation(written, answer.answer, answer.reason);
+  const explanation: Explanation =
+    "text" in written
+      ? vetExplanation(written.text, answer.answer, answer.reason)
+      : { by: "unavailable", text: EXPLANATION_UNAVAILABLE, why: written.unavailable };
   return {
     ok: true,
     answer,
     reports: [...evidence.reports.values()],
     detours: evidence.detours,
     web: input.web,
-    explanation: explanation ?? { by: "unavailable", text: EXPLANATION_UNAVAILABLE, why: "no explanation" },
+    explanation,
     toolCalls,
   };
 }
@@ -311,27 +314,37 @@ function contextOf(evidence: Evidence) {
   };
 }
 
-/** The model's final text, or null when it wrote none. */
-async function explain(input: InvestigationInput, evidence: Evidence, runTool: (call: FunctionCall) => Promise<object>): Promise<string | null> {
+type Written = { text: string } | { unavailable: string };
+
+/** The model's final text, or why there is none. */
+async function explain(input: InvestigationInput, evidence: Evidence, runTool: (call: FunctionCall) => Promise<object>): Promise<Written> {
   let turnInput: Parameters<typeof respond>[0]["input"] = `${INSTRUCTIONS}\n\nThis check: ${JSON.stringify(contextOf(evidence))}`;
   let previousResponseId: string | undefined;
   for (let turn = 1; turn <= LOOP_TURN_CAP; turn++) {
-    const reply = await respond({
-      input: turnInput,
-      previousResponseId,
-      tools: TOOLS,
-      maxOutputTokens: LOOP_MAX_OUTPUT_TOKENS,
-      attemptTimeoutMs: LOOP_ATTEMPT_MS,
-      deadline: input.deadline,
-      meter: input.meter,
-    });
-    if (reply.functionCalls.length === 0) return reply.answerText;
+    if (Date.now() >= input.deadline) return { unavailable: "timed out" };
+    let reply: SparkReply;
+    try {
+      reply = await respond({
+        input: turnInput,
+        previousResponseId,
+        tools: TOOLS,
+        maxOutputTokens: LOOP_MAX_OUTPUT_TOKENS,
+        attemptTimeoutMs: LOOP_ATTEMPT_MS,
+        deadline: input.deadline,
+        meter: input.meter,
+      });
+    } catch {
+      return { unavailable: Date.now() >= input.deadline ? "timed out" : "model failed" };
+    }
+    if (reply.status !== "completed") return { unavailable: "reply cut off" };
+    if (reply.functionCalls.length === 0) return { text: reply.answerText };
+    if (reply.id === null) return { unavailable: "reply cut off" };
     const outputs = [];
     for (const call of reply.functionCalls) {
       outputs.push({ type: "function_call_output" as const, call_id: call.callId, output: JSON.stringify(await runTool(call)) });
     }
     turnInput = outputs;
-    previousResponseId = reply.id ?? undefined;
+    previousResponseId = reply.id;
   }
-  return null;
+  return { unavailable: "no explanation" };
 }

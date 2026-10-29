@@ -3,11 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AdvisoryReading } from "./advisory";
 import { placeOnRoute, ROUTE_CORRIDOR_M, type Point, type Report } from "./answer";
 import { lineForTrip } from "./detour";
-import { EXPLANATION_MAX_CHARS, investigate, vetExplanation, type AroundResult, type InvestigationSources, type WebEvidence } from "./investigation";
+import { EXPLANATION_MAX_CHARS, EXPLANATION_UNAVAILABLE, investigate, vetExplanation, type AroundResult, type InvestigationSources, type WebEvidence } from "./investigation";
 import { Meter } from "./meta";
 import { decodePolyline6 } from "./router";
 import { DEMO_TRIPS } from "./samples";
-import { callsReply, fakeMeta, textReply } from "../test/muse-derived";
+import { callsReply, fakeMeta, hangs, textReply } from "../test/muse-derived";
 
 const read = (path: string) => readFileSync(path, "utf8");
 const shape = (name: string) => decodePolyline6(JSON.parse(read(`test/fixtures/valhalla/${name}.json`)).trip.legs[0].shape);
@@ -187,5 +187,68 @@ describe("checking the model's explanation against the answer", () => {
     expect(vetExplanation("Banilad\u0000 is\n\n  blocked.\u001b[31m", "wait", REASON)).toEqual({ by: "muse_spark", text: "Banilad is blocked. [31m" });
     expect(vetExplanation("a".repeat(EXPLANATION_MAX_CHARS), "go", REASON).by).toBe("muse_spark");
     expect(vetExplanation("a".repeat(EXPLANATION_MAX_CHARS + 1), "go", REASON).by).toBe("rules");
+  });
+});
+
+describe("when Muse Spark fails, the check still answers by the rules", () => {
+  const blocked = () => sourcesOf({ reports: [voice("v1", BLOCKED_SPOT, "not_passable")] });
+  const unavailable = (why: string) => ({ by: "unavailable", text: EXPLANATION_UNAVAILABLE, why });
+
+  it("a model that errors twice gives the rules' answer, its evidence, and says the explanation is unavailable", async () => {
+    const { sources } = blocked();
+    const meta = fakeMeta({ turns: [new Response("{}", { status: 500 }), new Response("{}", { status: 503 })] });
+
+    const result = await investigate(inputOf(sources));
+
+    if (!result.ok) throw new Error("expected an answer");
+    expect(meta.requests).toHaveLength(2);
+    expect(result.answer.answer).toBe("go_another_way");
+    expect(result.reports.map((r) => r.id)).toEqual(["v1"]);
+    expect(result.detours.map((d) => d.id)).toEqual(["detour"]);
+    expect(result.explanation).toEqual(unavailable("model failed"));
+  });
+
+  it("a model that doesn't answer by the deadline gives the rules' answer and an unavailable explanation", async () => {
+    const { sources } = blocked();
+    fakeMeta({ turns: [hangs] });
+
+    const started = Date.now();
+    const result = await investigate(inputOf(sources, { deadline: started + 300 }));
+
+    expect(Date.now() - started).toBeLessThan(2_000);
+    if (!result.ok) throw new Error("expected an answer");
+    expect(result.answer.answer).toBe("go_another_way");
+    expect(result.explanation).toEqual(unavailable("timed out"));
+  });
+
+  it("a deadline already past makes no model call at all", async () => {
+    const { sources } = blocked();
+    const meta = fakeMeta({ turns: [] });
+
+    const result = await investigate(inputOf(sources, { deadline: Date.now() - 1 }));
+
+    expect(meta.requests).toHaveLength(0);
+    if (!result.ok) throw new Error("expected an answer");
+    expect(result.explanation).toEqual(unavailable("timed out"));
+  });
+
+  it("a reply cut off at max_output_tokens is no explanation, even with text in it", async () => {
+    const { sources } = blocked();
+    fakeMeta({ turns: [textReply("resp_1", "Your usual way is", undefined, "incomplete")] });
+
+    const result = await investigate(inputOf(sources));
+
+    if (!result.ok) throw new Error("expected an answer");
+    expect(result.explanation).toEqual(unavailable("reply cut off"));
+  });
+
+  it("a malformed reply is no explanation", async () => {
+    const { sources } = blocked();
+    fakeMeta({ turns: [{ unexpected: true }] });
+
+    const result = await investigate(inputOf(sources));
+
+    if (!result.ok) throw new Error("expected an answer");
+    expect(result.explanation).toEqual(unavailable("reply cut off"));
   });
 });

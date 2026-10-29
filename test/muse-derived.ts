@@ -77,7 +77,14 @@ export function searchReply(text: string | null, actions = 11, usage: Usage | nu
   return { ...envelope, id: "resp_search", status: text === null ? "incomplete" : "completed", output: [reasoning, ...searches, ...final], ...usageBlock(usage) };
 }
 
-export type Scripted = object | Response | ((body: Record<string, unknown>) => object | Response | Promise<object | Response>);
+export type Scripted =
+  | object
+  | Response
+  | ((body: Record<string, unknown>, signal: AbortSignal | undefined) => object | Response | Promise<object | Response>);
+
+/** A Meta call that never answers until its abort signal fires, as a hung connection would. */
+export const hangs: Scripted = (_body, signal) =>
+  new Promise((_resolve, reject) => signal?.addEventListener("abort", () => reject(signal.reason)));
 
 /**
  * Stubs the global fetch so Meta's Responses endpoint answers from the scripts: web_search requests from `search`,
@@ -95,7 +102,7 @@ export function fakeMeta(script: { turns?: Scripted[]; search?: Scripted[] }) {
     (isSearch ? searchRequests : requests).push(body);
     const next = (isSearch ? searches : turns).shift();
     if (next === undefined) throw new Error(`no scripted reply for ${isSearch ? "search" : "turn"} ${requests.length}`);
-    const value = typeof next === "function" ? await next(body) : next;
+    const value = typeof next === "function" ? await next(body, init?.signal ?? undefined) : next;
     if (value instanceof Response) return value;
     return new Response(JSON.stringify(value), { status: 200, headers: { "Content-Type": "application/json" } });
   });
