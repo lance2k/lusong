@@ -132,6 +132,12 @@ function VerdictCard({ result }: { result: PageResult }) {
               , about{" "}
               <b>{cm(v.decidedBy.interval)}</b>, {gaugeWords(v.decidedBy.interval)}.
             </p>
+            {v.decidedBy.landmark === "tyre_geometry" && (
+              <p>
+                That estimate assumes a 58–70 cm tyre seen side-on. On a wheel seen at an angle it can read shallower
+                than the water is.
+              </p>
+            )}
             <p>
               {v.readingsUsed.length} reading{v.readingsUsed.length === 1 ? "" : "s"} in all, {cm(v.rangeCm)}. The
               deepest one decides, because a car has to get through the deepest part.
@@ -336,9 +342,9 @@ function ReadingList({ objects }: { objects: PageObject[] }) {
       </p>
       {objects.some((o) => o.tyreCm) && (
         <p className="mt-2 text-sm text-zinc-500">
-          A tyre estimate assumes a car tyre 58–70 cm across and counts all of the tyre it can&apos;t see as under
-          water, so it reads deeper when the car&apos;s body hides the top of the tyre. It can make the verdict deeper,
-          never shallower.
+          A tyre estimate assumes a car tyre 58–70 cm across, seen side-on. It counts all of the tyre it can&apos;t see
+          as under water, so it reads deeper when the car&apos;s body hides the top of the tyre. On a wheel seen at an
+          angle it can read shallower than the water is. It can make the verdict deeper, never shallower.
         </p>
       )}
     </section>
