@@ -409,4 +409,49 @@ describe.each(watchStores)("the watcher's tick on the %s", (_name, make) => {
     expect(await runTick(deps)).toMatchObject({ sent: 0 });
     expect(telegram.requests).toHaveLength(2);
   });
+
+  /** The fake clock moves by `ms` while the store records the answer about to go; the lease's real time doesn't. */
+  function slowMark(store: WatchStore, clock: { advance: (ms: number) => void }, ms: number) {
+    const markSending = store.markSending.bind(store);
+    store.markSending = async (...args) => {
+      const marked = await markSending(...args);
+      clock.advance(ms);
+      return marked;
+    };
+  }
+
+  it("an answer whose recording runs past the window's end isn't sent, and the last answer sent is kept", async () => {
+    const { clock, answers, channel, deps } = setup("2026-10-30T07:50:00+08:00");
+    deps.store = make().store;
+    const w = await linkedWatcher(deps.store);
+    answers.push("go");
+    await runTick(deps);
+    clock.set("2026-10-30T07:59:59.900+08:00");
+    slowMark(deps.store, clock, 200);
+    answers.push("wait");
+    expect(await runTick(deps)).toMatchObject({ checked: 1, sent: 0 });
+    expect(channel.sent).toHaveLength(1);
+    expect(await deps.store.get(w.id)).toMatchObject({ sending: null, lastKind: "go", lastDay: "2026-10-30" });
+  });
+
+  it("a message tells the time it was sent, after the answer was recorded", async () => {
+    const { clock, answers, channel, deps } = setup("2026-10-30T06:04:59.900+08:00");
+    deps.store = make().store;
+    await linkedWatcher(deps.store);
+    slowMark(deps.store, clock, 200);
+    answers.push("go");
+    await runTick(deps);
+    expect(channel.sent.map((m) => m.text.split("\n")[1])).toEqual(["At 06:05 PHT: Go"]);
+  });
+
+  it("an answer recorded for one PHT day is never sent on another", async () => {
+    const { clock, answers, channel, deps } = setup("2026-10-30T06:00:00+08:00");
+    deps.store = make().store;
+    const w = await linkedWatcher(deps.store);
+    slowMark(deps.store, clock, 24 * 60 * 60_000);
+    answers.push("go");
+    expect(await runTick(deps)).toMatchObject({ sent: 0 });
+    expect(channel.sent).toEqual([]);
+    expect(await deps.store.get(w.id)).toMatchObject({ sending: null, lastKind: null });
+  });
 });

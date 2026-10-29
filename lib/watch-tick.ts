@@ -151,6 +151,7 @@ async function sendUnderLease(deps: TickDeps, w: WatchRecord, kind: AnswerKind, 
   const opening = last.day !== day;
   if (!opening && kind === last.kind) return "quiet";
   const answer = { kind, day };
+  let sendAt: Date;
   try {
     // Recorded before the send, so a send whose outcome is unknown, or whose commit fails, is never sent again.
     // False when switched off (or switched on again) while the check ran: this run speaks for no one.
@@ -160,11 +161,17 @@ async function sendUnderLease(deps: TickDeps, w: WatchRecord, kind: AnswerKind, 
       await deps.store.dropSending(w.id, w.gen);
       return "failed";
     }
+    // Recording the answer takes time too, and the window may close during it; the answer was recorded for `day`.
+    sendAt = deps.now();
+    if (!inWindow(w.window, sendAt) || phtDay(sendAt) !== day) {
+      await deps.store.dropSending(w.id, w.gen);
+      return "quiet";
+    }
   } catch (err) {
     console.error("watch store failed before sending:", err instanceof Error ? err.message : err);
     return "failed";
   }
-  const text = watchMessage({ kind, was: opening ? null : last.kind, at, window: w.window, pageUrl: deps.pageUrl });
+  const text = watchMessage({ kind, was: opening ? null : last.kind, at: sendAt, window: w.window, pageUrl: deps.pageUrl });
   const sent = await deps.channel.send(w.chatId!, text);
   try {
     if (sent.ok) {
