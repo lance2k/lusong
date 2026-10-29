@@ -316,15 +316,24 @@ export function makeReportHandler(deps: {
       const dropPhoto = () => {
         if (photoUrl && photos) void photos.delete(photoUrl).catch(() => {});
       };
-      let saved: Saved | "late";
+      const saving = store.save(report, token);
+      let saved: Saved | "unknown";
       try {
-        saved = await beforeDeadline(store.save(report, token), saveBy);
+        saved = await beforeDeadline(saving, saveBy).then((s) => (s === "late" ? "unknown" : s));
       } catch (err) {
         console.error("report store unreachable on save:", err instanceof Error ? err.message : err);
-        saved = "late";
+        saved = "unknown";
       }
-      if (saved === "late") {
-        dropPhoto();
+      if (saved === "unknown") {
+        // A late or failed save may still commit, or may already have, with the photo's URL in it. Only the store's
+        // own answer that it wrote nothing frees the photo; a save that never answers leaves an unlisted blurred blob,
+        // never a stored URL to a deleted one.
+        void saving.then(
+          (s) => {
+            if (s.state !== "saved") dropPhoto();
+          },
+          () => {},
+        );
         await release(token, releaseBy);
         return Response.json({ duplicate: false, stored: false, report: viewOf(report, receivedAt, false) });
       }

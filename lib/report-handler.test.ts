@@ -285,6 +285,73 @@ describe("a photo report's blurred photo (#8)", () => {
   });
 });
 
+describe.each(stores)("a blurred photo whose save outcome is unknown at its deadline, on the %s (🟡T8-5)", (_name, makeStore) => {
+  const sams = { person: samFixture(PERSONS), "license plate": samText(PLATE_REPLY) };
+  const timing = { budgetMs: 3_000, storeCallMs: 150, responseMs: 150, minReadMs: 400, locateMinMs: 800, photoMinMs: 300 };
+  /** The save's deadline falls inside the request budget, so a save held this long always answers after it. */
+  const PAST_DEADLINE_MS = timing.budgetMs;
+
+  /** Every stored report's photo URL, each with whether its blob is still there. */
+  async function photoRefs(store: ReportStore, photos: MemoryBlobStore) {
+    return (await store.recent(NOW)).flatMap((r) => ("photoUrl" in r && r.photoUrl ? [{ url: r.photoUrl, blobKept: photos.get(r.photoUrl) !== undefined }] : []));
+  }
+
+  async function send(arrange: (store: ReportStore, save: ReportStore["save"]) => void) {
+    stubMeta({ sam: sams });
+    const { store } = makeStore();
+    const photos = new MemoryBlobStore();
+    const put = vi.spyOn(photos, "put");
+    arrange(store, store.save.bind(store));
+    const res = await handlerWith({ store, photos, plateDetectionTrusted: true, timing })(post("192.0.2.1"));
+    expect(res.status).toBe(200);
+    expect((await res.json()).stored).toBe(false);
+    // A blurred photo was made, so what happens to it afterwards is what each case checks.
+    expect(put).toHaveBeenCalledTimes(1);
+    // Whatever the pending save does next has landed by now.
+    await sleep(PAST_DEADLINE_MS + 600);
+    return { store, photos };
+  }
+
+  it.each([
+    ["it commits and then answers late", (save: ReportStore["save"]): ReportStore["save"] => async (r, t) => {
+      const saved = await save(r, t);
+      await sleep(PAST_DEADLINE_MS);
+      return saved;
+    }],
+    ["it commits and its answer is lost", (save: ReportStore["save"]): ReportStore["save"] => async (r, t) => {
+      await save(r, t);
+      throw new Error("Upstash connection reset");
+    }],
+    ["it commits and never answers", (save: ReportStore["save"]): ReportStore["save"] => async (r, t) => {
+      await save(r, t);
+      return new Promise(() => {});
+    }],
+  ])("when %s, the stored report's photo is kept", async (_case, slowSave) => {
+    const { store, photos } = await send((s, save) => {
+      s.save = slowSave(save);
+    });
+    expect(await photoRefs(store, photos)).toEqual([{ url: expect.any(String), blobKept: true }]);
+  }, 20_000);
+
+  it("when it lands after its deadline but before the claim is freed, it commits and the stored report's photo is kept", async () => {
+    const { store, photos } = await send((s, save) => {
+      // The release starts at the save's deadline, after the save started, so the save lands first.
+      s.save = async (r, t) => (await sleep(PAST_DEADLINE_MS), save(r, t));
+      const release = s.releasePhoto.bind(s);
+      s.releasePhoto = async (hash, token) => (await sleep(PAST_DEADLINE_MS), release(hash, token));
+    });
+    expect(await photoRefs(store, photos)).toEqual([{ url: expect.any(String), blobKept: true }]);
+  }, 20_000);
+
+  it("when it lands after the claim is freed, the store writes nothing and the photo is deleted", async () => {
+    const { store, photos } = await send((s, save) => {
+      s.save = async (r, t) => (await sleep(PAST_DEADLINE_MS), save(r, t));
+    });
+    expect(await store.recent(NOW)).toEqual([]);
+    expect(photos.size).toBe(0);
+  }, 20_000);
+});
+
 describe("the reporter", () => {
   it("is shown what Lusong read, where, and what the report does for others", async () => {
     stubMeta();
