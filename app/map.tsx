@@ -35,6 +35,13 @@ const PIN_COLOURS: Record<MapPin["role"], string> = { block: "#dc2626", clear: "
 /** Older than 3 hours: drawn, but not counted. */
 const STALE_COLOUR = "#71717a";
 
+const PIN_LEGEND: [string, string][] = [
+  [PIN_COLOURS.block, "Not passable"],
+  [PIN_COLOURS.neutral, "Doesn't decide"],
+  [PIN_COLOURS.clear, "Clear"],
+  [STALE_COLOUR, "Over 3 h old"],
+];
+
 const ROUTE_STYLE: L.PolylineOptions = { color: "#0284c7", weight: 5, opacity: 0.85 };
 const DETOUR_STYLE: L.PolylineOptions = { color: "#059669", weight: 5, opacity: 0.9, dashArray: "10 8" };
 
@@ -72,6 +79,8 @@ function pinLayer(pin: MapPin): L.Layer {
       pin.passability && `${pin.passability}.`,
       pin.counts ? null : "Older than 3 hours: shown, not counted.",
     ),
+    // Leaflet's controls sit above its popups, so the popup is panned clear of the 44 px zoom buttons.
+    { maxWidth: 240, autoPanPaddingTopLeft: [64, 12] },
   );
   return marker;
 }
@@ -131,35 +140,33 @@ export default function TripMap({ ends, route, detour, pins, frame, onTap }: Tri
 
   return (
     <div className="space-y-2">
-      <div
-        ref={box}
-        role="region"
-        aria-label="Map of the trip"
-        className={`isolate h-72 w-full overflow-hidden rounded-2xl border border-zinc-200 dark:border-zinc-800 ${onTap ? "cursor-crosshair" : ""}`}
-      />
+      {/* Leaflet adds its own classes to the inner div, so React must never rewrite that div's className. */}
+      <div className={onTap ? "[&_.leaflet-container]:cursor-crosshair" : ""}>
+        <div
+          ref={box}
+          role="region"
+          aria-label="Map of the trip"
+          className="isolate h-72 w-full overflow-hidden rounded-2xl border border-zinc-200 dark:border-zinc-800"
+        />
+      </div>
       <ul className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-zinc-600 dark:text-zinc-400">
-        <li className="flex items-center gap-1.5">
+        <li className="flex items-center gap-1.5 whitespace-nowrap">
           <span aria-hidden className="inline-block h-1 w-6 rounded bg-sky-600" />
           {detour ? "Your usual way" : "Route"}
         </li>
         {detour && (
-          <li className="flex items-center gap-1.5">
+          <li className="flex items-center gap-1.5 whitespace-nowrap">
             <span aria-hidden className="inline-block w-6 border-t-4 border-dashed border-emerald-600" />
             The other way
           </li>
         )}
-        {pins.length > 0 && (
-          <li className="flex items-center gap-1.5">
-            <span aria-hidden className="inline-block h-3 w-3 rounded-full bg-red-600" />
-            Not passable
-            <span aria-hidden className="ml-2 inline-block h-3 w-3 rounded-full bg-amber-600" />
-            Doesn&apos;t decide
-            <span aria-hidden className="ml-2 inline-block h-3 w-3 rounded-full bg-emerald-600" />
-            Clear
-            <span aria-hidden className="ml-2 inline-block h-3 w-3 rounded-full bg-zinc-500" />
-            Over 3 h old
-          </li>
-        )}
+        {pins.length > 0 &&
+          PIN_LEGEND.map(([colour, words]) => (
+            <li key={words} className="flex items-center gap-1.5 whitespace-nowrap">
+              <span aria-hidden className="inline-block h-3 w-3 rounded-full" style={{ background: colour }} />
+              {words}
+            </li>
+          ))}
       </ul>
     </div>
   );

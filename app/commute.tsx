@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useReducer, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import type { AnswerKind, Point, RouteState } from "@/lib/answer";
 import { detourWords } from "@/lib/commute-words";
 import { DEMO_TRIPS, SCENARIOS, scenariosFor, type DemoTripId } from "@/lib/samples";
@@ -238,6 +238,13 @@ export default function CommuteCheck() {
   const own = useOwnTrip(() => dispatch({ type: "change", inputs: {} }));
   const ownTrip = trip === OWN_TRIP;
   const savedTrip = own.draft.step === "set" ? own.draft.trip : null;
+  // A trip saved on an earlier visit is chosen once it is read, so the next check is one tap.
+  const restored = useRef(false);
+  useEffect(() => {
+    if (!savedTrip || restored.current) return;
+    restored.current = true;
+    dispatch({ type: "change", inputs: { trip: OWN_TRIP } });
+  }, [savedTrip]);
   const map = tripMapProps({ demo: ownTrip ? null : DEMO_TRIPS[trip], draft: own.draft, result: view.step === "done" ? view.result : null });
 
   async function check() {
