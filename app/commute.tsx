@@ -31,6 +31,8 @@ interface PageReport {
   counts: boolean;
   onRoute: boolean;
   onDetour: boolean;
+  /** Every judged route the report lies on, the ways around the page doesn't show included. */
+  routes: string[];
   role: "clear" | "block" | "neutral";
 }
 
@@ -148,7 +150,7 @@ function Advisory({ advisory }: { advisory: PageAdvisory }) {
 }
 
 function Report({ r }: { r: PageReport }) {
-  const where = r.onRoute ? "" : r.onDetour ? "On the other way. " : null;
+  const where = r.onRoute ? "" : r.onDetour ? "On the other way. " : r.routes.length > 0 ? "On a way around Lusong checked and isn't showing. " : null;
   const status = !r.counts ? "Older than 3 hours: shown, not counted." : where === null ? "Not on your route." : where + ROLE_WORDS[r.role] + ".";
   return (
     <li className="space-y-1 px-4 py-3">

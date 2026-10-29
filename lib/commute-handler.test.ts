@@ -21,7 +21,8 @@ import { MemoryKvStore, planWebSearch, SEARCH_RESERVE_MICROS, WEB_SEARCH_LEASE_K
 import { callsReply, fakeMeta, hangs, searchReply, textReply } from "../test/muse-derived";
 import { cutEnd, cutStart, derivedReply } from "../test/valhalla-derived";
 import { CAP_EDITS, CV_GFA5, FEED, feedWith, SAVED } from "../test/pagasa-fixtures";
-import { makeValhallaGate, MemorySlotStore, VALHALLA_URL, type SlotStore } from "./router";
+import { decodePolyline6, makeValhallaGate, MemorySlotStore, VALHALLA_URL, type SlotStore } from "./router";
+import { distanceM, placeOnRoute, ROUTE_CORRIDOR_M, type Point } from "./answer";
 import { MemoryReportStore, UpstashReportStore, type ReportStore, type StoredReport } from "./report-store";
 import { randomUUID } from "node:crypto";
 
@@ -70,6 +71,8 @@ type Options = {
   /** A reply to send instead of the saved plain route or the saved detour (derived fixtures). */
   plainReply?: string;
   detourReply?: string;
+  /** A reply to one detour request in particular; undefined leaves it to the options above. */
+  detourReplyFor?: (sent: { exclude_polygons: number[][][] }) => string | undefined;
   /** Hold the plain route's reply this long; a detour that "hangs" answers only when its own timeout aborts it. */
   plainDelayMs?: number;
   detourHangs?: boolean;
@@ -106,6 +109,8 @@ function network(opts: Options = {}) {
         return new Promise<Response>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
       }
       if (opts.detour === "down") throw new TypeError("fetch failed");
+      const particular = opts.detourReplyFor?.(sent);
+      if (particular) return new Response(particular, { status: 200 });
       if (opts.detourReply) return new Response(opts.detourReply, { status: 200 });
       if (opts.detour === "no_route") return new Response(NO_ROUTE, { status: 400 });
       if (opts.detour === "plain") return new Response(ROUTES[from], { status: 200 });
@@ -1211,6 +1216,57 @@ describe("Muse Spark in a real check (#6 with #7)", () => {
       expect(body.muse.pick.shown).toBe(false);
       expect(text).not.toContain(OFF_ROUTE_PLACE);
       expect(text).not.toContain(offRoute.id);
+    });
+  });
+
+  describe("a counted report on a judged way around the page doesn't show is still pickable, and is sent with its route (review 🔴C-4)", () => {
+    /** A spot on the saved Banilad → IT Park detour, about 670 m off the plain route. */
+    const SECOND_SPOT = { lat: 10.337802, lon: 123.904674 };
+    const SECOND_PLACE = "Second reported spot";
+    /** The saved detour with every point within 200 m of SECOND_SPOT moved 0.001° east (about 110 m): a second, distinct way around. */
+    const DERIVED_DETOUR_CLEAR_OF_SECOND_SPOT = derivedReply(DETOUR_RECORDS[0].reply, (l) =>
+      l.map((p) => (distanceM(p, SECOND_SPOT) < 200 ? { lat: p.lat, lon: p.lon + 0.001 } : p)),
+    );
+    const lineOf = (reply: string): Point[] => decodePolyline6(JSON.parse(reply).trip.legs[0].shape);
+
+    it("the rules' way around is blocked at a spot only it passes, Muse Spark's way around is shown, and a pick of that spot's report is shown in Lusong's words", async () => {
+      const offM = (line: Point[]) => placeOnRoute(SECOND_SPOT, line).offM;
+      expect(offM(lineOf(ROUTES["10.346,123.911"]))).toBeGreaterThan(ROUTE_CORRIDOR_M);
+      expect(offM(lineOf(DETOUR_RECORDS[0].reply))).toBeLessThanOrEqual(ROUTE_CORRIDOR_M);
+      expect(offM(lineOf(DERIVED_DETOUR_CLEAR_OF_SECOND_SPOT))).toBeGreaterThan(ROUTE_CORRIDOR_M);
+
+      const store = new MemoryReportStore();
+      const flooded = storedReport(NO_ADVISORY);
+      const second = storedReport(NO_ADVISORY, { at: SECOND_SPOT, place: SECOND_PLACE });
+      await store.save(flooded);
+      await store.save(second);
+      fakeMeta({
+        search: [searchReply(closures)],
+        turns: [
+          callsReply("resp_1", [{ name: "route_around", args: { spots: [SECOND_SPOT] } }]),
+          textReply("resp_2", pickOf("go_another_way", [second.id, "muse-1"])),
+        ],
+      });
+      // The rules' request excludes the flooded spot alone and gets the saved detour; Muse Spark's excludes both spots.
+      const opts: Options = { detourReplyFor: (sent) => (sent.exclude_polygons.length === 2 ? DERIVED_DETOUR_CLEAR_OF_SECOND_SPOT : undefined) };
+      const { handler } = handlerAt(NO_ADVISORY, opts, new MemorySlotStore(), openBudget(), store, museOn());
+
+      const res = await handler(real());
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.answer.kind).toBe("go_another_way");
+      expect(body.detour).toMatchObject({ routeId: "muse-1", proposedBy: "muse_spark" });
+      expect(body.muse.pick).toEqual({
+        shown: true,
+        label: "Muse Spark picked this evidence",
+        sentences: [expect.stringMatching(new RegExp(`^A report 40 min ago on ${SECOND_PLACE} reads `)), "Nothing reported blocks the way Muse Spark suggested."],
+        note: null,
+      });
+      const sent = Object.fromEntries(body.reports.map((r: { id: string }) => [r.id, r]));
+      expect(Object.keys(sent).sort()).toEqual([flooded.id, second.id].sort());
+      expect(sent[flooded.id]).toMatchObject({ onRoute: true, onDetour: false, routes: ["plain"] });
+      expect(sent[second.id]).toMatchObject({ place: SECOND_PLACE, counts: true, role: "block", onRoute: false, onDetour: false, routes: ["detour"] });
     });
   });
 

@@ -85,6 +85,14 @@ export function vetPick(text: string, answer: AnswerKind, gathered: ReadonlySet<
   return { shown: true, evidence };
 }
 
+/**
+ * The reports Muse Spark may pick, and so the ones a check must be able to show: those the rules count within the
+ * corridor of any judged route, the plain one or any way around, whether or not that way is the one shown.
+ */
+export function pickableReportIds(answer: Answer): Set<string> {
+  return new Set(answer.routes.flatMap((r) => r.reportIds));
+}
+
 export interface Detour {
   id: string;
   line: Point[];
@@ -451,7 +459,7 @@ export async function investigate(input: InvestigationInput): Promise<Investigat
   const answer = evidence.answer();
   // A report off every judged route played no part, and a real one's spot is someone else's: it can't be picked.
   const gathered = new Set([
-    ...answer.routes.flatMap((r) => r.reportIds),
+    ...pickableReportIds(answer),
     ...input.web.findings.map((f) => f.id),
     "advisory",
     // The rider always answers the rain tap, so "not tapped" is evidence too.

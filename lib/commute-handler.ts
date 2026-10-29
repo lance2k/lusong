@@ -6,7 +6,14 @@ import { clientIp } from "./check-handler";
 import { boxAround, lineForTrip } from "./detour";
 import { ageWords, depthWords, MMDA_CREDIT, passabilityLine, phtTime } from "./commute-words";
 import { evidenceSentences } from "./evidence-words";
-import { investigate, investigationReserveMicros, PICK_UNAVAILABLE, webFindingCounts, type InvestigationResult } from "./investigation";
+import {
+  investigate,
+  investigationReserveMicros,
+  PICK_UNAVAILABLE,
+  pickableReportIds,
+  webFindingCounts,
+  type InvestigationResult,
+} from "./investigation";
 import type { Meter } from "./meta";
 import { fetchRoute, ROUTE_WORST_MS, type Route, type RouteResult, type ValhallaGate } from "./router";
 import { beforeDeadline, readBody } from "./deadline";
@@ -127,18 +134,18 @@ function webForPage(web: WebEvidence, now: Date) {
 }
 
 /**
- * The evidence Muse Spark picked, each piece described in Lusong's words from its own checked fields. Only the reports
- * the response sends can be described: a pick naming any other report is not shown at all.
+ * The evidence Muse Spark picked, each piece described in Lusong's words from its own checked fields. Only pickable
+ * reports, the ones the response always sends, can be described: a pick naming any other report is not shown at all.
  */
 function pickForPage(
   result: Extract<InvestigationResult, { ok: true }>,
-  facts: { now: Date; advisory: AdvisoryReading; rainingHere: boolean; sentReportIds: ReadonlySet<string> },
+  facts: { now: Date; advisory: AdvisoryReading; rainingHere: boolean; pickable: ReadonlySet<string> },
 ) {
   const label = "Muse Spark picked this evidence";
   const hidden = { shown: false, label, sentences: [] as string[], note: !result.pick.shown && result.pick.unavailable ? PICK_UNAVAILABLE : null };
   if (!result.pick.shown) return hidden;
-  const { sentReportIds, ...rest } = facts;
-  const reports = result.reports.filter((r) => sentReportIds.has(r.id));
+  const { pickable, ...rest } = facts;
+  const reports = result.reports.filter((r) => pickable.has(r.id));
   const sentences = evidenceSentences(result.pick.evidence, { ...rest, reports, web: result.web.findings, routes: result.answer.routes });
   return sentences ? { shown: true, label, sentences, note: null } : hidden;
 }
@@ -458,13 +465,15 @@ export function makeCommuteHandler(deps: {
     const answer = result.answer;
     const shown = (answer.answer === "go_another_way" ? result.detours.find((d) => d.id === answer.route) : result.detours[0]) ?? null;
     const detour = shown ? routesByLine.get(shown.line)! : null;
-    const detourLine = shown?.line ?? null;
+    const judgedLines = [{ id: "plain", line: plainLine }, ...result.detours];
+    const pickable = pickableReportIds(answer);
     const judged = new Map(answer.reports.map((r) => [r.id, r]));
     const used = gathered.filter((r) => answer.decidedBy.includes(r.id));
     const sent = gathered
       .map((r) => {
         const j = judged.get(r.id)!;
         const verdict = r.reading.source === "photo" ? r.reading.verdict : null;
+        const routes = judgedLines.filter((l) => placeOnRoute(r.at, l.line).offM <= ROUTE_CORRIDOR_M).map((l) => l.id);
         return {
           id: r.id,
           sample: r.sample,
@@ -477,14 +486,15 @@ export function makeCommuteHandler(deps: {
           credit: r.credit,
           sourceUrl: r.sourceUrl,
           counts: j.counts,
-          onRoute: placeOnRoute(r.at, plainLine).offM <= ROUTE_CORRIDOR_M,
-          onDetour: detourLine !== null && placeOnRoute(r.at, detourLine).offM <= ROUTE_CORRIDOR_M,
+          onRoute: routes.includes("plain"),
+          onDetour: shown !== null && routes.includes(shown.id),
+          routes,
           role: j.role,
         };
       })
-      // A real report off both routes played no part, and its exact spot is someone else's: it isn't sent.
-      .filter((r) => check.demo || r.onRoute || r.onDetour);
-    const sentReportIds = new Set(sent.map((r) => r.id));
+      // A real report off the shown routes is sent only when Muse Spark may pick it; any other report off them played
+      // no part, and its exact spot is someone else's.
+      .filter((r) => check.demo || r.onRoute || r.onDetour || pickable.has(r.id));
 
     return Response.json({
       demo: check.demo,
@@ -498,6 +508,7 @@ export function makeCommuteHandler(deps: {
       },
       route: { lengthKm: route.lengthKm, timeMin: Math.round(route.timeMin), streets: route.streets, line: route.line },
       detour: detour && {
+        routeId: shown!.id,
         state: answer.routes.find((r) => r.routeId === shown!.id)!.state,
         proposedBy: shown!.proposedBy,
         lengthKm: detour.lengthKm,
@@ -510,7 +521,7 @@ export function makeCommuteHandler(deps: {
       },
       advisory: advisoryForPage(advisory),
       reports: sent,
-      muse: { pick: pickForPage(result, { now: at, advisory, rainingHere: check.rainingHere, sentReportIds }), web: webForPage(result.web, at) },
+      muse: { pick: pickForPage(result, { now: at, advisory, rainingHere: check.rainingHere, pickable }), web: webForPage(result.web, at) },
       mmdaCredit: MMDA_CREDIT,
     });
   }
