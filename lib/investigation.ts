@@ -483,8 +483,7 @@ async function explain(input: InvestigationInput, evidence: Evidence, runTool: (
   let turnInput: Parameters<typeof respond>[0]["input"] = `${INSTRUCTIONS}${CONTEXT_LEAD}${cappedJson(contextOf(evidence, input.web), CONTEXT_MAX_BYTES)}`;
   let previousResponseId: string | undefined;
   let callsSoFar = 0;
-  for (let turn = 1; turn <= LOOP_TURN_CAP; turn++) {
-    if (Date.now() >= input.deadline) return { unavailable: "timed out" };
+  for (let turn = 1; ; turn++) {
     let reply: SparkReply;
     try {
       reply = await respond({
@@ -514,5 +513,4 @@ async function explain(input: InvestigationInput, evidence: Evidence, runTool: (
     turnInput = outputs;
     previousResponseId = reply.id;
   }
-  return { unavailable: "no explanation" };
 }

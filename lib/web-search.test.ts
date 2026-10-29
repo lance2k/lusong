@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Meter } from "./meta";
 import {
+  MAX_WEB_FINDINGS,
   MemoryKvStore,
   planWebSearch,
   runWebSearch,
@@ -89,6 +90,12 @@ describe("the web search for road closures in Metro Cebu today", () => {
     expect(web.findings.map((f) => f.id)).toEqual(["web-3"]);
   });
 
+  it(`keeps at most ${MAX_WEB_FINDINGS} findings`, async () => {
+    fakeMeta({ search: [searchReply(closures(Array.from({ length: 12 }, () => MABOLO)))] });
+
+    expect((await searchOnce(new MemoryKvStore())).findings).toHaveLength(MAX_WEB_FINDINGS);
+  });
+
   it("the JSON may sit inside other words, and finding none is a search that found nothing", async () => {
     fakeMeta({ search: [searchReply(`Here is what I found:\n${closures([])}\nStay dry.`)] });
 
@@ -157,6 +164,14 @@ describe("one search is shared by every check for a while", () => {
     expect(await planWebSearch(broken, NOW)).toEqual({ kind: "off", why: "store unreachable" });
     expect(await searchOnce(null)).toEqual({ state: "not_run", why: "no shared store", searchedAt: null, findings: [] });
     expect(meta.searchRequests).toHaveLength(0);
+  });
+
+  it("a stored record past its own expiry is searched again, whatever the store's TTL", async () => {
+    const store = new MemoryKvStore();
+    const evidence = { state: "searched", searchedAt: NOW.toISOString(), findings: [] };
+    await store.set(WEB_SEARCH_KEY, JSON.stringify({ expiresAt: NOW.getTime(), evidence }), 24 * 3_600_000);
+
+    expect(await planWebSearch(store, NOW)).toEqual({ kind: "search" });
   });
 
   it("a stored record that can't be read is searched again", async () => {

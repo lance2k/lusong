@@ -289,6 +289,17 @@ describe("a source that fails is a failed check, never an empty success (🔴P5)
     expect(await investigate(inputOf(sources))).toEqual({ ok: false, failed: "reports" });
   });
 
+  it("the rules' own way around is not taken when it still meets the blocked spot", async () => {
+    const { sources } = sourcesOf({ reports: [voice("v1", BLOCKED_SPOT, "not_passable")], around: () => ({ ok: true, line: PLAIN }) });
+    fakeMeta({ turns: [textReply("resp_1", "No way around Banilad was found.")] });
+
+    const result = await investigate(inputOf(sources));
+
+    if (!result.ok) throw new Error("expected an answer");
+    expect(result.detours).toEqual([]);
+    expect(result.answer.answer).toBe("wait");
+  });
+
   it("a router that can't be reached for the way around gives no answer", async () => {
     const { sources } = sourcesOf({ reports: [voice("v1", BLOCKED_SPOT, "not_passable")], around: () => ({ ok: false, reason: "failed" }) });
     fakeMeta({ turns: [] });
