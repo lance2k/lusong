@@ -104,6 +104,66 @@ interface CapRecord {
 }
 
 const CEBU = /\bcebu\b/i;
+/** Cebu province's SAME geocode prefix: PAGASA codes it 072200000 (saved records, 2026-10-25/26). */
+const CEBU_SAME_PREFIX = "0722";
+/** A point in Cebu City; a polygon containing it covers Cebu. */
+const CEBU_CITY = { lat: 10.3157, lon: 123.8854 };
+
+export type AreaCoverage = "cebu" | "outside" | "unknown";
+
+/** CAP polygons are "lat,lon" pairs, at least four, first equal to last; anything else can't be read. */
+function readPolygon(text: string): { lat: number; lon: number }[] | null {
+  const points = text.trim().split(/\s+/).map((pair) => {
+    const parts = pair.split(",");
+    return parts.length === 2 ? { lat: Number(parts[0]), lon: Number(parts[1]) } : null;
+  });
+  if (points.length < 4 || points.some((p) => !p || !Number.isFinite(p.lat) || !Number.isFinite(p.lon))) return null;
+  const ring = points as { lat: number; lon: number }[];
+  const [first, last] = [ring[0], ring[ring.length - 1]];
+  return first.lat === last.lat && first.lon === last.lon ? ring : null;
+}
+
+function contains(ring: readonly { lat: number; lon: number }[], p: { lat: number; lon: number }): boolean {
+  let within = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const a = ring[i];
+    const b = ring[j];
+    if (a.lat > p.lat !== b.lat > p.lat && p.lon < ((b.lon - a.lon) * (p.lat - a.lat)) / (b.lat - a.lat) + a.lon) within = !within;
+  }
+  return within;
+}
+
+/**
+ * Lean-safe: an area is in Cebu when any indicator says so (its name, a SAME geocode, a polygon). It is outside only
+ * when every indicator it carries is readable and says outside, and at least one of them is a geocode or polygon, since
+ * a name alone ("Unknown") can't rule Cebu out. Anything else is unknown.
+ */
+function coverageOf(area: XmlElement, link: string): AreaCoverage {
+  const desc = textOf(area, CAP, "areaDesc") ?? "";
+  if (desc === "") throw new Unreadable(`${link} has an area with no areaDesc`);
+  let cebu = CEBU.test(desc);
+  let outsideReadings = 0;
+  let unusable = 0;
+  for (const g of childrenOf(area, CAP, "geocode")) {
+    const value = textOf(g, CAP, "value") ?? "";
+    if (textOf(g, CAP, "valueName") !== "SAME" || !/^\d{9}$/.test(value)) unusable++;
+    else if (value.startsWith(CEBU_SAME_PREFIX)) cebu = true;
+    else outsideReadings++;
+  }
+  for (const p of childrenOf(area, CAP, "polygon")) {
+    const ring = readPolygon(p.text);
+    if (!ring) unusable++;
+    else if (contains(ring, CEBU_CITY)) cebu = true;
+    else outsideReadings++;
+  }
+  if (cebu) return "cebu";
+  return unusable === 0 && outsideReadings > 0 ? "outside" : "unknown";
+}
+
+/** Each <area> of every <info>, in order: how Lusong reads its geography. */
+export function areaCoverage(xml: string): AreaCoverage[] {
+  return childrenOf(parseXml(xml), CAP, "info").flatMap((info) => childrenOf(info, CAP, "area").map((a) => coverageOf(a, "record")));
+}
 
 function riversFor(description: string): string | null {
   const line = /\*\*Cebu\*\*\s*-\s*(.+)$/im.exec(description);
@@ -114,7 +174,11 @@ function riversFor(description: string): string | null {
     .replace(/\.$/, "");
 }
 
-/** CAP 1.2's code lists (UNVERIFIED: written from memory of the OASIS spec). Anything else is a record Lusong can't read. */
+/**
+ * CAP 1.2's code lists: each value appears in the OASIS CAP 1.2 spec,
+ * docs.oasis-open.org/emergency/cap/v1.2/CAP-v1.2-os.html (checked 2026-10-30, 19 of 19). Anything else is a record
+ * Lusong can't read.
+ */
 const STATUSES = new Set(["Actual", "Exercise", "System", "Test", "Draft"]);
 const MSG_TYPES = new Set(["Alert", "Update", "Cancel", "Ack", "Error"]);
 const RESPONSE_TYPES = new Set(["Shelter", "Evacuate", "Prepare", "Execute", "Avoid", "Monitor", "Assess", "AllClear", "None"]);
@@ -153,9 +217,11 @@ function readCap(xml: string, link: string, now: number): CapRecord {
     const expires = time(expiresText, `${link} expires`);
     const responses = childrenOf(info, CAP, "responseType").map((r) => r.text.trim());
     if (responses.some((r) => !RESPONSE_TYPES.has(r))) throw new Unreadable(`${link} has an unknown responseType`);
-    const areas = childrenOf(info, CAP, "area").map((area) => textOf(area, CAP, "areaDesc") ?? "");
-    if (areas.length === 0 || areas.some((a) => a === "")) throw new Unreadable(`${link} has no usable area`);
-    return { info, expiresText, expires, allClear: responses.includes("AllClear"), inCebu: areas.some((a) => CEBU.test(a)) };
+    const areas = childrenOf(info, CAP, "area").map((area) => coverageOf(area, link));
+    if (areas.length === 0) throw new Unreadable(`${link} has no usable area`);
+    const inCebu = areas.includes("cebu");
+    if (!inCebu && areas.includes("unknown")) throw new Unreadable(`${link} has an area Lusong can't place in or outside Cebu`);
+    return { info, expiresText, expires, allClear: responses.includes("AllClear"), inCebu };
   });
 
   const live = status === "Actual" && (msgType === "Alert" || msgType === "Update") && sent <= now;

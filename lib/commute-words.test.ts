@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ageWords, depthWords, passabilityLine, phtTime } from "./commute-words";
+import { ageWords, depthWords, detourWords, passabilityLine, phtTime } from "./commute-words";
 import type { Verdict } from "./verdict";
 
 const measured = (low: number, high: number, passability: "NPLV" | "NPATV" | "shallow" | "unsure"): Verdict => ({
@@ -60,5 +60,16 @@ describe("times", () => {
   it("writes a CAP time in Manila time", () => {
     expect(phtTime("2026-10-25T17:27:04+08:00")).toBe("25 Oct, 5:27 p.m. PHT");
     expect(phtTime("2026-10-25T21:27:04Z")).toBe("26 Oct, 5:27 a.m. PHT");
+  });
+});
+
+describe("the other way, against the usual one", () => {
+  it("says how much longer the Banilad → IT Park detour is, in km and minutes", () => {
+    expect(detourWords({ extraKm: 0.7, extraMin: 4 })).toBe("0.7 km and 4 min longer than your usual way");
+  });
+
+  it("says when it is no slower or shorter", () => {
+    expect(detourWords({ extraKm: 0.3, extraMin: 0 })).toBe("0.3 km longer than your usual way, about the same time");
+    expect(detourWords({ extraKm: -0.2, extraMin: -1 })).toBe("0.2 km and 1 min shorter than your usual way");
   });
 });

@@ -36,4 +36,11 @@ describe("the commute check's page state", () => {
     const state = run({ type: "start", at: 1 }, { type: "change", inputs: { trip: "mabolo-cbp" } }, { type: "start", at: 2 }, { type: "failed", ticket: 1, message: "old" });
     expect(state.view).toMatchObject({ step: "checking", for: { trip: "mabolo-cbp" } });
   });
+
+  it("switching to a trip that doesn't offer the chosen scenario falls back to no reports; one that does keeps it", () => {
+    const away = run({ type: "change", inputs: { scenario: "no_way_around" } }, { type: "change", inputs: { trip: "mabolo-cbp" } });
+    expect(away.inputs).toMatchObject({ trip: "mabolo-cbp", scenario: "none" });
+    const kept = run({ type: "change", inputs: { scenario: "flooded" } }, { type: "change", inputs: { trip: "mabolo-cbp" } });
+    expect(kept.inputs.scenario).toBe("flooded");
+  });
 });

@@ -83,6 +83,15 @@ describe("the plain motorbike route from Valhalla", () => {
     { name: "a body that isn't a trip", reply: () => Response.json({ trip: { legs: [] } }) },
     { name: "a malformed shape", reply: () => withLeg((leg) => ({ ...leg, shape: "?" })) },
     { name: "a shape decoding to impossible coordinates", reply: () => withLeg((leg) => ({ ...leg, shape: "~~~~~~~~~~~~~~~~~~~~" })) },
+    { name: "a shape of characters outside the encoding ('!!!!')", reply: () => withLeg((leg) => ({ ...leg, shape: "!!!!" })) },
+    {
+      name: "the saved shape with one character swapped for one outside the encoding (derived)",
+      reply: () => withLeg((leg) => ({ ...leg, shape: `${String(leg.shape).slice(0, 10)}!${String(leg.shape).slice(11)}` })),
+    },
+    {
+      name: "the saved shape plus a point whose value runs to eight 5-bit chunks, past 32 bits (derived)",
+      reply: () => withLeg((leg) => ({ ...leg, shape: `${String(leg.shape)}_______??` })),
+    },
     { name: "maneuvers that aren't a list", reply: () => withLeg((leg) => ({ ...leg, maneuvers: "left, then right" })) },
     { name: "street names that aren't strings", reply: () => withLeg((leg) => ({ ...leg, maneuvers: [{ street_names: [7] }] })) },
   ])("$name is unreachable", async ({ reply }) => {

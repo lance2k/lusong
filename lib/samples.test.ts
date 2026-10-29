@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { placeOnRoute, ROUTE_CORRIDOR_M, roleOf } from "./answer";
 import { decodePolyline6, wayIdFromLocate } from "./router";
-import { DEMO_TRIPS, SCENARIOS, sampleReports, SAMPLE_SPECS } from "./samples";
+import { DEMO_TRIPS, SCENARIOS, sampleReports, SAMPLE_SPECS, scenariosFor } from "./samples";
 
 const json = (path: string) => JSON.parse(readFileSync(path, "utf8"));
 const LABELS = [...json("test/fixtures/depth-set/labels.json"), ...json("test/fixtures/acceptance/labels.json")] as {
@@ -11,12 +11,17 @@ const LABELS = [...json("test/fixtures/depth-set/labels.json"), ...json("test/fi
   licence: string;
   author: string;
 }[];
-const LOCATE = json("test/fixtures/valhalla/locate-sample-pins.json") as { input_lat: number; input_lon: number }[];
+const LOCATE = [
+  ...json("test/fixtures/valhalla/locate-sample-pins.json"),
+  ...json("test/fixtures/valhalla/locate-detour-pin.json"),
+] as { input_lat: number; input_lon: number }[];
 const ROUTE_LINES = {
   "banilad-itpark": decodePolyline6(json("test/fixtures/valhalla/banilad-itpark-plain.json").trip.legs[0].shape),
   "mabolo-cbp": decodePolyline6(json("test/fixtures/valhalla/mabolo-cbp-plain.json").trip.legs[0].shape),
 };
 const NOW = new Date("2026-10-30T07:00:00+08:00");
+/** Pinned at the trip's end, where no /locate request was spent. */
+const NOT_LOCATED = ["sample-shah-alam-2021"];
 
 describe("sample reports for the demo", () => {
   it.each(SAMPLE_SPECS.map((s) => [s.id, s] as const))("%s carries a verdict actually recorded for its photo", (_id, spec) => {
@@ -37,8 +42,13 @@ describe("sample reports for the demo", () => {
   it.each(SAMPLE_SPECS.map((s) => [s.id, s] as const))("%s is pinned on its trip's route, with the way id /locate gave", (_id, spec) => {
     expect(placeOnRoute(spec.at, ROUTE_LINES[spec.trip]).offM).toBeLessThanOrEqual(ROUTE_CORRIDOR_M);
     const located = LOCATE.find((l) => l.input_lat === spec.at.lat && l.input_lon === spec.at.lon);
-    expect(located, "pin was located").toBeDefined();
-    expect(spec.wayId).toBe(wayIdFromLocate(located as Parameters<typeof wayIdFromLocate>[0]));
+    if (!NOT_LOCATED.includes(spec.id)) expect(located, "pin was located").toBeDefined();
+    expect(spec.wayId).toBe(located ? wayIdFromLocate(located as Parameters<typeof wayIdFromLocate>[0]) : null);
+  });
+
+  it("only the IT Park pin was never looked up, and it carries no way id, so it can never be retired early", () => {
+    const unlocated = SAMPLE_SPECS.filter((s) => !LOCATE.some((l) => l.input_lat === s.at.lat && l.input_lon === s.at.lon));
+    expect(unlocated.map((s) => [s.id, s.wayId])).toEqual(NOT_LOCATED.map((id) => [id, null]));
   });
 
   it("every sample report is marked as a sample, and its time is set from the clock", () => {
@@ -60,11 +70,14 @@ describe("sample reports for the demo", () => {
     );
   });
 
-  it("the 'no reports' scenario has no samples, the others have at least one each", () => {
+  it("the 'no reports' scenario has no samples, each other scenario a trip offers has at least one", () => {
     for (const trip of Object.keys(DEMO_TRIPS) as (keyof typeof DEMO_TRIPS)[]) {
       expect(sampleReports(trip, "none", NOW)).toEqual([]);
-      expect(sampleReports(trip, "flooded", NOW).length).toBeGreaterThan(0);
-      expect(sampleReports(trip, "unclear", NOW).length).toBeGreaterThan(0);
+      for (const scenario of scenariosFor(trip).filter((s) => s.id !== "none")) {
+        expect(sampleReports(trip, scenario.id, NOW).length, `${trip} ${scenario.id}`).toBeGreaterThan(0);
+      }
     }
+    expect(scenariosFor("banilad-itpark").map((s) => s.id)).toEqual(["none", "flooded", "unclear", "no_way_around"]);
+    expect(scenariosFor("mabolo-cbp").map((s) => s.id)).toEqual(["none", "flooded", "unclear"]);
   });
 });

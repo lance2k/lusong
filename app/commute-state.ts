@@ -1,4 +1,4 @@
-import type { DemoTripId, ScenarioId } from "@/lib/samples";
+import { scenariosFor, type DemoTripId, type ScenarioId } from "../lib/samples";
 
 export interface CommuteInputs {
   trip: DemoTripId;
@@ -33,8 +33,11 @@ export const initialCommuteState: CommuteState = {
 
 export function commuteReducer<R>(state: CommuteState<R>, action: CommuteAction<R>): CommuteState<R> {
   switch (action.type) {
-    case "change":
-      return { inputs: { ...state.inputs, ...action.inputs }, ticket: state.ticket + 1, view: { step: "idle" } };
+    case "change": {
+      const inputs = { ...state.inputs, ...action.inputs };
+      if (!scenariosFor(inputs.trip).some((s) => s.id === inputs.scenario)) inputs.scenario = "none";
+      return { inputs, ticket: state.ticket + 1, view: { step: "idle" } };
+    }
     case "start":
       return { ...state, ticket: state.ticket + 1, view: { step: "checking", startedAt: action.at, for: state.inputs } };
     case "answered":

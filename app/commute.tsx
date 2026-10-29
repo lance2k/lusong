@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useReducer, useState } from "react";
-import type { AnswerKind } from "@/lib/answer";
-import { DEMO_TRIPS, SCENARIOS, type DemoTripId } from "@/lib/samples";
+import type { AnswerKind, RouteState } from "@/lib/answer";
+import { detourWords } from "@/lib/commute-words";
+import { DEMO_TRIPS, SCENARIOS, scenariosFor, type DemoTripId } from "@/lib/samples";
 import { commuteReducer, initialCommuteState, type CommuteInputs, type CommuteState } from "./commute-state";
 
 interface PageReport {
@@ -17,6 +18,7 @@ interface PageReport {
   sourceUrl: string;
   counts: boolean;
   onRoute: boolean;
+  onDetour: boolean;
   role: "clear" | "block" | "neutral";
 }
 
@@ -36,6 +38,7 @@ interface CommuteResult {
   rainingHere: boolean;
   answer: { kind: AnswerKind; title: string; reason: string; thin: string | null };
   route: { lengthKm: number; timeMin: number; streets: string[] };
+  detour: { state: RouteState; lengthKm: number; timeMin: number; extraKm: number; extraMin: number; streets: string[] } | null;
   advisory: PageAdvisory;
   reports: PageReport[];
   mmdaCredit: string;
@@ -122,7 +125,8 @@ function Advisory({ advisory }: { advisory: PageAdvisory }) {
 }
 
 function Report({ r }: { r: PageReport }) {
-  const status = !r.counts ? "Older than 3 hours: shown, not counted." : !r.onRoute ? "Not on your route." : ROLE_WORDS[r.role] + ".";
+  const where = r.onRoute ? "" : r.onDetour ? "On the other way. " : null;
+  const status = !r.counts ? "Older than 3 hours: shown, not counted." : where === null ? "Not on your route." : where + ROLE_WORDS[r.role] + ".";
   return (
     <li className="space-y-1 px-4 py-3">
       <p className="flex flex-wrap items-center gap-2">
@@ -151,7 +155,7 @@ function inputWords(inputs: CommuteInputs): string {
 }
 
 function ResultView({ result, checkedFor }: { result: CommuteResult; checkedFor: CommuteInputs }) {
-  const { answer, route } = result;
+  const { answer, route, detour } = result;
   return (
     <div className="space-y-4">
       <section className="overflow-hidden rounded-2xl border border-zinc-200 dark:border-zinc-800">
@@ -182,12 +186,26 @@ function ResultView({ result, checkedFor }: { result: CommuteResult; checkedFor:
         <p className="mt-2 text-sm text-zinc-500">{result.mmdaCredit}</p>
       </section>
 
-      <section className="text-[15px]">
-        <h3 className="mb-1 text-sm font-semibold uppercase tracking-wide text-zinc-500">Route</h3>
-        <p>
-          {route.lengthKm.toFixed(2)} km, about {route.timeMin} min by motorbike
-          {route.streets.length > 0 && <>, via {route.streets.join(", ")}</>}.
-        </p>
+      <section className="space-y-3 text-[15px]">
+        <div>
+          <h3 className="mb-1 text-sm font-semibold uppercase tracking-wide text-zinc-500">
+            {detour ? "Your usual way" : "Route"}
+          </h3>
+          <p>
+            {route.lengthKm.toFixed(2)} km, about {route.timeMin} min by motorbike
+            {route.streets.length > 0 && <>, via {route.streets.join(", ")}</>}.
+          </p>
+        </div>
+        {detour && (
+          <div>
+            <h3 className="mb-1 text-sm font-semibold uppercase tracking-wide text-zinc-500">The other way</h3>
+            <p>
+              {detour.lengthKm.toFixed(2)} km, about {detour.timeMin} min by motorbike
+              {detour.streets.length > 0 && <>, via {detour.streets.join(", ")}</>}.
+            </p>
+            <p className="font-semibold">{detourWords(detour)}.</p>
+          </div>
+        )}
         <p className="mt-1 text-sm text-zinc-500">
           Route from Valhalla (FOSSGIS) on OpenStreetMap data, © OpenStreetMap contributors.
         </p>
@@ -236,7 +254,7 @@ export default function CommuteCheck() {
       <div className="space-y-1">
         <Choice
           label="Sample reports"
-          options={SCENARIOS}
+          options={scenariosFor(trip)}
           value={scenario}
           onChange={(id) => dispatch({ type: "change", inputs: { scenario: id } })}
         />
@@ -264,7 +282,7 @@ export default function CommuteCheck() {
       <div aria-live="polite">
         {view.step === "checking" && (
           <p className="text-center text-zinc-600 dark:text-zinc-400">
-            Reading PAGASA&apos;s flood advisory, getting the motorbike route and gathering reports… <Elapsed since={view.startedAt} /> s
+            Reading PAGASA&apos;s flood advisory, getting the motorbike route, gathering reports and, if your way is blocked, looking for another… <Elapsed since={view.startedAt} /> s
           </p>
         )}
         {view.step === "failed" && (

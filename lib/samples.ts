@@ -17,15 +17,21 @@ export const SCENARIOS = [
   { id: "none", label: "No reports" },
   { id: "flooded", label: "A flooded spot reported" },
   { id: "unclear", label: "A photo Lusong can't call" },
-] as const;
+  // Only Banilad → IT Park has a saved Valhalla reply finding no way around its spot.
+  { id: "no_way_around", label: "A flooded spot with no way around", trips: ["banilad-itpark"] },
+] as const satisfies readonly { id: string; label: string; trips?: readonly DemoTripId[] }[];
 
 export type ScenarioId = (typeof SCENARIOS)[number]["id"];
+
+export function scenariosFor(trip: DemoTripId) {
+  return SCENARIOS.filter((s) => !("trips" in s) || (s.trips as readonly DemoTripId[]).includes(trip));
+}
 
 export interface SampleSpec {
   id: string;
   trip: DemoTripId;
   scenarios: ScenarioId[];
-  /** Where the pin sits, by street and barangay (Valhalla /locate and OSM Nominatim, 2026-10-30, one lookup each). */
+  /** Where the pin sits, by street (Valhalla /locate, 2026-10-30, one lookup each) and, for most, barangay (OSM Nominatim). */
   place: string;
   at: Point;
   wayId: number | null;
@@ -44,9 +50,11 @@ export const SAMPLE_SPECS: readonly SampleSpec[] = [
     id: "sample-cavite-2013",
     trip: "banilad-itpark",
     scenarios: ["flooded"],
-    place: "Governor M. Cuenco Avenue, Apas",
-    at: { lat: 10.338566, lon: 123.911461 },
-    wayId: 1116002958,
+    place: "Governor M. Cuenco Avenue at Jose Maria Del Mar Avenue",
+    // The plain route's midpoint, where the 2026-10-30 probe found a way around a 330 m box. /locate finds three ways
+    // at 0 m there (Governor M. Cuenco, Jose Maria Del Mar, Paradise Village Road), so it has no single way id.
+    at: { lat: 10.335398, lon: 123.910908 },
+    wayId: null,
     ageMin: 40,
     verdict: {
       kind: "measured",
@@ -83,6 +91,31 @@ export const SAMPLE_SPECS: readonly SampleSpec[] = [
     credit: "SuSanA Secretariat (photo by Jörg Dietze), CC BY 2.0, via Wikimedia Commons",
     sourceUrl: "https://commons.wikimedia.org/wiki/File:Flooded_urban_poor_area_in_Manila_(4046572324).jpg",
     recorded: { run: "acceptance-runs/2026-10-28T19-23-25-915Z", file: "manila-2009-pedicabs.jpg", draw: 1 },
+  },
+  {
+    id: "sample-shah-alam-2021",
+    trip: "banilad-itpark",
+    scenarios: ["no_way_around"],
+    // The trip's end, where the route's last street is V. Padriga Street (Valhalla route, 2026-10-30). The
+    // 2026-10-30 02:24 PHT probe excluded the 330 m box around this point and Valhalla found no path. Not looked up
+    // with /locate, so no way id: it can never be retired by a clear report, only by expiry.
+    place: "V. Padriga Street at IT Park",
+    at: { lat: 10.3307, lon: 123.9058 },
+    wayId: null,
+    ageMin: 15,
+    verdict: {
+      kind: "measured",
+      rangeCm: { low: 18, high: 140 },
+      passability: "NPATV",
+      confidence: "low",
+      readingsComplete: true,
+      decidedBy: { label: "C1", landmark: "above_tyre", interval: { low: 66, high: 140 } },
+      readingsUsed: ["C1", "C2", "C3", "C4", "C5", "P1", "C9", "C10"],
+    },
+    origin: "A residential area at Section 24, Shah Alam, Malaysia, during the December 2021 floods",
+    credit: "Muhammad Zaim, CC BY-SA 4.0, via Wikimedia Commons",
+    sourceUrl: "https://commons.wikimedia.org/wiki/File:Section_24,_Shah_Alam_Floodings.jpg",
+    recorded: { run: "acceptance-runs/2026-10-28T19-23-25-915Z", file: "shah-alam-2021.jpg", draw: 1 },
   },
   {
     id: "sample-quiapo-2024-waders",
