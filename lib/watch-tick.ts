@@ -1,5 +1,5 @@
 import type { AnswerKind } from "./answer";
-import type { Channel } from "./channel";
+import { SEND_TIMEOUT_MS, type Channel } from "./channel";
 import { TITLES, type ScheduledCheck } from "./commute-handler";
 import { clockLine, hhmm, inWindow, phtDay } from "./watch-window";
 import type { WatchRecord, WatchStore, WatchTrip } from "./watch-store";
@@ -17,6 +17,14 @@ export interface TickLimits {
 }
 
 export const TICK_LIMITS: TickLimits = { maxPerTick: 20, budgetMs: 45_000, minCheckMs: 15_000, minGapMs: 9 * 60_000 };
+
+/** A tick holds the watcher's send lease from its last check that the watcher is on until its send is recorded. */
+export const SEND_LEASE_MS = 8_000;
+/** A send starts only with Telegram's timeout and this margin left of the lease, so it always ends inside it. */
+const LEASE_MARGIN_MS = 500;
+/** Longer than a lease lives; see switchOff. */
+export const SWITCH_OFF_WAIT_MS = 10_000;
+const SWITCH_OFF_POLL_MS = 100;
 
 export interface TickDeps {
   store: WatchStore;
@@ -113,6 +121,27 @@ async function runOne(
     return "failed";
   }
   if (!result.ok) return "failed";
+
+  const leaseAsked = Date.now();
+  let lease: string | null;
+  try {
+    lease = await deps.store.takeSendLease(w.id, SEND_LEASE_MS);
+  } catch (err) {
+    console.error("watch store failed on the send lease:", err instanceof Error ? err.message : err);
+    return "failed";
+  }
+  // A switch-off holds the lease while it deletes the watcher.
+  if (!lease) return "quiet";
+  try {
+    return await sendUnderLease(deps, w, result.kind, leaseAsked);
+  } finally {
+    await deps.store.releaseSendLease(w.id, lease).catch((err) => {
+      console.error("watch store failed releasing the send lease:", err instanceof Error ? err.message : err);
+    });
+  }
+}
+
+async function sendUnderLease(deps: TickDeps, w: WatchRecord, kind: AnswerKind, leaseAsked: number): Promise<"sent" | "quiet" | "failed"> {
   // The check can outlast the window: what is sent is decided on the clock as it is now.
   const at = deps.now();
   if (!inWindow(w.window, at)) return "quiet";
@@ -120,17 +149,22 @@ async function runOne(
   // A message whose delivery was uncertain counts as sent.
   const last = w.sending ?? { kind: w.lastKind, day: w.lastDay };
   const opening = last.day !== day;
-  if (!opening && result.kind === last.kind) return "quiet";
-  const answer = { kind: result.kind, day };
+  if (!opening && kind === last.kind) return "quiet";
+  const answer = { kind, day };
   try {
     // Recorded before the send, so a send whose outcome is unknown, or whose commit fails, is never sent again.
     // False when switched off (or switched on again) while the check ran: this run speaks for no one.
     if (!(await deps.store.markSending(w.id, w.gen, answer))) return "quiet";
+    if (Date.now() - leaseAsked > SEND_LEASE_MS - SEND_TIMEOUT_MS - LEASE_MARGIN_MS) {
+      // Too little of the lease is left for the send to end inside it, where a switch-off waits for it.
+      await deps.store.dropSending(w.id, w.gen);
+      return "failed";
+    }
   } catch (err) {
     console.error("watch store failed before sending:", err instanceof Error ? err.message : err);
     return "failed";
   }
-  const text = watchMessage({ kind: result.kind, was: opening ? null : last.kind, at, window: w.window, pageUrl: deps.pageUrl });
+  const text = watchMessage({ kind, was: opening ? null : last.kind, at, window: w.window, pageUrl: deps.pageUrl });
   const sent = await deps.channel.send(w.chatId!, text);
   try {
     if (sent.ok) {
@@ -144,4 +178,23 @@ async function runOne(
     console.error("watch store failed after sending:", err instanceof Error ? err.message : err);
   }
   return sent.ok ? "sent" : "failed";
+}
+
+/**
+ * Deletes a watcher once no send of its is under way. It takes the watcher's send lease, which a tick holds from its last
+ * check that the watcher is on until its send is done, so a send that check allowed ends before this returns, and no tick
+ * can start one while it deletes.
+ *
+ * The wait is bounded. A lease lives SEND_LEASE_MS, and a tick's send starts only with Telegram's whole timeout left of
+ * it, so after SWITCH_OFF_WAIT_MS (longer than a lease) no send allowed before this began can still be running. A lease
+ * still held then was taken during the wait, which the 9-minute run claim makes all but impossible; the rider asked for
+ * the deletion, so it goes ahead rather than leave the trip on the server.
+ */
+export async function switchOff(store: WatchStore, id: string, opts: { waitMs?: number; pollMs?: number } = {}): Promise<void> {
+  const until = Date.now() + (opts.waitMs ?? SWITCH_OFF_WAIT_MS);
+  while (!(await store.takeSendLease(id, SEND_LEASE_MS)) && Date.now() < until) {
+    await new Promise((resolve) => setTimeout(resolve, opts.pollMs ?? SWITCH_OFF_POLL_MS));
+  }
+  // Deletes the lease too.
+  await store.remove(id);
 }

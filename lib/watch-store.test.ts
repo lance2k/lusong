@@ -124,6 +124,28 @@ describe.each(watchStores)("the watch %s", (_name, make) => {
     expect(await store.get(id)).toBeNull();
   });
 
+  it("lends a watcher's send lease to one holder at a time, frees it only for that holder's token, and lets it expire", async () => {
+    const { store, held, wait } = make();
+    const id = "a".repeat(64);
+    await store.create(watcher(), "code1");
+    const first = await store.takeSendLease(id, 400);
+    expect(first).toEqual(expect.any(String));
+    expect(await store.takeSendLease(id, 400)).toBeNull();
+    const ttl = (await held())[`lusong:watch:lease:${id}`];
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual(400);
+    await store.releaseSendLease(id, "someone-else");
+    expect(await store.takeSendLease(id, 400)).toBeNull();
+    await store.releaseSendLease(id, first!);
+    const second = await store.takeSendLease(id, 400);
+    expect(second).toEqual(expect.any(String));
+    expect(second).not.toBe(first);
+    await wait(800);
+    expect(await store.takeSendLease(id, 400)).toEqual(expect.any(String));
+    await store.remove(id);
+    expect(await held()).toEqual({});
+  });
+
   it("commits the last answer only for the current generation", async () => {
     const { store } = make();
     await store.create(watcher(), "code1");

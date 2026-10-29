@@ -10,7 +10,7 @@ import { MemoryReportStore } from "./report-store";
 import { makeValhallaGate, MemorySlotStore, VALHALLA_URL } from "./router";
 import { makeTelegramWebhook, makeTickHandler, makeWatchHandler, sameSecret } from "./watch-handler";
 import { MemoryWatchStore, type WatchStore } from "./watch-store";
-import { runTick, TICK_LIMITS, type TickSummary } from "./watch-tick";
+import { runTick, switchOff, TICK_LIMITS, type TickSummary } from "./watch-tick";
 
 const BANILAD = { lat: 10.346, lon: 123.911 };
 const IT_PARK = { lat: 10.3307, lon: 123.9058 };
@@ -181,6 +181,53 @@ describe.each(watchStores)("switching a watcher off, against the %s", (_name, ma
     expect((await api(watchCall({ action: "status", watcher: token }))).status).toBe(404);
     // Switching off twice is still off.
     expect((await api(watchCall({ action: "off", watcher: token }))).status).toBe(200);
+  });
+});
+
+describe.each(watchStores)("switching a watcher off while a message is being sent, against the %s", (_name, make) => {
+  it("returns only after the send it found under way: never a send after it says off", async () => {
+    const { store, held } = make();
+    const channel = new FakeChannel();
+    const token = await linked(store, channel);
+    const events: string[] = [];
+    const send = channel.send.bind(channel);
+    channel.send = async (chatId, text) => {
+      events.push("send");
+      return send(chatId, text);
+    };
+    // The tick pauses right after its last check that the watcher is still on.
+    let paused!: () => void;
+    const atPause = new Promise<void>((resolve) => (paused = resolve));
+    let resume!: () => void;
+    const gate = new Promise<void>((resolve) => (resume = resolve));
+    const markSending = store.markSending.bind(store);
+    store.markSending = async (...args) => {
+      const current = await markSending(...args);
+      paused();
+      await gate;
+      return current;
+    };
+    const tick = runTick({ store, channel, now: () => NOON, pageUrl: "https://lusong.example/", check: async () => ({ ok: true, kind: "go" }) });
+    await atPause;
+    const off = watchApi(store)(watchCall({ action: "off", watcher: token })).then((res) => events.push(`off ${res.status}`));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(events).toEqual([]);
+    resume();
+    await Promise.all([tick, off]);
+    expect(events).toEqual(["send", "off 200"]);
+    expect(await held()).toEqual({});
+  });
+
+  it("a switch-off that can't get the send lease within its wait deletes the watcher anyway", async () => {
+    const { store, held } = make();
+    const token = await linked(store);
+    const id = (await store.list())[0].id;
+    expect(await store.takeSendLease(id, 60_000)).not.toBeNull();
+    const started = Date.now();
+    await switchOff(store, id, { waitMs: 300 });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(300);
+    expect(await held()).toEqual({});
+    expect((await watchApi(store)(watchCall({ action: "status", watcher: token }))).status).toBe(404);
   });
 });
 

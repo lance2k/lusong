@@ -5,6 +5,9 @@ export type SendResult =
   /** No clear answer (a timeout, a dropped connection, a server error): the message may have been delivered. */
   | { ok: false; rejected: false };
 
+/** A send gives up after this long, so it ends inside the watcher's send lease (lib/watch-tick.ts). */
+export const SEND_TIMEOUT_MS = 5_000;
+
 /** Where a watcher's messages go. */
 export interface Channel {
   /** Never throws. */
@@ -27,7 +30,7 @@ export class TelegramChannel implements Channel {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ chat_id: chatId, text, link_preview_options: { is_disabled: true } }),
-        signal: AbortSignal.timeout(5_000),
+        signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
       });
       const body = (await res.json().catch(() => null)) as { ok?: unknown; description?: unknown } | null;
       if (res.ok && body?.ok === true) return { ok: true };

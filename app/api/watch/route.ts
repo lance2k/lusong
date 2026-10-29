@@ -9,4 +9,7 @@ function botUsername(): string | null {
   return ready && env.TELEGRAM_BOT_USERNAME ? env.TELEGRAM_BOT_USERNAME : null;
 }
 
+/** Room for the request body's 10 s, a switch-off's wait for a send under way (up to 10 s) and the store calls. */
+export const maxDuration = 30;
+
 export const POST = makeWatchHandler({ store: () => watchStoreFromEnv(), budget: budgetFromEnv, botUsername });

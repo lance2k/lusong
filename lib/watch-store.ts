@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { AnswerKind, Point } from "./answer";
 import type { WatchWindow } from "./watch-window";
 
@@ -64,7 +65,14 @@ export interface WatchStore {
   dropSending(id: string, gen: string): Promise<void>;
   /** Records the answer just sent and clears the one marked as sending, if the generation still matches. */
   commit(id: string, gen: string, last: SentAnswer): Promise<boolean>;
-  /** Deletes the trip, chat binding, history and any outstanding code. */
+  /**
+   * `SET NX PX`: the watcher's send lease, held by a tick from its last check that the watcher is on until its send is
+   * done, and by a switch-off while it deletes the watcher. A token when taken, null when someone else holds it.
+   */
+  takeSendLease(id: string, ttlMs: number): Promise<string | null>;
+  /** Frees the lease only if `token` still holds it, so a late release can't free someone else's. */
+  releaseSendLease(id: string, token: string): Promise<void>;
+  /** Deletes the trip, chat binding, history, send lease and any outstanding code. */
   remove(id: string): Promise<void>;
 }
 
@@ -114,6 +122,7 @@ export class MemoryWatchStore implements WatchStore {
   private records = new Map<string, { fields: Fields; expiresAt: number }>();
   private codes = new Map<string, { id: string; expiresAt: number }>();
   private index = { ids: new Set<string>(), expiresAt: 0 };
+  private leases = new Map<string, { token: string; expiresAt: number }>();
 
   constructor(opts: StoreOptions & { now?: () => number } = {}) {
     this.now = opts.now ?? Date.now;
@@ -155,6 +164,7 @@ export class MemoryWatchStore implements WatchStore {
     for (const [id, entry] of this.records) if (this.live(id)) out[`lusong:watch:w:${id}`] = entry.expiresAt - t;
     for (const [code, entry] of this.codes) if (this.liveCode(code)) out[`lusong:watch-code:${code}`] = entry.expiresAt - t;
     if (this.index.expiresAt > t && this.index.ids.size > 0) out["lusong:watch:index"] = this.index.expiresAt - t;
+    for (const [id, lease] of this.leases) if (lease.expiresAt > t) out[`lusong:watch:lease:${id}`] = lease.expiresAt - t;
     return out;
   }
 
@@ -237,11 +247,23 @@ export class MemoryWatchStore implements WatchStore {
     return true;
   }
 
+  async takeSendLease(id: string, ttlMs: number) {
+    if ((this.leases.get(id)?.expiresAt ?? 0) > this.now()) return null;
+    const token = randomUUID();
+    this.leases.set(id, { token, expiresAt: this.now() + ttlMs });
+    return token;
+  }
+
+  async releaseSendLease(id: string, token: string) {
+    if (this.leases.get(id)?.token === token) this.leases.delete(id);
+  }
+
   async remove(id: string) {
     const fields = this.live(id);
     if (fields?.code) this.codes.delete(fields.code);
     this.records.delete(id);
     this.index.ids.delete(id);
+    this.leases.delete(id);
   }
 }
 
@@ -340,11 +362,16 @@ redis.call('HDEL', KEYS[1], 'sending')
 return 1
 `;
 
-/** KEYS: record, index, code prefix. */
+const RELEASE_LEASE_SCRIPT = `
+if redis.call('GET', KEYS[1]) == ARGV[1] then redis.call('DEL', KEYS[1]) end
+return 1
+`;
+
+/** KEYS: record, index, code prefix, lease. */
 const REMOVE_SCRIPT = `
 local code = redis.call('HGET', KEYS[1], 'code')
 if code then redis.call('DEL', KEYS[3] .. code) end
-redis.call('DEL', KEYS[1])
+redis.call('DEL', KEYS[1], KEYS[4])
 redis.call('SREM', KEYS[2], ARGV[1])
 return 1
 `;
@@ -377,6 +404,9 @@ export class UpstashWatchStore implements WatchStore {
   }
   private get index() {
     return `${this.prefix}:watch:index`;
+  }
+  private lease(id: string) {
+    return `${this.prefix}:watch:lease:${id}`;
   }
   private get codePrefix() {
     return `${this.prefix}:watch-code:`;
@@ -454,8 +484,18 @@ export class UpstashWatchStore implements WatchStore {
     return (await this.evalScript(COMMIT_SCRIPT, [this.record(id)], [gen, last.kind, last.day])) === 1;
   }
 
+  async takeSendLease(id: string, ttlMs: number) {
+    const token = randomUUID();
+    const result = await this.evalScript("return redis.call('SET', KEYS[1], ARGV[1], 'NX', 'PX', ARGV[2])", [this.lease(id)], [token, ttlMs]);
+    return result === "OK" ? token : null;
+  }
+
+  async releaseSendLease(id: string, token: string) {
+    await this.evalScript(RELEASE_LEASE_SCRIPT, [this.lease(id)], [token]);
+  }
+
   async remove(id: string) {
-    await this.evalScript(REMOVE_SCRIPT, [this.record(id), this.index, this.codePrefix], [id]);
+    await this.evalScript(REMOVE_SCRIPT, [this.record(id), this.index, this.codePrefix, this.lease(id)], [id]);
   }
 }
 

@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { FakeChannel } from "../test/fake-channel";
 import type { AnswerKind } from "./answer";
-import { TelegramChannel } from "./channel";
+import { SEND_TIMEOUT_MS, TelegramChannel } from "./channel";
 import type { ScheduledCheck } from "./commute-handler";
 import { MemoryWatchStore, type NewWatcher, type WatchStore } from "./watch-store";
-import { runTick, type TickDeps } from "./watch-tick";
+import { runTick, SEND_LEASE_MS, type TickDeps } from "./watch-tick";
 
 const BANILAD = { lat: 10.346, lon: 123.911 };
 const IT_PARK = { lat: 10.3307, lon: 123.9058 };
@@ -252,6 +252,41 @@ describe("the watcher's tick (fake clock, fake channel)", () => {
     };
     await runTick(deps);
     expect(channel.sent.map((m) => m.text.split("\n")[1])).toEqual(["At 06:04 PHT: Go"]);
+  });
+
+  it("a watcher whose switch-off is under way sends nothing", async () => {
+    const { store, channel, answers, tick } = setup("2026-10-30T06:00:00+08:00");
+    const w = await linkedWatcher(store);
+    // The switch-off holds the watcher's send lease while it deletes it.
+    expect(await store.takeSendLease(w.id, 60_000)).not.toBeNull();
+    answers.push("go");
+    await tick();
+    expect(channel.sent).toEqual([]);
+  });
+
+  it("a send that couldn't end inside its lease isn't started, and the answer is sent at the next check", async () => {
+    const { clock, store, channel, answers, tick } = setup("2026-10-30T06:00:00+08:00");
+    await linkedWatcher(store);
+    // The store answers so slowly that less than Telegram's timeout is left of the lease when the send would start.
+    const realNow = Date.now.bind(Date);
+    let lag = 0;
+    const now = vi.spyOn(Date, "now").mockImplementation(() => realNow() + lag);
+    const markSending = store.markSending.bind(store);
+    store.markSending = async (...args) => {
+      lag += SEND_LEASE_MS - SEND_TIMEOUT_MS;
+      return markSending(...args);
+    };
+    try {
+      answers.push("go");
+      expect(await tick()).toMatchObject({ sent: 0, failed: 1 });
+      expect(channel.sent).toEqual([]);
+      store.markSending = markSending;
+      clock.set("2026-10-30T06:10:00+08:00");
+      answers.push("go");
+      expect(await tick()).toMatchObject({ sent: 1 });
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it("a store that can't be read sends nothing and says so", async () => {

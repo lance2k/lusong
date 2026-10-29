@@ -8,7 +8,7 @@ import { COMMUTE_RESERVE_MICROS, type ScheduledCheck } from "./commute-handler";
 import { readBody } from "./deadline";
 import { inMetroCebu } from "./metro-cebu";
 import { LINK_CODE_TTL_MS, watchStoreFromEnv, type WatchRecord, type WatchStore, type WatchTrip } from "./watch-store";
-import { runTick, type TickSummary } from "./watch-tick";
+import { runTick, switchOff, type TickSummary } from "./watch-tick";
 import { hhmm, parseWindow } from "./watch-window";
 
 /**
@@ -100,7 +100,8 @@ export function makeWatchHandler(deps: {
     if (parsed.action === "off") {
       if (!store) return fail(503, STORE_FAILED);
       try {
-        await store.remove(storeId(parsed.token));
+        // Waits for a message being sent to this watcher, so none arrives after the phone hears it is off.
+        await switchOff(store, storeId(parsed.token));
       } catch (err) {
         console.error("watch store failed on switch-off:", err instanceof Error ? err.message : err);
         return fail(503, "Lusong couldn't switch the watcher off. Try again in a minute; until then it is still on.");
