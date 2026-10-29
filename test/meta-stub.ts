@@ -5,7 +5,10 @@ import { vi } from "vitest";
 type Reply = () => Response | Promise<Response>;
 
 export const samEmpty = (): Reply => () =>
-  Response.json({ output: [{ content: [{ type: "output_text", text: "" }] }], usage: { images_processed: 1 } });
+  Response.json({ status: "completed", output: [{ content: [{ type: "output_text", text: "" }] }], usage: { images_processed: 1 } });
+/** A completed SAM reply with this segmentation text. */
+export const samText = (text: string): Reply => () =>
+  Response.json({ status: "completed", output: [{ status: "completed", content: [{ type: "output_text", text }] }], usage: { images_processed: 1 } });
 export const samFixture = (file: string): Reply => {
   const body = readFileSync(file, "utf8");
   return () => new Response(body, { status: 200 });

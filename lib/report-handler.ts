@@ -1,16 +1,19 @@
 import { createHash, randomUUID } from "node:crypto";
 import { admit } from "./admission";
 import { counts, REPORT_LIFETIME_MS, roleOf, type Point, type Role } from "./answer";
-import { budgetFromEnv, RESERVE_MICROS, type Budget } from "./budget";
+import { blobStoreFromEnv, type BlobStore } from "./blob-store";
+import { budgetFromEnv, PHOTO_REPORT_RESERVE_MICROS, RESERVE_MICROS, type Budget } from "./budget";
 import { checkPhoto } from "./check";
 import { clientIp } from "./check-handler";
 import { depthWords, MMDA_CREDIT, passabilityLine, phtTime } from "./commute-words";
 import { readCaptureTime } from "./exif";
 import { JpegError, sanitizeJpeg } from "./jpeg";
 import { locateSpot } from "./locate";
-import { MetaApiError } from "./meta";
+import { MetaApiError, segmentReply, type Meter } from "./meta";
 import { inMetroCebu } from "./metro-cebu";
 import { beforeDeadline, readBody } from "./deadline";
+import { PLATE_DETECTION_TRUSTED, publishPhoto, type PhotoInput, type PhotoOutcome, type SamCall } from "./photo-publish";
+import type { SamReply } from "./sam";
 import { reportStoreFromEnv, toReport, type ReportStore, type Saved, type StoredPhotoReport } from "./report-store";
 import type { ValhallaGate } from "./router";
 
@@ -34,9 +37,15 @@ export interface Timing {
   minReadMs: number;
   /** Below this much time to spare after the read, /locate is skipped and the report is stored without a way id. */
   locateMinMs: number;
+  /** Below this much time to spare after the read, no plate call is made and the report shows no photo. Photo
+   *  reports only; PHOTO_MIN_MS when unset. */
+  photoMinMs?: number;
 }
 
-export const TIMING: Timing = { budgetMs: 110_000, storeCallMs: 5_000, responseMs: 2_000, minReadMs: 20_000, locateMinMs: 3_000 };
+/** Enough for one SAM call's first attempt to answer, the blur and the blob put; less, and no plate call is made. */
+const PHOTO_MIN_MS = 8_000;
+
+export const TIMING: Timing = { budgetMs: 110_000, storeCallMs: 5_000, responseMs: 2_000, minReadMs: 20_000, locateMinMs: 3_000, photoMinMs: PHOTO_MIN_MS };
 export const REQUEST_BUDGET_MS = TIMING.budgetMs;
 
 /** A failed save, its release and the settle run one after another, then the response. */
@@ -118,6 +127,38 @@ function viewOf(report: StoredPhotoReport, now: Date, stored: boolean): ReportVi
   };
 }
 
+/**
+ * The blurred copy of a report photo, or no photo: one `license plate` call on the run's meter, then the blur and the
+ * put, all before `by`. A put that lands after `by` is deleted, since no record will point at it.
+ */
+async function photoFor(
+  jpeg: Uint8Array,
+  imageDataUrl: string,
+  persons: SamReply,
+  ctx: { meter: Meter; photos: BlobStore; trusted: boolean; blur?: PhotoInput["blur"]; by: number },
+): Promise<string | null> {
+  const plates: SamCall = await segmentReply(imageDataUrl, "license plate", ctx.by, ctx.meter).then(
+    (reply) => ({ ok: true, ...reply }),
+    () => ({ ok: false }),
+  );
+  const publishing = publishPhoto({
+    jpeg,
+    persons: { ok: true, ...persons },
+    plates,
+    store: ctx.photos,
+    blur: ctx.blur,
+    plateDetectionTrusted: ctx.trusted,
+    signal: AbortSignal.timeout(Math.max(0, ctx.by - Date.now())),
+  });
+  const outcome: PhotoOutcome | "late" = await beforeDeadline(publishing, ctx.by);
+  if (outcome === "late") {
+    void publishing.then((o) => (o.published ? ctx.photos.delete(o.url) : undefined)).catch(() => {});
+    return null;
+  }
+  if (!outcome.published) console.error("report photo not shown:", outcome.reason);
+  return outcome.published ? outcome.url : null;
+}
+
 export function makeReportHandler(deps: {
   gate: () => ValhallaGate;
   budget?: () => Budget;
@@ -125,8 +166,14 @@ export function makeReportHandler(deps: {
   fetch?: typeof fetch;
   now?: () => Date;
   timing?: Timing;
+  /** Where blurred photos go; null (BLOB_READ_WRITE_TOKEN unset) shows no photo and makes no plate call. */
+  photos?: () => BlobStore | null;
+  plateDetectionTrusted?: boolean;
+  blur?: PhotoInput["blur"];
 }) {
   const timing = deps.timing ?? TIMING;
+  const photoStore = deps.photos ?? blobStoreFromEnv;
+  const plateDetectionTrusted = deps.plateDetectionTrusted ?? PLATE_DETECTION_TRUSTED;
   const budget = deps.budget ?? budgetFromEnv;
   const reportStore = deps.store ?? reportStoreFromEnv;
   const doFetch: typeof fetch = (...args) => (deps.fetch ?? fetch)(...args);
@@ -206,7 +253,10 @@ export function makeReportHandler(deps: {
       await release(token, releaseBy);
       return fail(503, OUT_OF_TIME);
     }
-    const admitting = admit(budget(), { clientIp: clientIp(request), reserveMicros: RESERVE_MICROS, now: receivedAt });
+    // Publishing needs both a trusted plate finder and a store; without either, the plate call would buy nothing.
+    const photos = plateDetectionTrusted ? photoStore() : null;
+    const reserveMicros = photos ? PHOTO_REPORT_RESERVE_MICROS : RESERVE_MICROS;
+    const admitting = admit(budget(), { clientIp: clientIp(request), reserveMicros, now: receivedAt });
     const admission = await beforeDeadline(admitting, finishBy - timing.minReadMs);
     if (admission === "late") {
       // No Meta call will start, so a reservation that lands late is refunded in full.
@@ -234,8 +284,9 @@ export function makeReportHandler(deps: {
     try {
       const imageDataUrl = `data:image/jpeg;base64,${Buffer.from(jpeg.bytes).toString("base64")}`;
       let verdict: StoredPhotoReport["verdict"];
+      let personReply: SamReply;
       try {
-        verdict = (await checkPhoto(imageDataUrl, { width: jpeg.width, height: jpeg.height }, run.meter, { deadline: finishBy })).verdict;
+        ({ verdict, personReply } = await checkPhoto(imageDataUrl, { width: jpeg.width, height: jpeg.height }, run.meter, { deadline: finishBy }));
       } catch (err) {
         console.error("report read failed:", err instanceof MetaApiError ? err.message : err);
         await release(token, releaseBy);
@@ -243,10 +294,13 @@ export function makeReportHandler(deps: {
       }
       succeeded = true;
 
-      const spot =
-        finishBy - Date.now() >= timing.locateMinMs
-          ? await locateSpot(at, { fetch: doFetch, gate: deps.gate() }, { deadline: finishBy })
-          : { wayId: null, place: null };
+      const spare = finishBy - Date.now();
+      const [spot, photoUrl] = await Promise.all([
+        spare >= timing.locateMinMs ? locateSpot(at, { fetch: doFetch, gate: deps.gate() }, { deadline: finishBy }) : { wayId: null, place: null },
+        photos && spare >= (timing.photoMinMs ?? PHOTO_MIN_MS)
+          ? photoFor(jpeg.bytes, imageDataUrl, personReply, { meter: run.meter, photos, trusted: plateDetectionTrusted, blur: deps.blur, by: finishBy })
+          : null,
+      ]);
       const report: StoredPhotoReport = {
         id: randomUUID(),
         kind: "photo",
@@ -257,6 +311,10 @@ export function makeReportHandler(deps: {
         capturedAt: capturedAt?.toISOString() ?? null,
         verdict,
         photoHash,
+        ...(photoUrl ? { photoUrl } : {}),
+      };
+      const dropPhoto = () => {
+        if (photoUrl && photos) void photos.delete(photoUrl).catch(() => {});
       };
       let saved: Saved | "late";
       try {
@@ -266,9 +324,11 @@ export function makeReportHandler(deps: {
         saved = "late";
       }
       if (saved === "late") {
+        dropPhoto();
         await release(token, releaseBy);
         return Response.json({ duplicate: false, stored: false, report: viewOf(report, receivedAt, false) });
       }
+      if (saved.state !== "saved") dropPhoto();
       if (saved.state === "duplicate" && saved.report.kind === "photo") {
         return Response.json({ duplicate: true, stored: true, report: viewOf(saved.report, receivedAt, true) });
       }
