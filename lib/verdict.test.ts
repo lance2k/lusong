@@ -149,6 +149,26 @@ describe("decideVerdict", () => {
     }
   });
 
+  it("a tyre estimate that deepens an incomplete set below 66 cm leaves it 'unsure'; one reaching 66 cm makes it NPATV", () => {
+    const incompleteKnee = { readings: [person("P1", "knee")], ...flooded, readingsComplete: false };
+    const below = decideVerdict({ ...incompleteKnee, tyreEstimates: [{ label: "C1", interval: { low: 49, high: 60 } }] });
+    expect(below).toMatchObject({ rangeCm: { low: 38, high: 60 }, passability: "unsure", confidence: "low" });
+    expect(below.kind === "measured" && below.decidedBy.landmark).toBe("tyre_geometry");
+    const reaching = decideVerdict({ ...incompleteKnee, tyreEstimates: [{ label: "C1", interval: { low: 55, high: 67 } }] });
+    expect(reaching).toMatchObject({ rangeCm: { low: 38, high: 67 }, passability: "NPATV", confidence: "low" });
+  });
+
+  it("a tyre estimate widens the range, so confidence drops past the 25 and 40 cm widths", () => {
+    const three = [person("P1", "half_knee"), person("P2", "half_knee"), person("P3", "half_knee")];
+    const two = three.slice(0, 2);
+    const confidence = (readings: Reading[], low: number, high: number) => {
+      const v = decideVerdict({ readings, tyreEstimates: [{ label: "C1", interval: { low, high } }], ...flooded });
+      return v.kind === "measured" && v.confidence;
+    };
+    expect([confidence(three, 35, 43), confidence(three, 35, 44)]).toEqual(["high", "medium"]);
+    expect([confidence(two, 47, 58), confidence(two, 48, 59)]).toEqual(["medium", "low"]);
+  });
+
   it("says no flood only when SAM found no water and the model agrees", () => {
     expect(decideVerdict({ readings: [], readingsComplete: true, waterFound: false, modelSaysFlooded: false })).toEqual({ kind: "no_flood" });
     expect(decideVerdict({ readings: [], readingsComplete: true, waterFound: false, modelSaysFlooded: true })).toEqual({ kind: "cannot_measure" });
