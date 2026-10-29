@@ -5,6 +5,7 @@ import "leaflet/dist/leaflet.css";
 import "./map.css";
 import { useEffect, useRef } from "react";
 import type { Point } from "../lib/answer";
+import { METRO_CEBU_VIEW } from "./map-props";
 
 export interface MapPin {
   id: string;
@@ -23,13 +24,11 @@ export interface TripMapProps {
   route: Point[] | null;
   detour: Point[] | null;
   pins: MapPin[];
-  /** The map fits these points whenever they change; empty leaves the view where the commuter put it. */
-  frame: Point[];
+  /** The map fits these points whenever they change; null puts it back on the fixed Metro Cebu view. */
+  frame: Point[] | null;
   /** Given only while the commuter is tapping their own trip. */
   onTap?: (at: Point) => void;
 }
-
-const METRO_CEBU_CENTRE: L.LatLngTuple = [10.32, 123.91];
 
 const PIN_COLOURS: Record<MapPin["role"], string> = { block: "#dc2626", clear: "#059669", neutral: "#d97706" };
 /** Older than 3 hours: drawn, but not counted. */
@@ -103,7 +102,7 @@ export default function TripMap({ ends, route, detour, pins, frame, onTap }: Tri
   }, [onTap]);
 
   useEffect(() => {
-    const m = L.map(box.current!, { scrollWheelZoom: false }).setView(METRO_CEBU_CENTRE, 12);
+    const m = L.map(box.current!, { scrollWheelZoom: false }).setView(latLng(METRO_CEBU_VIEW.centre), METRO_CEBU_VIEW.zoom);
     L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
@@ -132,9 +131,9 @@ export default function TripMap({ ends, route, detour, pins, frame, onTap }: Tri
 
   const frameKey = JSON.stringify(frame);
   useEffect(() => {
-    const points: Point[] = JSON.parse(frameKey);
-    if (!map.current || points.length === 0) return;
-    if (points.length === 1) map.current.setView(latLng(points[0]), 15);
+    const points: Point[] | null = JSON.parse(frameKey);
+    if (!map.current) return;
+    if (!points) map.current.setView(latLng(METRO_CEBU_VIEW.centre), METRO_CEBU_VIEW.zoom);
     else map.current.fitBounds(L.latLngBounds(points.map(latLng)), { padding: [28, 28] });
   }, [frameKey]);
 
@@ -168,6 +167,7 @@ export default function TripMap({ ends, route, detour, pins, frame, onTap }: Tri
             </li>
           ))}
       </ul>
+      <p className="text-sm text-zinc-500">Map tiles come from OpenStreetMap&apos;s servers, which see the area you look at.</p>
     </div>
   );
 }
