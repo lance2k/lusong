@@ -77,19 +77,19 @@ describe("the meter reads each operation's usage", () => {
   it("a Muse Spark reply from the Responses API is metered by its tokens, not as SAM images", () => {
     const meter = new Meter();
     meter.reply("spark-responses", sparkResponse({ input_tokens: 2_000, output_tokens: 3_000, images_processed: 1 }));
-    expect(meter.usage()).toEqual({ samImages: 0, museInputTokens: 2_000, museOutputTokens: 3_000, complete: true });
+    expect(meter.usage()).toEqual({ samImages: 0, museInputTokens: 2_000, museOutputTokens: 3_000, transcribeSeconds: 0, complete: true });
   });
 
   it("a SAM reply is metered by its images, not its tokens", () => {
     const meter = new Meter();
     meter.reply("sam", { usage: { input_tokens: 0, output_tokens: 0, images_processed: 1 } });
-    expect(meter.usage()).toEqual({ samImages: 1, museInputTokens: 0, museOutputTokens: 0, complete: true });
+    expect(meter.usage()).toEqual({ samImages: 1, museInputTokens: 0, museOutputTokens: 0, transcribeSeconds: 0, complete: true });
   });
 
   it("a Muse Spark chat reply is metered by its prompt and completion tokens", () => {
     const meter = new Meter();
     meter.reply("spark-chat", { usage: { prompt_tokens: 2_000, completion_tokens: 3_000 } });
-    expect(meter.usage()).toEqual({ samImages: 0, museInputTokens: 2_000, museOutputTokens: 3_000, complete: true });
+    expect(meter.usage()).toEqual({ samImages: 0, museInputTokens: 2_000, museOutputTokens: 3_000, transcribeSeconds: 0, complete: true });
   });
 
   it("a Responses-API Spark reply without usage, or with only part of it, is not a complete count", () => {
@@ -103,7 +103,7 @@ describe("the meter reads each operation's usage", () => {
   it("the tokens a partial usage block does report still count, so an overrun is charged", () => {
     const meter = new Meter();
     meter.reply("spark-responses", sparkResponse({ input_tokens: 2_000 }));
-    expect(meter.usage()).toEqual({ samImages: 0, museInputTokens: 2_000, museOutputTokens: 0, complete: false });
+    expect(meter.usage()).toEqual({ samImages: 0, museInputTokens: 2_000, museOutputTokens: 0, transcribeSeconds: 0, complete: false });
   });
 
   it("a Spark reply that ran a tool with no price yet, such as web_search, is not a complete count", () => {
@@ -123,7 +123,21 @@ describe("the meter reads each operation's usage", () => {
     ]) {
       const meter = new Meter();
       meter.reply("spark-responses", body);
-      expect(meter.usage()).toEqual({ samImages: 0, museInputTokens: 2_000, museOutputTokens: 3_000, complete: false });
+      expect(meter.usage()).toEqual({ samImages: 0, museInputTokens: 2_000, museOutputTokens: 3_000, transcribeSeconds: 0, complete: false });
+    }
+  });
+
+  it("a Voice Transcribe reply is metered in whole seconds of audio, rounded down, and never as a complete count", () => {
+    const meter = new Meter();
+    meter.reply("voice-transcribe", { sessionId: "s", transcript: "baha", audioDurationMs: 12_999, turns: [] });
+    expect(meter.usage()).toEqual({ samImages: 0, museInputTokens: 0, museOutputTokens: 0, transcribeSeconds: 12, complete: false });
+  });
+
+  it("a Voice Transcribe reply without a duration counts no seconds and is not a complete count", () => {
+    for (const body of [{ transcript: "baha" }, { transcript: "baha", audioDurationMs: -5 }, { audioDurationMs: "12000" }, null]) {
+      const meter = new Meter();
+      meter.reply("voice-transcribe", body);
+      expect(meter.usage()).toMatchObject({ transcribeSeconds: 0, complete: false });
     }
   });
 

@@ -1,10 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
 import { MUSE_MAX_COMPLETION_TOKENS } from "./readings";
 
-/** Meta's list prices (docs, 2026-10): SAM $2.50 per 1,000 images; Muse Spark $1.25 / $4.25 per 1M tokens. */
+/**
+ * Meta's list prices (docs, 2026-10): SAM $2.50 per 1,000 images; Muse Spark $1.25 / $4.25 per 1M tokens; Voice
+ * Transcribe $0.18 per hour of audio, "metered in whole seconds" and "rounded down to whole seconds"
+ * (dev.meta.ai/docs/pricing-rate-limits, read 2026-10-30).
+ */
 const SAM_IMAGE_MICROS = 2_500;
-const MUSE_INPUT_MICROS_PER_TOKEN = 1.25;
-const MUSE_OUTPUT_MICROS_PER_TOKEN = 4.25;
+export const MUSE_INPUT_MICROS_PER_TOKEN = 1.25;
+export const MUSE_OUTPUT_MICROS_PER_TOKEN = 4.25;
+export const TRANSCRIBE_MICROS_PER_SECOND = 180_000 / 3_600;
 
 /** lib/meta.ts makes at most this many attempts per call; lib/check.ts makes 4 SAM calls and 1 Muse call. */
 const ATTEMPTS_PER_CALL = 2;
@@ -26,6 +31,8 @@ export interface MeteredUsage {
   samImages: number;
   museInputTokens: number;
   museOutputTokens: number;
+  /** Whole seconds of audio Voice Transcribe processed. */
+  transcribeSeconds: number;
   /** False when any call was retried, failed, or came back without a usage block: a billed attempt may
    *  be missing from the counts, so the counts are a floor, not the cost. */
   complete: boolean;
@@ -35,7 +42,8 @@ export function costMicros(usage: MeteredUsage): number {
   return Math.ceil(
     usage.samImages * SAM_IMAGE_MICROS +
       usage.museInputTokens * MUSE_INPUT_MICROS_PER_TOKEN +
-      usage.museOutputTokens * MUSE_OUTPUT_MICROS_PER_TOKEN,
+      usage.museOutputTokens * MUSE_OUTPUT_MICROS_PER_TOKEN +
+      usage.transcribeSeconds * TRANSCRIBE_MICROS_PER_SECOND,
   );
 }
 

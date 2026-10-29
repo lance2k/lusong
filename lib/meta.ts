@@ -32,10 +32,10 @@ function countOf(value: unknown): number | null {
 }
 
 /**
- * What a call was, which decides how its usage is read and priced. web_search and Voice Transcribe
- * join this list once a live probe has shown their usage shape and they have a price in lib/budget.ts.
+ * What a call was, which decides how its usage is read and priced. web_search joins this list once a
+ * live probe has shown its usage shape and it has a price in lib/budget.ts.
  */
-export type Operation = "sam" | "spark-chat" | "spark-responses";
+export type Operation = "sam" | "spark-chat" | "spark-responses" | "voice-transcribe";
 
 /** Responses-API output items billed only through the reply's tokens. Any other item, such as
  *  `web_search_call`, may carry a fee of its own that the meter cannot count yet. */
@@ -43,7 +43,7 @@ const TOKEN_PRICED_OUTPUT = new Set(["message", "reasoning", "function_call"]);
 
 type Usage = Record<string, unknown> | undefined;
 /** The counts a reply reports, as a floor; `complete` is false when a billed count may be missing. */
-type Reading = { samImages?: number; museInputTokens?: number; museOutputTokens?: number; complete: boolean };
+type Reading = { samImages?: number; museInputTokens?: number; museOutputTokens?: number; transcribeSeconds?: number; complete: boolean };
 
 function tokens(input: number | null, output: number | null): Reading {
   return { museInputTokens: input ?? 0, museOutputTokens: output ?? 0, complete: input !== null && output !== null };
@@ -65,6 +65,15 @@ const READERS: Record<Operation, (usage: Usage, body: unknown) => Reading> = {
     const unpriced = !unreadable && output.some((item: { type?: unknown } | null) => !TOKEN_PRICED_OUTPUT.has(String(item?.type)));
     return unreadable || unpriced ? { ...reading, complete: false } : reading;
   },
+  /**
+   * Billed per whole second of audio, rounded down; `audioDurationMs` is the reply's "Total audio duration processed"
+   * (dev.meta.ai/docs/api-reference/voice/schemas, read 2026-10-30). UNVERIFIED: no live call has shown that field or
+   * that it is what is billed, so the count is never complete and a settle keeps the whole reservation.
+   */
+  "voice-transcribe"(_usage, body) {
+    const ms = countOf((body as { audioDurationMs?: unknown } | null)?.audioDurationMs);
+    return { transcribeSeconds: ms === null ? 0 : Math.floor(ms / 1000), complete: false };
+  },
 };
 
 /** Adds up what one run's Meta calls report using, attempt by attempt, for the spending budget. */
@@ -72,6 +81,7 @@ export class Meter {
   private samImages = 0;
   private museInputTokens = 0;
   private museOutputTokens = 0;
+  private transcribeSeconds = 0;
   private complete = true;
 
   /** A failed attempt may still have been billed, and it is the only way a call gets retried. */
@@ -86,11 +96,12 @@ export class Meter {
     this.samImages += reading.samImages ?? 0;
     this.museInputTokens += reading.museInputTokens ?? 0;
     this.museOutputTokens += reading.museOutputTokens ?? 0;
+    this.transcribeSeconds += reading.transcribeSeconds ?? 0;
   }
 
   usage(): MeteredUsage {
-    const { samImages, museInputTokens, museOutputTokens, complete } = this;
-    return { samImages, museInputTokens, museOutputTokens, complete };
+    const { samImages, museInputTokens, museOutputTokens, transcribeSeconds, complete } = this;
+    return { samImages, museInputTokens, museOutputTokens, transcribeSeconds, complete };
   }
 }
 
