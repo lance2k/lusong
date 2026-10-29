@@ -4,9 +4,9 @@ import { useEffect, useRef, useState } from "react";
 // Relative, not "@/": vitest doesn't resolve the alias, and this page is rendered in its tests.
 import { BISAYA_VOICE_ENABLED, VOICE_LANGUAGES, type VoiceLanguage } from "../lib/voice-language";
 import type { VoiceReportView } from "../lib/voice-report-handler";
-import { encodeWav, MAX_VOICE_MS } from "../lib/wav";
+import { MAX_VOICE_MS } from "../lib/wav";
 import { phoneLocation } from "./phone-location";
-import { voiceNoteForm } from "./voice-recorder";
+import { startRecording, voiceNoteForm, type Recording } from "./voice-recorder";
 
 type State =
   | { step: "idle" }
@@ -15,86 +15,6 @@ type State =
   | { step: "sending" }
   | { step: "done"; report: VoiceReportView; duplicate: boolean }
   | { step: "failed"; message: string };
-
-/** Copies each block of microphone samples to the page. Loaded from a Blob URL, so it needs no file of its own. */
-const CAPTURE_PROCESSOR = `
-class LusongCapture extends AudioWorkletProcessor {
-  process(inputs) {
-    const channel = inputs[0] && inputs[0][0];
-    if (channel) this.port.postMessage(channel.slice(0));
-    return true;
-  }
-}
-registerProcessor("lusong-capture", LusongCapture);
-`;
-
-interface Recording {
-  /** Stops the microphone and returns the note as 16 kHz mono 16-bit WAV, cut at 30 s. */
-  stop(): Promise<Blob>;
-  cancel(): void;
-}
-
-/**
- * Raw samples from the microphone at the device's own rate, through an AudioWorklet where the browser has one and a
- * ScriptProcessor where it doesn't; resampled to 16 kHz only when the note is encoded.
- */
-async function startRecording(): Promise<Recording> {
-  // Created inside the tap, before any await, so Safari lets it start.
-  const ctx = new AudioContext();
-  let stream: MediaStream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
-  } catch (err) {
-    await ctx.close();
-    throw err;
-  }
-  await ctx.resume();
-  const source = ctx.createMediaStreamSource(stream);
-  // Silent output: Chrome only runs nodes that lead to the destination.
-  const mute = ctx.createGain();
-  mute.gain.value = 0;
-  mute.connect(ctx.destination);
-  const chunks: Float32Array[] = [];
-  let node: AudioNode;
-  if (ctx.audioWorklet) {
-    const url = URL.createObjectURL(new Blob([CAPTURE_PROCESSOR], { type: "application/javascript" }));
-    try {
-      await ctx.audioWorklet.addModule(url);
-    } finally {
-      URL.revokeObjectURL(url);
-    }
-    const worklet = new AudioWorkletNode(ctx, "lusong-capture", { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1 });
-    worklet.port.onmessage = (e: MessageEvent<Float32Array>) => chunks.push(e.data);
-    node = worklet;
-  } else {
-    const processor = ctx.createScriptProcessor(4096, 1, 1);
-    processor.onaudioprocess = (e) => chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
-    node = processor;
-  }
-  source.connect(node);
-  node.connect(mute);
-
-  const release = () => {
-    source.disconnect();
-    node.disconnect();
-    for (const track of stream.getTracks()) track.stop();
-    void ctx.close();
-  };
-  return {
-    async stop() {
-      const rate = ctx.sampleRate;
-      release();
-      const samples = new Float32Array(chunks.reduce((n, c) => n + c.length, 0));
-      let offset = 0;
-      for (const c of chunks) {
-        samples.set(c, offset);
-        offset += c.length;
-      }
-      return new Blob([encodeWav(samples, rate)], { type: "audio/wav" });
-    },
-    cancel: release,
-  };
-}
 
 const TONES = {
   block: "border-red-300 bg-red-50 text-red-900 dark:border-red-900 dark:bg-red-950 dark:text-red-100",
