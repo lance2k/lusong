@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Meter, MetaApiError, segment } from "./meta";
+import { Meter, MetaApiError, segment, transcribe } from "./meta";
 
 const ok = () => new Response(JSON.stringify({ output: [{ content: [{ type: "output_text", text: "" }] }] }), { status: 200 });
 const busy = (retryAfter?: string) =>
@@ -148,5 +148,60 @@ describe("the meter reads each operation's usage", () => {
       sparkResponse({ input_tokens: 10, output_tokens: 20 }, [{ type: "reasoning" }, { type: "function_call" }, { type: "message" }]),
     );
     expect(meter.usage().complete).toBe(true);
+  });
+});
+
+describe("Voice Transcribe takes the WAV as a multipart upload (dev.meta.ai/docs/api-reference/voice/transcribe)", () => {
+  const wav = new Uint8Array([82, 73, 70, 70, 1, 2, 3, 4]);
+  const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+
+  beforeEach(() => {
+    process.env.MODEL_API_KEY = "test-key";
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends the settings and the audio as two parts to /asr/transcribe, and returns the transcript", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(reply({ sessionId: "s1", transcript: "Baha sa Mabolo, hanggang tuhod.", audioDurationMs: 9_000, turns: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    const meter = new Meter();
+    const text = await transcribe(wav, { languages: ["Tagalog", "English"], deadline: Date.now() + 30_000, meter });
+    expect(text).toBe("Baha sa Mabolo, hanggang tuhod.");
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.meta.ai/v1/asr/transcribe");
+    expect(new Headers(init.headers).get("authorization")).toBe("Bearer test-key");
+    expect(new Headers(init.headers).get("accept")).toBe("application/json");
+    // fetch writes the multipart boundary itself.
+    expect(new Headers(init.headers).has("content-type")).toBe(false);
+    const form = init.body as FormData;
+    const settings = form.get("request") as Blob;
+    expect(settings.type).toBe("application/json");
+    expect(JSON.parse(await settings.text())).toEqual({
+      model: "muse-voice-transcribe-1.0",
+      audioEncoding: "WAV",
+      mode: "PUSH_TO_TALK",
+      languageBias: ["Tagalog", "English"],
+    });
+    const audio = form.get("audio") as File;
+    expect(audio.type).toBe("audio/wav");
+    expect(new Uint8Array(await audio.arrayBuffer())).toEqual(wav);
+    expect(meter.usage()).toMatchObject({ transcribeSeconds: 9, complete: false });
+  });
+
+  it("is tried once more after a 500, as the docs advise, with the same audio", async () => {
+    const ok = reply({ sessionId: "s1", transcript: "baha", audioDurationMs: 1_000, turns: [] });
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response("budget", { status: 500 })).mockResolvedValueOnce(ok);
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(transcribe(wav, { languages: ["Tagalog", "English"], deadline: Date.now() + 30_000, meter: new Meter() })).resolves.toBe("baha");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const audio = (fetchMock.mock.calls[1][1] as RequestInit).body as FormData;
+    expect(new Uint8Array(await (audio.get("audio") as File).arrayBuffer())).toEqual(wav);
+  });
+
+  it("a reply without a transcript is a failed call", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(reply({ sessionId: "s1", audioDurationMs: 1_000 })));
+    await expect(transcribe(wav, { languages: ["English"], deadline: Date.now() + 30_000, meter: new Meter() })).rejects.toBeInstanceOf(MetaApiError);
   });
 });

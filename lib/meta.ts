@@ -120,15 +120,24 @@ function retryWaitMs(res: Response): number {
   return Number.isFinite(at) ? Math.max(0, at - Date.now()) : DEFAULT_RETRY_WAIT_MS;
 }
 
+/** A JSON request body, or a multipart form (fetch writes its boundary). A FormData can be sent again on a retry. */
+type Payload = { json: unknown } | { form: FormData };
+
+function requestOf(payload: Payload): { headers: Record<string, string>; body: string | FormData } {
+  const auth = { Authorization: `Bearer ${apiKey()}` };
+  if ("form" in payload) return { headers: { ...auth, Accept: "application/json" }, body: payload.form };
+  return { headers: { ...auth, "Content-Type": "application/json" }, body: JSON.stringify(payload.json) };
+}
+
 /**
- * POSTs JSON with at most one retry, on 429, 5xx or a dropped connection. Every attempt and every
- * wait must fit before `deadline` (epoch ms); a Retry-After that does not fit fails the call rather
- * than retrying early. A timeout is not retried.
+ * POSTs with at most one retry, on 429, 5xx or a dropped connection, and returns the JSON reply. Every
+ * attempt and every wait must fit before `deadline` (epoch ms); a Retry-After that does not fit fails
+ * the call rather than retrying early. A timeout is not retried.
  */
 async function postJson(
   endpoint: string,
   operation: Operation,
-  body: unknown,
+  payload: Payload,
   attemptTimeoutMs: number,
   deadline: number,
   meter: Meter,
@@ -140,8 +149,7 @@ async function postJson(
     try {
       res = await fetch(`${BASE_URL}${endpoint}`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${apiKey()}`, "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        ...requestOf(payload),
         signal: AbortSignal.timeout(Math.min(attemptTimeoutMs, remaining)),
       });
     } catch (err) {
@@ -174,17 +182,19 @@ export async function segment(imageDataUrl: string, phrase: string, deadline: nu
     "/responses",
     "sam",
     {
-      model: "sam-3.1",
-      input: [
-        {
-          role: "user",
-          content: [
-            { type: "input_text", text: phrase },
-            { type: "input_image", image_url: imageDataUrl },
-          ],
-        },
-      ],
-      metadata: { mask_encoding: "one_bit" },
+      json: {
+        model: "sam-3.1",
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: phrase },
+              { type: "input_image", image_url: imageDataUrl },
+            ],
+          },
+        ],
+        metadata: { mask_encoding: "one_bit" },
+      },
     },
     20_000,
     deadline,
@@ -210,13 +220,15 @@ export async function chatJson(request: {
     "/chat/completions",
     "spark-chat",
     {
-      model: "muse-spark-1.3",
-      messages: request.messages,
-      response_format: {
-        type: "json_schema",
-        json_schema: { name: request.schemaName, schema: request.schema, strict: true },
+      json: {
+        model: "muse-spark-1.3",
+        messages: request.messages,
+        response_format: {
+          type: "json_schema",
+          json_schema: { name: request.schemaName, schema: request.schema, strict: true },
+        },
+        max_completion_tokens: request.maxCompletionTokens,
       },
-      max_completion_tokens: request.maxCompletionTokens,
     },
     // 8,000 output tokens at the slowest measured rate (156 tokens/s, 27 draws) take about 51 s.
     70_000,
@@ -227,4 +239,25 @@ export async function chatJson(request: {
   if (choice?.finish_reason === "length") throw new OutputCapError();
   if (!choice?.message?.content) throw new MetaApiError("/chat/completions", 0);
   return JSON.parse(choice.message.content);
+}
+
+/**
+ * Muse Voice Transcribe on one complete clip, as the buffered JSON reply (dev.meta.ai/docs/api-reference/voice/transcribe
+ * and /voice/schemas, read 2026-10-30): a `request` part of settings as JSON and an `audio` part holding the WAV. From
+ * the docs only; no live call has been made. UNVERIFIED: the reply's `transcript` field and the endpoint's behaviour on
+ * a 16 kHz clip, beyond the docs' word that 16 kHz is accepted and resampled.
+ */
+export async function transcribe(
+  wav: Uint8Array<ArrayBuffer>,
+  opts: { languages: readonly string[]; deadline: number; meter: Meter },
+): Promise<string> {
+  const form = new FormData();
+  const settings = { model: "muse-voice-transcribe-1.0", audioEncoding: "WAV", mode: "PUSH_TO_TALK", languageBias: opts.languages };
+  form.append("request", new Blob([JSON.stringify(settings)], { type: "application/json" }));
+  form.append("audio", new File([wav], "note.wav", { type: "audio/wav" }));
+  // UNVERIFIED: how long a 30 s clip takes; 20 s per attempt is a guess with room for one retry inside the deadline.
+  const reply = await postJson("/asr/transcribe", "voice-transcribe", { form }, 20_000, opts.deadline, opts.meter);
+  const body = reply as { transcript?: unknown } | null;
+  if (typeof body?.transcript !== "string") throw new MetaApiError("/asr/transcribe", 0);
+  return body.transcript;
 }
