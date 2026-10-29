@@ -31,7 +31,43 @@ function countOf(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
 }
 
-/** Adds up what one check's Meta calls report using, attempt by attempt, for the spending budget. */
+/**
+ * What a call was, which decides how its usage is read and priced. web_search and Voice Transcribe
+ * join this list once a live probe has shown their usage shape and they have a price in lib/budget.ts.
+ */
+export type Operation = "sam" | "spark-chat" | "spark-responses";
+
+/** Responses-API output items billed only through the reply's tokens. Any other item, such as
+ *  `web_search_call`, may carry a fee of its own that the meter cannot count yet. */
+const TOKEN_PRICED_OUTPUT = new Set(["message", "reasoning", "function_call"]);
+
+type Usage = Record<string, unknown> | undefined;
+/** The counts a reply reports, as a floor; `complete` is false when a billed count may be missing. */
+type Reading = { samImages?: number; museInputTokens?: number; museOutputTokens?: number; complete: boolean };
+
+function tokens(input: number | null, output: number | null): Reading {
+  return { museInputTokens: input ?? 0, museOutputTokens: output ?? 0, complete: input !== null && output !== null };
+}
+
+const READERS: Record<Operation, (usage: Usage, body: unknown) => Reading> = {
+  sam(usage) {
+    const images = countOf(usage?.images_processed);
+    return { samImages: images ?? 0, complete: images !== null };
+  },
+  "spark-chat"(usage) {
+    return tokens(countOf(usage?.prompt_tokens), countOf(usage?.completion_tokens));
+  },
+  // Field names and the `web_search_call` item type from a live probe, 2026-10-30, 3 calls.
+  "spark-responses"(usage, body) {
+    const reading = tokens(countOf(usage?.input_tokens), countOf(usage?.output_tokens));
+    const output = (body as { output?: unknown } | null)?.output;
+    const unreadable = !Array.isArray(output);
+    const unpriced = !unreadable && output.some((item: { type?: unknown } | null) => !TOKEN_PRICED_OUTPUT.has(String(item?.type)));
+    return unreadable || unpriced ? { ...reading, complete: false } : reading;
+  },
+};
+
+/** Adds up what one run's Meta calls report using, attempt by attempt, for the spending budget. */
 export class Meter {
   private samImages = 0;
   private museInputTokens = 0;
@@ -43,19 +79,13 @@ export class Meter {
     this.complete = false;
   }
 
-  reply(endpoint: string, body: unknown): void {
+  reply(operation: Operation, body: unknown): void {
     const usage = (body as { usage?: Record<string, unknown> } | null)?.usage;
-    if (endpoint === "/responses") {
-      const images = countOf(usage?.images_processed);
-      if (images === null) this.complete = false;
-      else this.samImages += images;
-      return;
-    }
-    const input = countOf(usage?.prompt_tokens);
-    const output = countOf(usage?.completion_tokens);
-    if (input === null || output === null) this.complete = false;
-    this.museInputTokens += input ?? 0;
-    this.museOutputTokens += output ?? 0;
+    const reading = READERS[operation](usage, body);
+    if (!reading.complete) this.complete = false;
+    this.samImages += reading.samImages ?? 0;
+    this.museInputTokens += reading.museInputTokens ?? 0;
+    this.museOutputTokens += reading.museOutputTokens ?? 0;
   }
 
   usage(): MeteredUsage {
@@ -86,6 +116,7 @@ function retryWaitMs(res: Response): number {
  */
 async function postJson(
   endpoint: string,
+  operation: Operation,
   body: unknown,
   attemptTimeoutMs: number,
   deadline: number,
@@ -113,7 +144,7 @@ async function postJson(
         meter.failedAttempt();
         throw new MetaApiError(endpoint, res.status);
       });
-      meter.reply(endpoint, reply);
+      meter.reply(operation, reply);
       return reply;
     }
     meter.failedAttempt();
@@ -130,6 +161,7 @@ async function postJson(
 export async function segment(imageDataUrl: string, phrase: string, deadline: number, meter: Meter): Promise<string> {
   const body = await postJson(
     "/responses",
+    "sam",
     {
       model: "sam-3.1",
       input: [
@@ -165,6 +197,7 @@ export async function chatJson(request: {
 }): Promise<unknown> {
   const body = (await postJson(
     "/chat/completions",
+    "spark-chat",
     {
       model: "muse-spark-1.3",
       messages: request.messages,

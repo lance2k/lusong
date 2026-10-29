@@ -1,17 +1,12 @@
-import { budgetFromEnv, type Budget, type RefusalReason } from "./budget";
+import { admit } from "./admission";
+import { budgetFromEnv, RESERVE_MICROS, type Budget } from "./budget";
 import { checkPhoto, forPage } from "./check";
 import { JpegError, sanitizeJpeg } from "./jpeg";
-import { Meter, MetaApiError } from "./meta";
+import { MetaApiError } from "./meta";
 
 const MAX_BYTES = 3 * 1024 * 1024;
 /** The page shrinks every photo to this; the budget's input-token bound was measured at this size. */
 const MAX_SIDE = 1600;
-
-const REFUSALS: Record<RefusalReason, { status: number; message: string }> = {
-  budget: { status: 503, message: "Today's free checks are used up. They start again at 8:00 a.m. Philippine time." },
-  ip: { status: 429, message: "You've used today's checks. They start again at 8:00 a.m. Philippine time." },
-  unavailable: { status: 503, message: "Lusong can't take new checks right now." },
-};
 
 function fail(status: number, message: string): Response {
   return Response.json({ error: message }, { status });
@@ -45,25 +40,21 @@ export function makeCheckHandler(deps: { budget: () => Budget; now?: () => Date 
     }
     if (jpeg.width > MAX_SIDE || jpeg.height > MAX_SIDE) return fail(413, "That photo is too large. Try a smaller one.");
 
-    const budget = deps.budget();
-    const admission = await budget.admit(clientIp(request), now());
-    if (!admission.ok) {
-      const refusal = REFUSALS[admission.reason];
-      return Response.json({ error: refusal.message, reason: admission.reason }, { status: refusal.status });
-    }
+    const admission = await admit(deps.budget(), { clientIp: clientIp(request), reserveMicros: RESERVE_MICROS, now: now() });
+    if (!admission.ok) return admission.response();
 
-    const meter = new Meter();
+    const { run } = admission;
     let succeeded = false;
     try {
       const imageDataUrl = `data:image/jpeg;base64,${Buffer.from(jpeg.bytes).toString("base64")}`;
-      const result = await checkPhoto(imageDataUrl, { width: jpeg.width, height: jpeg.height }, meter);
+      const result = await checkPhoto(imageDataUrl, { width: jpeg.width, height: jpeg.height }, run.meter);
       succeeded = true;
       return Response.json(forPage(result));
     } catch (err) {
       console.error("check failed:", err instanceof MetaApiError ? err.message : err);
       return fail(502, "The measuring service didn't answer. Try again in a minute.");
     } finally {
-      await budget.settle(admission, meter.usage(), succeeded);
+      await run.settle(succeeded);
     }
   };
 }
