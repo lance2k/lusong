@@ -1,5 +1,6 @@
 import Checker from "./checker";
 import CommuteCheck from "./commute";
+import ReportStreet from "./report";
 
 export default function Home() {
   return (
@@ -15,6 +16,16 @@ export default function Home() {
       <section className="space-y-4">
         <h2 className="text-xl font-semibold">Commute check (demo)</h2>
         <CommuteCheck />
+      </section>
+
+      <section className="space-y-4 border-t border-zinc-200 pt-6 dark:border-zinc-800">
+        <h2 className="text-xl font-semibold">Report a street</h2>
+        <p className="text-[15px] leading-snug text-zinc-700 dark:text-zinc-300">
+          On a flooded or a dry street right now? Send a photo with your location. Lusong reads the water and counts
+          your report for 3 hours in other riders&apos; commute checks. It keeps the place, the time and its reading,
+          not your photo.
+        </p>
+        <ReportStreet />
       </section>
 
       <section className="space-y-4 border-t border-zinc-200 pt-6 dark:border-zinc-800">
