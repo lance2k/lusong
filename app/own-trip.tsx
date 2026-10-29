@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Point } from "../lib/answer";
 import { createTripStore, startTrip, tapTrip, type TripDraft } from "./trip";
+import { WatcherPanel } from "./watcher-panel";
 
 function phone(): Storage | null {
   try {
@@ -87,8 +88,8 @@ export function OwnTripPanel({ own }: { own: OwnTrip }) {
         <>
           <p className="font-medium">Your trip is saved on this phone.</p>
           <p className="text-zinc-600 dark:text-zinc-400">
-            It leaves the phone only inside a check, and Lusong&apos;s server doesn&apos;t keep it. To change it, tap a new
-            home on the map.
+            It leaves the phone only inside a check, and Lusong&apos;s server doesn&apos;t keep it unless you switch on the
+            watcher below. To change it, tap a new home on the map.
           </p>
           {!own.kept && (
             <p className="text-amber-800 dark:text-amber-300">This phone wouldn&apos;t store it, so it lasts until you close the page.</p>
@@ -115,6 +116,7 @@ export function OwnTripPanel({ own }: { own: OwnTrip }) {
           Clear my trip
         </button>
       )}
+      <WatcherPanel trip={draft.step === "set" ? draft.trip : null} />
     </div>
   );
 }
