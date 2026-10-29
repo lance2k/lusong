@@ -1245,6 +1245,80 @@ describe("Muse Spark in a real check (#6 with #7)", () => {
     expect(meta.searchRequests).toHaveLength(1);
   });
 
+  describe("a stored voice report reaches the investigation as a photo report does (#9 with #7)", () => {
+    /** Words a speaker might say; the claim keeps them, but the page never shows a claim's own place. */
+    const SPOKEN = "sa may Cuenco duol sa simbahan";
+    const KNEE_DEEP = { place: SPOKEN, depth: "knee_or_deeper", passable: "not_said" } as const;
+
+    it("reports_near_route reads it as a voice report, and Muse Spark's pick of it is shown in Lusong's words, never the speaker's", async () => {
+      const store = new MemoryReportStore();
+      const voice = storedVoice(NO_ADVISORY, KNEE_DEEP);
+      await seedReport(store, voice);
+      const meta = fakeMeta({
+        search: [searchReply(closures)],
+        turns: [callsReply("resp_1", [{ name: "reports_near_route", args: { route: "plain" } }]), textReply("resp_2", pickOf("go_another_way", [voice.id, "detour"]))],
+      });
+      const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store, museOn());
+
+      const res = await handler(real());
+      const text = await res.text();
+
+      expect(res.status).toBe(200);
+      const body = JSON.parse(text);
+      expect(body.answer.kind).toBe("go_another_way");
+      const toolOutput = JSON.parse((meta.requests[1].input as { output: string }[])[0].output);
+      expect(toolOutput.reports).toEqual([expect.objectContaining({ id: voice.id, kind: "voice", says: "knee_deep_or_deeper", role: "block" })]);
+      expect(body.muse.pick).toEqual({
+        shown: true,
+        label: "Muse Spark picked this evidence",
+        sentences: ["A voice report 5 min ago on Governor M. Cuenco Avenue says the water is knee-deep or deeper.", "Nothing reported blocks the other way."],
+        note: null,
+      });
+      expect(text).not.toContain(SPOKEN);
+    });
+
+    it("a voice report off both judged routes is no more pickable than a photo there: its pick is not shown and the report isn't sent", async () => {
+      const store = new MemoryReportStore();
+      const flooded = storedReport(NO_ADVISORY);
+      const offRoute = { ...storedVoice(NO_ADVISORY, KNEE_DEEP), at: { lat: 10.2447, lon: 123.8494 }, place: "Tabunok Public Market" };
+      await seedReport(store, flooded);
+      await seedReport(store, offRoute);
+      fakeMeta({
+        search: [searchReply(closures)],
+        turns: [callsReply("resp_1", [{ name: "reports_near_route", args: { route: "plain" } }]), textReply("resp_2", pickOf("go_another_way", [flooded.id, offRoute.id, "detour"]))],
+      });
+      const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store, museOn());
+
+      const res = await handler(real());
+      const text = await res.text();
+
+      expect(res.status).toBe(200);
+      const body = JSON.parse(text);
+      expect(body.reports.map((r: { id: string }) => r.id)).toEqual([flooded.id]);
+      expect(body.muse.pick.shown).toBe(false);
+      expect(text).not.toContain("Tabunok Public Market");
+      expect(text).not.toContain(offRoute.id);
+      expect(text).not.toContain(SPOKEN);
+    });
+
+    it("an unsure voice report on the way is neutral evidence Muse Spark may pick: it blocks nothing, and is described as saying nothing Lusong could read", async () => {
+      const store = new MemoryReportStore();
+      const unsure = storedVoice(NO_ADVISORY, { place: null, depth: "not_said", passable: "not_said" });
+      await seedReport(store, unsure);
+      fakeMeta({
+        search: [searchReply(closures)],
+        turns: [callsReply("resp_1", [{ name: "reports_near_route", args: { route: "plain" } }]), textReply("resp_2", pickOf("no_one_knows", [unsure.id]))],
+      });
+      const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store, museOn());
+
+      const body = await (await handler(real())).json();
+
+      expect(body.answer.kind).toBe("no_one_knows");
+      expect(body.reports).toEqual([expect.objectContaining({ id: unsure.id, role: "neutral", passability: "A voice report that doesn't say whether vehicles can pass" })]);
+      expect(body.muse.pick.sentences).toEqual(["A voice report 5 min ago on Governor M. Cuenco Avenue says nothing Lusong could read about the water."]);
+    });
+  });
+
   describe("a stored report off both judged routes never reaches the rider, even when Muse Spark picks its id (review 🔴C-3)", () => {
     /** Tabunok, Talisay: kilometres from Banilad → IT Park and from its way around. */
     const OFF_ROUTE_PLACE = "Tabunok Public Market";
