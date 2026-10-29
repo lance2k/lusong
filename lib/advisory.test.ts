@@ -285,6 +285,11 @@ describe("an area is outside Cebu only when its usable geography says so; anythi
     { name: "description only, naming another province: 'Leyte'", edit: all(desc("Leyte"), noGeocode, noPolygon), state: "unreadable" },
     { name: "a polygon that can't be read and no geocode", edit: all(desc("Unknown"), noGeocode, polygon("<polygon>not a polygon</polygon>")), state: "unreadable" },
     { name: "a polygon of two points and no geocode", edit: all(desc("Unknown"), noGeocode, polygon("<polygon>10.3,123.8 10.4,123.9</polygon>")), state: "unreadable" },
+    {
+      name: "Bohol's polygon with its closing point dropped, so the ring isn't closed, and no geocode",
+      edit: all(desc("Unknown"), noGeocode, polygon(boholPolygon.replace(/\s+\S+<\/polygon>$/, "</polygon>"))),
+      state: "unreadable",
+    },
     { name: "a SAME geocode that isn't nine digits and no polygon", edit: all(desc("Unknown"), noPolygon, geocode("SAME", "07220")), state: "unreadable" },
     { name: "a geocode in a scheme Lusong doesn't know and no polygon", edit: all(desc("Unknown"), noPolygon, geocode("PSGC", "072200000")), state: "unreadable" },
     { name: "Bohol's geocode beside a polygon that can't be read", edit: all(desc("Unknown"), geocode("SAME", "071200000"), polygon("<polygon>garbled</polygon>")), state: "unreadable" },
