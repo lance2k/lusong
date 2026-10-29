@@ -1,4 +1,4 @@
-import { parseSamText, placeRaster, type Box, type PlacedRaster } from "../lib/sam";
+import { readSamReplyStrict, type Box, type PlacedRaster, type SamReply } from "../lib/sam";
 
 export interface LabelledPlate {
   box: Box;
@@ -51,13 +51,16 @@ export interface ProbeLabels {
   negatives: { file: string }[];
 }
 
-/** One SAM call: the fixture path under test/fixtures, the prompt, and the raw segmentation text back. */
-export type Segmenter = (file: string, prompt: string) => Promise<string>;
+/** One SAM call: the fixture path under test/fixtures, the prompt, and the reply back with Meta's status. */
+export type Segmenter = (file: string, prompt: string) => Promise<SamReply>;
 
 interface CallRecord {
   prompt: string;
+  /** False for a call that threw and for a reply the strict reader refused; either finds nothing. */
   ok: boolean;
   error?: string;
+  malformed?: boolean;
+  status?: string | null;
   masks: { box: Box; confidence?: number }[];
   plates: PlateScore["plates"];
   falseMasks: number;
@@ -89,7 +92,9 @@ function tally(scores: PlateScore[]): Tally {
 
 /**
  * Runs every prompt on every labelled photo, one call at a time, and scores each prompt alone and both together
- * (the union of their masks, which is what a blur would cover). A failed call finds nothing and is recorded.
+ * (the union of their masks, which is what a blur would cover). A failed call, or a reply the strict reader refuses
+ * (the same check publishing uses), finds nothing and is recorded as failed; calls that ran and calls that failed
+ * are counted apart, so a failed negative is never read as a clean one.
  */
 export async function runPlateProbe(labels: ProbeLabels, prompts: readonly string[], segment: Segmenter) {
   let samCalls = 0;
@@ -103,16 +108,23 @@ export async function runPlateProbe(labels: ProbeLabels, prompts: readonly strin
     const all: FoundMask[] = [];
     for (const prompt of prompts) {
       samCalls++;
-      let text: string;
+      let reply: SamReply;
       try {
-        text = await segment(photo.file, prompt);
+        reply = await segment(photo.file, prompt);
       } catch (err) {
         calls.push({ prompt, ok: false, error: err instanceof Error ? err.message : String(err), masks: [], ...scorePlates(photo.plates, []) });
         continue;
       }
-      const found = parseSamText(text).map((o) => ({ box: o.box, placed: placeRaster(o.mask), confidence: o.mask.confidence }));
+      const reading = readSamReplyStrict(reply);
+      if (!reading.ok) {
+        const missed = scorePlates(photo.plates, []);
+        calls.push({ prompt, ok: false, error: `malformed reply: ${reading.problem}`, malformed: true, status: reply.status, masks: [], ...missed, rawText: reply.text });
+        continue;
+      }
+      const found = reading.objects.map((o) => ({ box: o.box, placed: o.placed, confidence: o.mask.confidence }));
       all.push(...found);
-      calls.push({ prompt, ok: true, masks: found.map(({ box, confidence }) => ({ box, confidence })), ...scorePlates(photo.plates, found), rawText: text });
+      const masks = found.map(({ box, confidence }) => ({ box, confidence }));
+      calls.push({ prompt, ok: true, status: reply.status, masks, ...scorePlates(photo.plates, found), rawText: reply.text });
     }
     photos.push({ file: photo.file, kind: photo.kind, calls, both: scorePlates(photo.plates, all) });
   }
@@ -122,6 +134,13 @@ export async function runPlateProbe(labels: ProbeLabels, prompts: readonly strin
   const perPrompt = (pick: (p: PhotoRecord, prompt: string) => number) =>
     Object.fromEntries(prompts.map((prompt) => [prompt, photos.reduce((n, p) => n + pick(p, prompt), 0)]));
   const callOf = (p: PhotoRecord, prompt: string) => p.calls.find((c) => c.prompt === prompt)!;
+  const callCounts = (group: PhotoRecord[]) =>
+    Object.fromEntries(
+      prompts.map((prompt) => {
+        const succeeded = group.filter((p) => callOf(p, prompt).ok).length;
+        return [prompt, { succeeded, failed: group.length - succeeded }];
+      }),
+    );
   const surePlates = positives.flatMap((p) => p.both.plates).filter((p) => p.sure);
   const unsurePlates = positives.flatMap((p) => p.both.plates).filter((p) => !p.sure);
   return {
@@ -137,6 +156,9 @@ export async function runPlateProbe(labels: ProbeLabels, prompts: readonly strin
       negativePhotos: negatives.length,
       negativeFalseMasks: perPrompt((p, prompt) => (p.kind === "negative" ? callOf(p, prompt).falseMasks : 0)),
       positiveFalseMasks: perPrompt((p, prompt) => (p.kind === "positive" ? callOf(p, prompt).falseMasks : 0)),
+      positiveCalls: callCounts(positives),
+      negativeCalls: callCounts(negatives),
+      malformedReplies: photos.reduce((n, p) => n + p.calls.filter((c) => c.malformed).length, 0),
     },
   };
 }

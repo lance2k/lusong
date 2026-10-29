@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import { sanitizeJpeg } from "../lib/jpeg";
-import { Meter, segment } from "../lib/meta";
+import { Meter, segmentReply } from "../lib/meta";
 import { runPlateProbe, type ProbeLabels } from "./plate-recall";
 
 const PROMPTS = ["license plate", "number plate"];
@@ -19,7 +19,7 @@ it.skipIf(process.env.LUSONG_LIVE !== "1" || !process.env.LUSONG_LIVE_OUT)(
     const summary = await runPlateProbe(labels, PROMPTS, (file, prompt) => {
       const jpeg = sanitizeJpeg(new Uint8Array(readFileSync(`test/fixtures/${file}`)));
       const dataUrl = `data:image/jpeg;base64,${Buffer.from(jpeg.bytes).toString("base64")}`;
-      return segment(dataUrl, prompt, Date.now() + 60_000, meter);
+      return segmentReply(dataUrl, prompt, Date.now() + 60_000, meter);
     });
     const recorded = { recordedAt: new Date().toISOString(), prompts: PROMPTS, foundAt: "50% of the labelled box covered", usage: meter.usage(), ...summary };
     writeFileSync(process.env.LUSONG_LIVE_OUT!, JSON.stringify(recorded, null, 1));

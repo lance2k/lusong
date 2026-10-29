@@ -43,6 +43,8 @@ describe("scorePlates", () => {
 
 describe("runPlateProbe, offline on a recorded SAM reply", () => {
   const carText = outputTextOf(JSON.parse(readFileSync("test/fixtures/sam/shah-alam-2021__car.json", "utf8")));
+  const carCutBetweenObjects = carText.slice(0, carText.indexOf("|>,") + 2);
+  const completed = (text: string) => ({ text, status: "completed" });
   const labels = {
     positives: [{ file: "acceptance/shah-alam-2021.jpg", plates: [{ box: { left: 10, top: 880, right: 98, bottom: 925 }, sure: true }, { box: { left: 0, top: 0, right: 20, bottom: 20 }, sure: true }] }],
     negatives: [{ file: "acceptance/new-orleans-2018.jpg" }],
@@ -52,7 +54,7 @@ describe("runPlateProbe, offline on a recorded SAM reply", () => {
     const calls: string[] = [];
     const summary = await runPlateProbe(labels, ["license plate", "number plate"], async (file, prompt) => {
       calls.push(`${file}|${prompt}`);
-      return carText;
+      return completed(carText);
     });
     expect(calls).toEqual([
       "acceptance/shah-alam-2021.jpg|license plate",
@@ -73,7 +75,54 @@ describe("runPlateProbe, offline on a recorded SAM reply", () => {
       both: { surePlatesFound: 1, photosWithEverySurePlateFound: 0, photosWithAnyPlateFound: 1 },
       negativePhotos: 1,
       negativeFalseMasks: { "license plate": 12, "number plate": 12 },
+      negativeCalls: { "license plate": { succeeded: 1, failed: 0 }, "number plate": { succeeded: 1, failed: 0 } },
+      positiveCalls: { "license plate": { succeeded: 1, failed: 0 }, "number plate": { succeeded: 1, failed: 0 } },
+      malformedReplies: 0,
     });
+  });
+
+  it("records a positive reply cut between two objects as a malformed, failed call that finds no plate", async () => {
+    const summary = await runPlateProbe(labels, ["license plate"], async (file) =>
+      completed(file.startsWith("acceptance/shah") ? carCutBetweenObjects : ""),
+    );
+    expect(summary.photos[0].calls[0]).toMatchObject({ ok: false, error: "malformed reply: unterminated", masks: [], rawText: carCutBetweenObjects });
+    expect(summary.photos[0].both.plates.map((p) => p.found)).toEqual([false, false]);
+    expect(summary.result).toMatchObject({
+      both: { surePlatesFound: 0 },
+      positiveCalls: { "license plate": { succeeded: 0, failed: 1 } },
+      negativeCalls: { "license plate": { succeeded: 1, failed: 0 } },
+      malformedReplies: 1,
+    });
+  });
+
+  it("does not count a malformed negative reply as a clean zero-mask negative", async () => {
+    const summary = await runPlateProbe(labels, ["license plate"], async (file) =>
+      file.startsWith("acceptance/shah") ? completed(carText) : completed("No licence plate is visible.\n"),
+    );
+    expect(summary.photos[1].calls[0]).toMatchObject({ ok: false, error: "malformed reply: stray_text", masks: [] });
+    expect(summary.result).toMatchObject({
+      negativeFalseMasks: { "license plate": 0 },
+      negativeCalls: { "license plate": { succeeded: 0, failed: 1 } },
+      malformedReplies: 1,
+    });
+  });
+
+  it("counts a negative call that failed apart from the negatives that ran, so its zero false masks are not read as clean", async () => {
+    const summary = await runPlateProbe(labels, ["license plate"], async (file) => {
+      if (file.startsWith("acceptance/shah")) return completed(carText);
+      throw new Error("Meta API /responses failed with HTTP 500");
+    });
+    expect(summary.result).toMatchObject({
+      negativeFalseMasks: { "license plate": 0 },
+      negativeCalls: { "license plate": { succeeded: 0, failed: 1 } },
+      positiveCalls: { "license plate": { succeeded: 1, failed: 0 } },
+      malformedReplies: 0,
+    });
+  });
+
+  it("records a reply Meta did not mark completed as malformed, with its status", async () => {
+    const summary = await runPlateProbe(labels, ["license plate"], async () => ({ text: carText, status: "incomplete" }));
+    expect(summary.photos[0].calls[0]).toMatchObject({ ok: false, error: "malformed reply: not_completed", status: "incomplete" });
   });
 
   it("records a failed call and counts its photo as not found", async () => {
