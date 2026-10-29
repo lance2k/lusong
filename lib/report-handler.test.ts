@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { samEmpty, samFixture, serverError, stubMeta } from "../test/meta-stub";
+import sharp from "sharp";
+import { samEmpty, samFixture, samText, serverError, stubMeta } from "../test/meta-stub";
+import { MemoryBlobStore, type BlobStore } from "./blob-store";
 import { withExifTime } from "./exif";
-import { createBudget, MemoryBudgetStore, RESERVE_MICROS as R, type Budget } from "./budget";
+import { createBudget, MemoryBudgetStore, PHOTO_REPORT_RESERVE_MICROS, RESERVE_MICROS as R, type Budget, type MeteredUsage } from "./budget";
+import { sanitizeJpeg } from "./jpeg";
 import { makeReportHandler } from "./report-handler";
 import { MemoryReportStore, UpstashReportStore, type ReportStore, type StoredPhotoReport } from "./report-store";
 import { REPORT_LIFETIME_MS } from "./answer";
@@ -95,6 +98,9 @@ function handlerWith(
     settleDelayMs?: number;
     budget?: Budget;
     timing?: Parameters<typeof makeReportHandler>[0]["timing"];
+    photos?: BlobStore | null;
+    plateDetectionTrusted?: boolean;
+    blur?: Parameters<typeof makeReportHandler>[0]["blur"];
   } = {},
 ) {
   const budget =
@@ -112,6 +118,9 @@ function handlerWith(
     fetch: valhalla.fetch,
     now: opts.now ?? (() => NOW),
     timing: opts.timing,
+    photos: opts.photos === undefined ? undefined : () => opts.photos!,
+    plateDetectionTrusted: opts.plateDetectionTrusted,
+    blur: opts.blur,
   });
 }
 
@@ -158,6 +167,189 @@ describe.each(stores)("a photo report on the %s", (_name, makeStore) => {
     // The photo is 517 KB; what the store holds is the record, the id twice and the hash.
     expect(JSON.stringify(everything).length).toBeLessThan(1_000);
   });
+});
+
+/** SAM's recorded `person` reply on quiapo-1: 7 people. */
+const PERSONS = "test/fixtures/sam/quiapo-1__person.json";
+/** A plate on quiapo-1: a synthetic filled 8×3 mask scaled over an 80×30 box of the real photo. */
+const PLATE_BOX = { left: 600, top: 700, right: 680, bottom: 730 };
+const PLATE_REPLY = "<0f>0<|box;x1=600;y1=700;x2=679;y2=729;w=1280;h=960|><|mask;x=0;y=0;data=3,8,!!!!!'y:'9D:M|>\n";
+const PERSON_BOXES = [...readFileSync(PERSONS, "utf8").matchAll(/box;x1=(\d+);y1=(\d+);x2=(\d+);y2=(\d+)/g)].map((m) => ({
+  left: Number(m[1]),
+  top: Number(m[2]),
+  right: Number(m[3]) + 1,
+  bottom: Number(m[4]) + 1,
+}));
+
+/** Meta's calls by phrase, for counting how often each was paid for. */
+function phrasesOf(): string[] {
+  const fetchMock = globalThis.fetch as unknown as { mock: { calls: [string, RequestInit][] } };
+  return fetchMock.mock.calls
+    .filter(([url]) => String(url).endsWith("/responses"))
+    .map(([, init]) => JSON.parse(String(init.body)).input[0].content[0].text as string);
+}
+
+/** A budget that records what each admission reserved and what each settle was told was used. */
+function recordingBudget() {
+  const real = createBudget({ store: new MemoryBudgetStore(), budgetUsd: (10 * R) / 1e6, ipLimit: 10 });
+  const reserved: number[] = [];
+  const settled: MeteredUsage[] = [];
+  const budget: Budget = {
+    admit: async (ip, now, reserve) => (reserved.push(reserve ?? R), real.admit(ip, now, reserve)),
+    settle: async (admission, usage, ok) => (settled.push(usage), real.settle(admission, usage, ok)),
+  };
+  return { budget, reserved, settled };
+}
+
+const greyOf = async (jpeg: Uint8Array) => (await sharp(jpeg).greyscale().raw().toBuffer({ resolveWithObject: true })).data;
+function changedShare(before: Buffer, after: Buffer, box: { left: number; top: number; right: number; bottom: number }) {
+  let changed = 0;
+  let total = 0;
+  for (let y = box.top; y < box.bottom; y++) {
+    for (let x = box.left; x < box.right; x++) {
+      total++;
+      if (Math.abs(before[y * 1280 + x] - after[y * 1280 + x]) > 4) changed++;
+    }
+  }
+  return changed / total;
+}
+
+describe("a photo report's blurred photo (#8)", () => {
+  const sams = { person: samFixture(PERSONS), "license plate": samText(PLATE_REPLY) };
+
+  it("(criterion 2) with plate detection trusted, stores a photo with every person and plate mask blurred, saves only its URL, and never stores the original", async () => {
+    stubMeta({ sam: sams });
+    const reports = new MemoryReportStore();
+    const photos = new MemoryBlobStore();
+    const { budget, reserved, settled } = recordingBudget();
+    const res = await handlerWith({ store: reports, photos, plateDetectionTrusted: true, budget })(post("192.0.2.1"));
+    expect(res.status).toBe(200);
+    expect((await res.json()).stored).toBe(true);
+
+    // The depth reader's person reply is reused: person is paid for once, and the plate call is the one extra image.
+    expect(phrasesOf().sort()).toEqual(["car", "flood water", "license plate", "person", "tire"]);
+    expect(reserved).toEqual([PHOTO_REPORT_RESERVE_MICROS]);
+    expect(PHOTO_REPORT_RESERVE_MICROS).toBeGreaterThanOrEqual(R + 2 * 2_500);
+    expect(settled[0].samImages).toBe(5);
+
+    const record = JSON.parse(Object.entries(reports.dump()).find(([k]) => k.startsWith("lusong:report:"))![1] as string) as StoredPhotoReport;
+    expect(record.photoUrl).toMatch(/^https:\/\/blob\.test\/report-photos\/[0-9a-f-]{36}\.jpg$/);
+    expect(photos.size).toBe(1);
+    const stored = photos.get(record.photoUrl!)!;
+    for (const original of [photo, sanitizeJpeg(photo).bytes]) expect(Buffer.from(stored).equals(Buffer.from(original))).toBe(false);
+    // The record holds the URL, never photo bytes.
+    expect(JSON.stringify(reports.dump()).length).toBeLessThan(1_200);
+
+    const [before, after] = [await greyOf(photo), await greyOf(stored)];
+    expect(PERSON_BOXES).toHaveLength(7);
+    for (const box of [...PERSON_BOXES, PLATE_BOX]) expect(changedShare(before, after, box), JSON.stringify(box)).toBeGreaterThan(0.3);
+  });
+
+  it("keeps every photo hidden while plate detection is untrusted, the default: no plate call, no store, no URL", async () => {
+    stubMeta({ sam: sams });
+    const reports = new MemoryReportStore();
+    const photos = new MemoryBlobStore();
+    const { budget, reserved } = recordingBudget();
+    expect((await handlerWith({ store: reports, photos, budget })(post("192.0.2.1"))).status).toBe(200);
+    expect(phrasesOf()).not.toContain("license plate");
+    expect(reserved).toEqual([R]);
+    expect(photos.size).toBe(0);
+    expect(JSON.stringify(reports.dump())).not.toContain("photoUrl");
+  });
+
+  it("with plate detection trusted but no blob store (BLOB_READ_WRITE_TOKEN unset), makes no plate call and stores no URL", async () => {
+    stubMeta({ sam: sams });
+    const reports = new MemoryReportStore();
+    expect((await handlerWith({ store: reports, photos: null, plateDetectionTrusted: true })(post("192.0.2.1"))).status).toBe(200);
+    expect(phrasesOf()).not.toContain("license plate");
+    expect(JSON.stringify(reports.dump())).not.toContain("photoUrl");
+  });
+
+  it.each([
+    ["the blur fails", { blur: async () => Promise.reject(new Error("decode failed")) }, sams],
+    ["the blob store refuses the put", { photos: new MemoryBlobStore({ failPuts: true }) }, sams],
+    ["the plate call fails", {}, { ...sams, "license plate": serverError() }],
+    ["the plate reply is cut off", {}, { ...sams, "license plate": samText(PLATE_REPLY.slice(0, 60)) }],
+  ] as const)("(criterion 3) when %s, the report keeps its pin and reading with no photo", async (_case, opts, sam) => {
+    stubMeta({ sam });
+    const reports = new MemoryReportStore();
+    const photos = "photos" in opts ? opts.photos : new MemoryBlobStore();
+    const res = await handlerWith({ store: reports, plateDetectionTrusted: true, ...opts, photos })(post("192.0.2.1"));
+    expect(res.status).toBe(200);
+    expect((await res.json()).stored).toBe(true);
+    const record = JSON.parse(Object.entries(reports.dump()).find(([k]) => k.startsWith("lusong:report:"))![1] as string);
+    // The stubbed Muse reply reads none of the 7 people, so the reading is cannot_measure, the same as with no photo.
+    expect(record).toMatchObject({ kind: "photo", at: PIN, wayId: 1116002958, verdict: { kind: "cannot_measure" } });
+    expect(record.photoUrl).toBeUndefined();
+    expect(photos.size).toBe(0);
+  });
+});
+
+describe.each(stores)("a blurred photo whose save outcome is unknown at its deadline, on the %s (🟡T8-5)", (_name, makeStore) => {
+  const sams = { person: samFixture(PERSONS), "license plate": samText(PLATE_REPLY) };
+  const timing = { budgetMs: 3_000, storeCallMs: 150, responseMs: 150, minReadMs: 400, locateMinMs: 800, photoMinMs: 300 };
+  /** The save's deadline falls inside the request budget, so a save held this long always answers after it. */
+  const PAST_DEADLINE_MS = timing.budgetMs;
+
+  /** Every stored report's photo URL, each with whether its blob is still there. */
+  async function photoRefs(store: ReportStore, photos: MemoryBlobStore) {
+    return (await store.recent(NOW)).flatMap((r) => ("photoUrl" in r && r.photoUrl ? [{ url: r.photoUrl, blobKept: photos.get(r.photoUrl) !== undefined }] : []));
+  }
+
+  async function send(arrange: (store: ReportStore, save: ReportStore["save"]) => void) {
+    stubMeta({ sam: sams });
+    const { store } = makeStore();
+    const photos = new MemoryBlobStore();
+    const put = vi.spyOn(photos, "put");
+    arrange(store, store.save.bind(store));
+    const res = await handlerWith({ store, photos, plateDetectionTrusted: true, timing })(post("192.0.2.1"));
+    expect(res.status).toBe(200);
+    expect((await res.json()).stored).toBe(false);
+    // A blurred photo was made, so what happens to it afterwards is what each case checks.
+    expect(put).toHaveBeenCalledTimes(1);
+    // Whatever the pending save does next has landed by now.
+    await sleep(PAST_DEADLINE_MS + 600);
+    return { store, photos };
+  }
+
+  it.each([
+    ["it commits and then answers late", (save: ReportStore["save"]): ReportStore["save"] => async (r, t) => {
+      const saved = await save(r, t);
+      await sleep(PAST_DEADLINE_MS);
+      return saved;
+    }],
+    ["it commits and its answer is lost", (save: ReportStore["save"]): ReportStore["save"] => async (r, t) => {
+      await save(r, t);
+      throw new Error("Upstash connection reset");
+    }],
+    ["it commits and never answers", (save: ReportStore["save"]): ReportStore["save"] => async (r, t) => {
+      await save(r, t);
+      return new Promise(() => {});
+    }],
+  ])("when %s, the stored report's photo is kept", async (_case, slowSave) => {
+    const { store, photos } = await send((s, save) => {
+      s.save = slowSave(save);
+    });
+    expect(await photoRefs(store, photos)).toEqual([{ url: expect.any(String), blobKept: true }]);
+  }, 20_000);
+
+  it("when it lands after its deadline but before the claim is freed, it commits and the stored report's photo is kept", async () => {
+    const { store, photos } = await send((s, save) => {
+      // The release starts at the save's deadline, after the save started, so the save lands first.
+      s.save = async (r, t) => (await sleep(PAST_DEADLINE_MS), save(r, t));
+      const release = s.releasePhoto.bind(s);
+      s.releasePhoto = async (hash, token) => (await sleep(PAST_DEADLINE_MS), release(hash, token));
+    });
+    expect(await photoRefs(store, photos)).toEqual([{ url: expect.any(String), blobKept: true }]);
+  }, 20_000);
+
+  it("when it lands after the claim is freed, the store writes nothing and the photo is deleted", async () => {
+    const { store, photos } = await send((s, save) => {
+      s.save = async (r, t) => (await sleep(PAST_DEADLINE_MS), save(r, t));
+    });
+    expect(await store.recent(NOW)).toEqual([]);
+    expect(photos.size).toBe(0);
+  }, 20_000);
 });
 
 describe("the reporter", () => {
@@ -406,6 +598,45 @@ describe("one deadline for the whole request (route maxDuration 120 s)", () => {
     expect(Date.now() - started).toBeLessThan(timing.budgetMs);
     expect(valhalla.requests).toHaveLength(1);
     expect(await store.recent(NOW)).toEqual([expect.objectContaining({ wayId: null })]);
+  }, 20_000);
+
+  /** Meta faked as in stubMeta, except that the plate call never answers until its own timeout aborts it. */
+  function plateCallHangs() {
+    stubMeta({ sam: { person: samFixture(PERSONS) } });
+    const stubbed = globalThis.fetch;
+    const phrases: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        const phrase = String(url).endsWith("/responses") ? (JSON.parse(String(init.body)).input[0].content[0].text as string) : null;
+        if (phrase) phrases.push(phrase);
+        return phrase === "license plate" ? hangs(init.signal) : stubbed(url, init);
+      }),
+    );
+    return phrases;
+  }
+
+  it("a plate call that never answers is cut off in time: stored with its reading, no photo, answered within the budget", async () => {
+    const phrases = plateCallHangs();
+    const store = new MemoryReportStore();
+    const photos = new MemoryBlobStore();
+    const started = Date.now();
+    const res = await handlerWith({ store, photos, plateDetectionTrusted: true, timing: { ...timing, photoMinMs: 300 } })(post("192.0.2.1"));
+    expect(res.status).toBe(200);
+    expect(Date.now() - started).toBeLessThan(timing.budgetMs);
+    expect(phrases).toContain("license plate");
+    expect(await store.recent(NOW)).toEqual([expect.objectContaining({ kind: "photo", wayId: 1116002958 })]);
+    expect((await store.recent(NOW))[0]).not.toHaveProperty("photoUrl");
+    expect(photos.size).toBe(0);
+  }, 20_000);
+
+  it("a read that leaves too little time for the plate call: no plate call, stored with no photo", async () => {
+    const phrases = plateCallHangs();
+    const store = new MemoryReportStore();
+    const res = await handlerWith({ store, photos: new MemoryBlobStore(), plateDetectionTrusted: true, timing: { ...timing, photoMinMs: timing.budgetMs } })(post("192.0.2.1"));
+    expect(res.status).toBe(200);
+    expect(phrases).not.toContain("license plate");
+    expect((await store.recent(NOW))[0]).not.toHaveProperty("photoUrl");
   }, 20_000);
 
   /** A multipart body that sends its first bytes and then nothing more, as a stalled upload would. */

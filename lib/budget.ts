@@ -28,6 +28,9 @@ export const RESERVE_MICROS =
       MUSE_INPUT_TOKEN_BOUND * MUSE_INPUT_MICROS_PER_TOKEN + MUSE_MAX_COMPLETION_TOKENS * MUSE_OUTPUT_MICROS_PER_TOKEN,
     );
 
+/** A photo report that may publish its photo adds one SAM call, for plates; the depth reader's person reply is reused. */
+export const PHOTO_REPORT_RESERVE_MICROS = RESERVE_MICROS + ATTEMPTS_PER_CALL * SAM_IMAGE_MICROS;
+
 /** What one check's Meta calls cost, as metered by lib/meta.ts. */
 export interface MeteredUsage {
   samImages: number;

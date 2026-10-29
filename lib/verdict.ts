@@ -133,7 +133,7 @@ export function gaugeRowsFor(interval: Interval): { within: GaugeRow[]; below: G
 
 export function decideVerdict(input: {
   readings: readonly Reading[];
-  /** False when the model skipped, duplicated or mis-kinded any object it was asked about. */
+  /** False when any SAM call did not complete, or the model skipped, duplicated or mis-kinded any object it was asked about. */
   readingsComplete: boolean;
   waterFound: boolean;
   modelSaysFlooded: boolean;

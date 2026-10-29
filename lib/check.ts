@@ -1,7 +1,7 @@
-import { OutputCapError, segment, type Meter } from "./meta";
+import { OutputCapError, segmentReply, type Meter } from "./meta";
 import { maskToPlacedPath, waterlineY, type PlacedPath } from "./overlay";
 import { readWaterlines, type LabelledObject } from "./readings";
-import { parseSamText, placeRaster, type Box, type SamObject } from "./sam";
+import { parseSamText, placeRaster, type Box, type SamObject, type SamReply } from "./sam";
 import { tyreEstimates } from "./tyre";
 import {
   decideVerdict,
@@ -42,6 +42,8 @@ export interface CheckResult {
   readingProblems: string[];
   caveats: string;
   timingsMs: { segmentation: number; readings: number; total: number };
+  /** SAM's whole `person` reply, every mask in it and Meta's status, for the privacy blur. Never sent to a page. */
+  personReply: SamReply;
 }
 
 /** What the page receives. Nothing the model wrote as free text, so it cannot put "passable" on the page. */
@@ -97,11 +99,14 @@ export async function checkPhoto(
   const deadline = Math.min(started + PIPELINE_BUDGET_MS, opts.deadline ?? Infinity);
   // Settle every call before failing, so the meter holds what the others cost.
   const settled = await Promise.allSettled(
-    ["flood water", "person", "car", "tire"].map((phrase) => segment(imageDataUrl, phrase, deadline, meter)),
+    ["flood water", "person", "car", "tire"].map((phrase) => segmentReply(imageDataUrl, phrase, deadline, meter)),
   );
   const failed = settled.find((s) => s.status === "rejected");
   if (failed) throw failed.reason;
-  const [waterText, personText, carText, tyreText] = settled.map((s) => (s as PromiseFulfilledResult<string>).value);
+  const replies = settled.map((s) => (s as PromiseFulfilledResult<SamReply>).value);
+  const [waterText, personText, carText, tyreText] = replies.map((r) => r.text);
+  // A failed or malformed reply has empty text that would parse as "found nothing", so it must not count as complete.
+  const samComplete = replies.every((r) => r.status === "completed");
   const segmented = Date.now();
 
   const water = parseSamText(waterText);
@@ -133,7 +138,7 @@ export async function checkPhoto(
     ? { kind: "cannot_measure", reason: "too_crowded" }
     : decideVerdict({
         readings: model?.readings ?? [],
-        readingsComplete: (model?.problems.length ?? 0) === 0,
+        readingsComplete: samComplete && (model?.problems.length ?? 0) === 0,
         waterFound: water.length > 0,
         modelSaysFlooded: model?.modelSaysFlooded ?? false,
         tyreEstimates: tyres,
@@ -161,5 +166,6 @@ export async function checkPhoto(
     readingProblems: model?.problems ?? [],
     caveats: model?.caveats ?? "",
     timingsMs: { segmentation: segmented - started, readings: read - segmented, total: read - started },
+    personReply: replies[1],
   };
 }

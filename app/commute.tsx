@@ -9,6 +9,7 @@ import { MusePick, WebFindings, type PageMuse } from "./commute-muse";
 import { commuteReducer, initialCommuteState, OWN_TRIP, type CommuteInputs, type CommuteState } from "./commute-state";
 import { OwnTripPanel, useOwnTrip } from "./own-trip";
 import { tripMapProps } from "./map-props";
+import { ReportEvidence, type PageReport } from "./report-evidence";
 import { checkRequest } from "./trip";
 
 // Leaflet needs the browser's window, so the map is never rendered on the server.
@@ -16,25 +17,6 @@ const TripMap = dynamic(() => import("./map"), {
   ssr: false,
   loading: () => <div className="h-72 w-full rounded-2xl bg-zinc-100 dark:bg-zinc-900" />,
 });
-
-interface PageReport {
-  id: string;
-  sample: boolean;
-  place: string;
-  at: Point;
-  age: string;
-  depth: string | null;
-  passability: string | null;
-  origin: string;
-  credit: string;
-  sourceUrl: string;
-  counts: boolean;
-  onRoute: boolean;
-  onDetour: boolean;
-  /** Every judged route the report lies on, the ways around the page doesn't show included. */
-  routes: string[];
-  role: "clear" | "block" | "neutral";
-}
 
 interface PageAdvisory {
   state: "active" | "none" | "unreadable";
@@ -73,12 +55,6 @@ const TONES: Record<AnswerKind, string> = {
   go_another_way: "bg-emerald-700 text-white",
   wait: "bg-red-600 text-white",
   no_one_knows: "bg-amber-500 text-black",
-};
-
-const ROLE_WORDS: Record<PageReport["role"], string> = {
-  block: "Marks the spot not passable",
-  neutral: "Neither clears nor blocks the spot",
-  clear: "Shows the spot clear",
 };
 
 const TRIP_IDS = Object.keys(DEMO_TRIPS) as DemoTripId[];
@@ -149,31 +125,6 @@ function Advisory({ advisory }: { advisory: PageAdvisory }) {
   );
 }
 
-function Report({ r }: { r: PageReport }) {
-  const where = r.onRoute ? "" : r.onDetour ? "On the other way. " : r.routes.length > 0 ? "On a way around Lusong checked and isn't showing. " : null;
-  const status = !r.counts ? "Older than 3 hours: shown, not counted." : where === null ? "Not on your route." : where + ROLE_WORDS[r.role] + ".";
-  return (
-    <li className="space-y-1 px-4 py-3">
-      <p className="flex flex-wrap items-center gap-2">
-        {r.sample && <span className="rounded bg-zinc-200 px-1.5 py-0.5 text-xs font-semibold uppercase dark:bg-zinc-700">Sample</span>}
-        <span className="font-medium">{r.place}</span>
-        <span className="text-zinc-500">{r.age}</span>
-      </p>
-      {r.depth && <p>Water {r.depth}.</p>}
-      {r.passability && <p>{r.passability}.</p>}
-      <p className="text-zinc-600 dark:text-zinc-400">{status}</p>
-      {r.sample && (
-        <p className="text-sm text-zinc-500">
-          Sample, not a report from this street. Where the photo was really taken: {r.origin}. {r.credit}.{" "}
-          <a className="text-sky-700 underline dark:text-sky-400" href={r.sourceUrl}>
-            See the photo
-          </a>
-        </p>
-      )}
-    </li>
-  );
-}
-
 function inputWords(inputs: CommuteInputs): string {
   const rain = inputs.rainingHere ? "raining here" : "no rain tap";
   if (inputs.trip === OWN_TRIP) return `Your trip · ${rain}`;
@@ -210,7 +161,7 @@ function ResultView({ result, checkedFor }: { result: CommuteResult; checkedFor:
         ) : (
           <ul className="divide-y divide-zinc-200 rounded-2xl border border-zinc-200 text-[15px] dark:divide-zinc-800 dark:border-zinc-800">
             {result.reports.map((r) => (
-              <Report key={r.id} r={r} />
+              <ReportEvidence key={r.id} r={r} />
             ))}
           </ul>
         )}

@@ -1,5 +1,5 @@
 import type { MeteredUsage } from "./budget";
-import { outputTextOf } from "./sam";
+import { samReplyOf, type SamReply } from "./sam";
 
 const BASE_URL = "https://api.meta.ai/v1";
 const DEFAULT_RETRY_WAIT_MS = 500;
@@ -201,6 +201,11 @@ async function postJson(
 
 /** One SAM 3.1 concept prompt on one image; returns the raw segmentation text. */
 export async function segment(imageDataUrl: string, phrase: string, deadline: number, meter: Meter): Promise<string> {
+  return (await segmentReply(imageDataUrl, phrase, deadline, meter)).text;
+}
+
+/** One SAM 3.1 concept prompt on one image; returns the segmentation text with Meta's status for the response. */
+export async function segmentReply(imageDataUrl: string, phrase: string, deadline: number, meter: Meter): Promise<SamReply> {
   const body = await postJson(
     "/responses",
     "sam",
@@ -223,7 +228,7 @@ export async function segment(imageDataUrl: string, phrase: string, deadline: nu
     deadline,
     meter,
   );
-  return outputTextOf(body as Parameters<typeof outputTextOf>[0]);
+  return samReplyOf(body);
 }
 
 interface ChatCompletion {

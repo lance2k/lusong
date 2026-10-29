@@ -631,6 +631,25 @@ describe("a real commute check (#6)", () => {
     expect(body.detour).not.toBeNull();
   });
 
+  it("a report with a published blurred photo carries its URL to the page; one without carries none (#8)", async () => {
+    const store = new MemoryReportStore();
+    const shown = storedReport(NO_ADVISORY, { photoUrl: "https://blob.test/report-photos/a.jpg" });
+    const hidden = storedReport(NO_ADVISORY, { verdict: { kind: "no_flood" } });
+    await seedReport(store, shown);
+    await seedReport(store, hidden);
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
+    const body = await (await handler(real())).json();
+    const byId = Object.fromEntries(body.reports.map((r: { id: string; photoUrl: string | null }) => [r.id, r.photoUrl]));
+    expect(byId).toEqual({ [shown.id]: "https://blob.test/report-photos/a.jpg", [hidden.id]: null });
+  });
+
+  it("a demo check's sample reports carry no blurred photo URL (#8)", async () => {
+    const { handler } = handlerAt(NO_ADVISORY);
+    const body = await (await handler(demo("banilad-itpark", "flooded"))).json();
+    expect(body.reports.length).toBeGreaterThan(0);
+    expect(body.reports.every((r: { photoUrl: unknown }) => r.photoUrl === null)).toBe(true);
+  });
+
   it("with no stored reports, the same trip is Go: no sample stands in for a report", async () => {
     const { handler } = handlerAt(NO_ADVISORY);
     const body = await (await handler(real())).json();
@@ -648,6 +667,18 @@ describe("a real commute check (#6)", () => {
     const body = await (await handler(real())).json();
     expect(body.reports.map((r: { id: string }) => r.id)).toEqual([near.id]);
     expect(JSON.stringify(body)).not.toContain("123.9147");
+  });
+
+  it("a report off the trip with a published blurred photo sends neither its spot nor its photo URL (#8)", async () => {
+    const store = new MemoryReportStore();
+    const far = storedReport(NO_ADVISORY, { at: { lat: 10.3143, lon: 123.9147 }, photoUrl: "https://blob.test/report-photos/far.jpg" });
+    const near = storedReport(NO_ADVISORY, { verdict: { kind: "no_flood" } });
+    await seedReport(store, far);
+    await seedReport(store, near);
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
+    const body = await (await handler(real())).json();
+    expect(body.reports.map((r: { id: string }) => r.id)).toEqual([near.id]);
+    expect(JSON.stringify(body)).not.toContain("far.jpg");
   });
 
   it("a demo check never uses a real report, and never reads the store", async () => {

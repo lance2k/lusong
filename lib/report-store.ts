@@ -28,6 +28,8 @@ export interface StoredPhotoReport {
   capturedAt: string | null;
   verdict: Verdict;
   photoHash: string;
+  /** Where the blurred copy is shown from, when one was published. Never the original photo, which is not stored. */
+  photoUrl?: string;
 }
 
 /** What Lusong keeps of a voice report: the claim's fixed choices and spoken place. Never the audio or the transcript. */
@@ -120,7 +122,8 @@ function isStoredReport(value: unknown): value is StoredReport {
     r.kind === "photo" &&
     (r.capturedAt === null || !Number.isNaN(Date.parse(r.capturedAt))) &&
     typeof r.verdict?.kind === "string" &&
-    typeof r.photoHash === "string"
+    typeof r.photoHash === "string" &&
+    (r.photoUrl === undefined || (typeof r.photoUrl === "string" && r.photoUrl.startsWith("https://")))
   );
 }
 

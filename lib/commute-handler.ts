@@ -196,7 +196,9 @@ function parseReal(body: unknown): RealRequest | null {
 }
 
 /** A report as the answer sees it, with what the page shows about where it came from. */
-type CheckedReport = SampleReport | (Report & { sample: false; origin: null; credit: null; sourceUrl: null });
+type CheckedReport =
+  | (SampleReport & { photoUrl?: undefined })
+  | (Report & { sample: false; origin: null; credit: null; sourceUrl: null; photoUrl: string | null });
 
 function advisoryForPage(reading: AdvisoryReading) {
   switch (reading.state) {
@@ -409,7 +411,18 @@ export function makeCommuteCheck(deps: CommuteDeps) {
       reports: async () => {
         const store = reportStore();
         if (!store) throw new Error("no report store configured");
-        return (await store.recent(at)).map((r) => ({ ...toReport(r), sample: false, origin: null, credit: null, sourceUrl: null }) as const);
+        return (await store.recent(at)).map(
+          (r) =>
+            ({
+              ...toReport(r),
+              sample: false,
+              origin: null,
+              credit: null,
+              sourceUrl: null,
+              // Only ever the blurred copy's URL: the original photo is never stored.
+              photoUrl: r.kind === "photo" ? (r.photoUrl ?? null) : null,
+            }) as const,
+        );
       },
       plain: async () => {
         const result = await fetchRoute(ends, { fetch: doFetch, gate: deps.gate(), deadline: run.deadline });
@@ -520,6 +533,7 @@ export function makeCommuteCheck(deps: CommuteDeps) {
           origin: r.origin,
           credit: r.credit,
           sourceUrl: r.sourceUrl,
+          photoUrl: r.photoUrl ?? null,
           counts: j.counts,
           onRoute: routes.includes("plain"),
           onDetour: shown !== null && routes.includes(shown.id),
