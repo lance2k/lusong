@@ -597,13 +597,16 @@ describe("a real commute check (#6)", () => {
     expect(body.reports).toEqual([]);
   });
 
-  it("a report on a road the trip doesn't take is gathered but not on the route", async () => {
+  it("a report on a road the trip doesn't take is left out of the answer: its spot isn't sent to the rider", async () => {
     const store = new MemoryReportStore();
-    await store.save(storedReport(NO_ADVISORY, { at: { lat: 10.3143, lon: 123.9147 } }));
+    const far = storedReport(NO_ADVISORY, { at: { lat: 10.3143, lon: 123.9147 } });
+    const near = storedReport(NO_ADVISORY, { verdict: { kind: "no_flood" } });
+    await store.save(far);
+    await store.save(near);
     const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
     const body = await (await handler(real())).json();
-    expect(body.answer.kind).toBe("go");
-    expect(body.reports).toEqual([expect.objectContaining({ onRoute: false })]);
+    expect(body.reports.map((r: { id: string }) => r.id)).toEqual([near.id]);
+    expect(JSON.stringify(body)).not.toContain("123.9147");
   });
 
   it("a demo check never uses a real report, and never reads the store", async () => {

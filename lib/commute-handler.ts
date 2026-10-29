@@ -370,7 +370,9 @@ export function makeCommuteHandler(deps: {
           onDetour: detourLine !== null && placeOnRoute(r.at, detourLine).offM <= ROUTE_CORRIDOR_M,
           role: j.role,
         };
-      }),
+      })
+        // A real report off both routes played no part, and its exact spot is someone else's: it isn't sent.
+        .filter((r) => check.demo || r.onRoute || r.onDetour),
       mmdaCredit: MMDA_CREDIT,
     });
   }
