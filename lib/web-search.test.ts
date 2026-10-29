@@ -262,12 +262,28 @@ describe("one search is shared by every check for a while", () => {
     const store = new MemoryKvStore();
     const finding = { id: "web-0", place: "Juan Luna Ave, Mabolo", at: null, url: "https://example.ph/m", sourceDate: null, summary: "Passable to all types of vehicles." };
     const evidence = { state: "searched", searchedAt: NOW.toISOString(), findings: [finding] };
-    const record = (findings: object[]) => JSON.stringify({ expiresAt: NOW.getTime() + 60_000, startedAt: NOW.getTime(), evidence: { ...evidence, findings } });
+    const record = (findings: object[]) => JSON.stringify({ expiresAt: NOW.getTime() + 60_000, startedAt: NOW.getTime(), evidence: { ...evidence, findings }, pages: [finding.url] });
     await store.set(WEB_SEARCH_KEY, record([{ ...finding, summary: undefined, kind: "closed" }]), 60_000);
     expect(await planWebSearch(store, NOW, roomy())).toMatchObject({ kind: "cached" });
 
     await store.set(WEB_SEARCH_KEY, record([finding]), 60_000);
     expect(await planWebSearch(store, NOW, roomy())).toMatchObject({ kind: "search" });
+  });
+
+  it("a stored finding whose link isn't among the pages its search opened, or a record without them, is searched again (review 🔴T7-8)", async () => {
+    const store = new MemoryKvStore();
+    const finding = { id: "web-0", place: "Juan Luna Ave, Mabolo", at: null, url: "https://example.ph/m", sourceDate: null, kind: "closed" };
+    const record = (extra: object) =>
+      JSON.stringify({ expiresAt: NOW.getTime() + 60_000, startedAt: NOW.getTime(), evidence: { state: "searched", searchedAt: NOW.toISOString(), findings: [finding] }, ...extra });
+
+    await store.set(WEB_SEARCH_KEY, record({ pages: ["https://example.ph/m"] }), 60_000);
+    expect(await planWebSearch(store, NOW, roomy())).toMatchObject({ kind: "cached" });
+
+    for (const extra of [{ pages: ["https://example.ph/other"] }, {}, { pages: "https://example.ph/m" }, { pages: ["https://example.ph/m#Start-your-trip-now"] }]) {
+      await store.set(WEB_SEARCH_KEY, record(extra), 60_000);
+      expect(await planWebSearch(store, NOW, roomy())).toMatchObject({ kind: "search" });
+      await store.deleteIfEquals(WEB_SEARCH_LEASE_KEY, (await store.get(WEB_SEARCH_LEASE_KEY))!);
+    }
   });
 
   it("a search with links to Unicode paths is stored and read back from the cache, with no second search (review 🟡T7-9)", async () => {
@@ -348,7 +364,7 @@ describe("one search at a time, and the newest result kept (review 🟡3)", () =
 
   it("the cache is read again once the lease is held: a search another check just stored is used, not repeated", async () => {
     const inner = new MemoryKvStore();
-    const fresh = { expiresAt: NOW.getTime() + 60_000, startedAt: NOW.getTime(), evidence: { state: "searched", searchedAt: NOW.toISOString(), findings: [] } };
+    const fresh = { expiresAt: NOW.getTime() + 60_000, startedAt: NOW.getTime(), evidence: { state: "searched", searchedAt: NOW.toISOString(), findings: [] }, pages: [] };
     let reads = 0;
     const store: KvStore = {
       get: async (key) => (key === WEB_SEARCH_KEY && reads++ === 0 ? null : key === WEB_SEARCH_KEY ? JSON.stringify(fresh) : inner.get(key)),

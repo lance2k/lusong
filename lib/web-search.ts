@@ -210,6 +210,8 @@ interface Stored {
   /** When its search started: a search that started earlier never replaces it. */
   startedAt: number;
   evidence: WebEvidence;
+  /** The pages its search opened or cited, so a stored finding's link is checked against them as a fresh one is. */
+  pages: string[];
 }
 
 function readStored(text: string): Stored | null {
@@ -219,7 +221,8 @@ function readStored(text: string): Stored | null {
     if (typeof stored.expiresAt !== "number" || typeof stored.startedAt !== "number") return null;
     if (!e || !Array.isArray(e.findings) || !["searched", "failed"].includes(e.state)) return null;
     // A record stored under older checks is searched again rather than trusted.
-    if (!e.findings.every(isStoredFinding)) return null;
+    if (!Array.isArray(stored.pages) || !stored.pages.every((page) => canonicalUrl(page) === page)) return null;
+    if (!e.findings.every((f) => isStoredFinding(f) && stored.pages.includes(f.url))) return null;
     return stored;
   } catch {
     return null;
@@ -417,6 +420,7 @@ export async function runWebSearch(
   const searchedAt = deps.now.toISOString();
   const failed = (why: string): WebEvidence => ({ state: "failed", why, searchedAt, findings: [] });
   let evidence: WebEvidence;
+  let pages: string[] = [];
   try {
     const reply = await respond({
       input: searchPrompt(deps.now),
@@ -426,7 +430,8 @@ export async function runWebSearch(
       deadline: deps.deadline,
       meter: plan.run.meter,
     });
-    const findings = reply.status === "completed" ? findingsIn(reply.answerText, toolPages(reply)) : null;
+    pages = toolPages(reply);
+    const findings = reply.status === "completed" ? findingsIn(reply.answerText, pages) : null;
     if (reply.status !== "completed") evidence = failed("search cut off");
     else if (findings === null) evidence = failed("unreadable reply");
     else evidence = { state: "searched", searchedAt, findings };
@@ -437,7 +442,7 @@ export async function runWebSearch(
   await plan.run.settle(true);
   const ttl = evidence.state === "searched" ? WEB_SEARCH_CACHE_MS : WEB_SEARCH_FAILED_CACHE_MS;
   try {
-    if (deps.store) await keep(deps.store, { expiresAt: deps.now.getTime() + ttl, startedAt: plan.startedAt, evidence }, deps.now);
+    if (deps.store) await keep(deps.store, { expiresAt: deps.now.getTime() + ttl, startedAt: plan.startedAt, evidence, pages }, deps.now);
   } catch (err) {
     console.error("couldn't store the web search:", err instanceof Error ? err.message : err);
   }
