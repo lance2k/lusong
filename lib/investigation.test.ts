@@ -3,7 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AdvisoryReading } from "./advisory";
 import { placeOnRoute, ROUTE_CORRIDOR_M, type Point, type Report } from "./answer";
 import { lineForTrip } from "./detour";
-import { EXPLANATION_MAX_CHARS, EXPLANATION_UNAVAILABLE, investigate, vetExplanation, type AroundResult, type InvestigationSources, type WebEvidence } from "./investigation";
+import {
+  EXPLANATION_MAX_CHARS,
+  EXPLANATION_UNAVAILABLE,
+  FIRST_TURN_MAX_BYTES,
+  investigate,
+  LOOP_MAX_OUTPUT_TOKENS,
+  LOOP_TURN_CAP,
+  TOOL_CALLS_PER_TURN,
+  TOOL_CALLS_TOTAL,
+  TOOL_RESULT_MAX_BYTES, vetExplanation, type AroundResult, type InvestigationSources, type WebEvidence } from "./investigation";
 import { Meter } from "./meta";
 import { decodePolyline6 } from "./router";
 import { DEMO_TRIPS } from "./samples";
@@ -391,5 +400,74 @@ describe("route_around: a way around the model proposes is judged by the same ru
     fakeMeta({ turns: [proposeAround([MODEL_SPOT])] });
 
     expect(await investigate(inputOf(sources))).toEqual({ ok: false, failed: "reports" });
+  });
+});
+
+describe("the investigation's cost is bounded", () => {
+  const read = { name: "read_advisory", args: {} };
+  const bytes = (text: string) => Buffer.byteLength(text, "utf8");
+
+  it("stops at the turn cap when the model keeps calling tools, and tells it on the last turn to write", async () => {
+    const { sources } = sourcesOf();
+    const turns = Array.from({ length: LOOP_TURN_CAP + 2 }, (_, i) => callsReply(`resp_${i + 1}`, [read]));
+    const meta = fakeMeta({ turns });
+
+    const result = await investigate(inputOf(sources));
+
+    expect(meta.requests).toHaveLength(LOOP_TURN_CAP);
+    const last = meta.requests[LOOP_TURN_CAP - 1].input as { output: string }[];
+    expect(JSON.parse(last[0].output)).toMatchObject({ last_turn: "No more tool calls: write the explanation now." });
+    if (!result.ok) throw new Error("expected an answer");
+    expect(result.explanation).toMatchObject({ by: "unavailable", why: "still calling tools at the turn cap" });
+  });
+
+  it("a reply with more tool calls than a turn allows ends the investigation without running any of them", async () => {
+    const { sources } = sourcesOf();
+    const meta = fakeMeta({ turns: [callsReply("resp_1", Array.from({ length: TOOL_CALLS_PER_TURN + 1 }, () => read))] });
+
+    const result = await investigate(inputOf(sources));
+
+    expect(meta.requests).toHaveLength(1);
+    if (!result.ok) throw new Error("expected an answer");
+    expect(result.toolCalls).toEqual([]);
+    expect(result.explanation).toMatchObject({ by: "unavailable", why: "too many tool calls" });
+  });
+
+  it("tool calls past the investigation's total end it too", async () => {
+    const { sources } = sourcesOf();
+    const full = Array.from({ length: TOOL_CALLS_PER_TURN }, () => read);
+    const meta = fakeMeta({ turns: [callsReply("resp_1", full), callsReply("resp_2", full)] });
+
+    const result = await investigate(inputOf(sources));
+
+    expect(TOOL_CALLS_PER_TURN * 2).toBeGreaterThan(TOOL_CALLS_TOTAL);
+    expect(meta.requests).toHaveLength(2);
+    if (!result.ok) throw new Error("expected an answer");
+    expect(result.toolCalls).toHaveLength(TOOL_CALLS_PER_TURN);
+    expect(result.explanation).toMatchObject({ by: "unavailable", why: "too many tool calls" });
+  });
+
+  it("every call caps its output tokens, and the first turn's input stays within its byte bound", async () => {
+    const { sources } = sourcesOf({ reports: [voice("v1", BLOCKED_SPOT, "not_passable", "Banilad ".repeat(500))] });
+    const meta = fakeMeta({ turns: [callsReply("resp_1", [read]), textReply("resp_2", "Banilad is reported not passable.")] });
+
+    await investigate(inputOf(sources));
+
+    expect(meta.requests.map((r) => r.max_output_tokens)).toEqual([LOOP_MAX_OUTPUT_TOKENS, LOOP_MAX_OUTPUT_TOKENS]);
+    expect(bytes(meta.requests[0].input as string)).toBeLessThanOrEqual(FIRST_TURN_MAX_BYTES);
+  });
+
+  it("a long tool result is cut to its byte cap and says how many reports it left out", async () => {
+    const along = Array.from({ length: 300 }, (_, i) => voice(`v${i}`, PLAIN[Math.floor((i * PLAIN.length) / 300)], "passable", `Spot ${i} ñ`));
+    const { sources } = sourcesOf({ reports: along });
+    const meta = fakeMeta({ turns: [callsReply("resp_1", [{ name: "reports_near_route", args: { route: "plain" } }]), textReply("resp_2", "Nobody can tell.")] });
+
+    await investigate(inputOf(sources));
+
+    const output = (meta.requests[1].input as { output: string }[])[0].output;
+    expect(bytes(output)).toBeLessThanOrEqual(TOOL_RESULT_MAX_BYTES);
+    const shown = JSON.parse(output);
+    expect(shown.reports.length).toBeGreaterThan(0);
+    expect(shown.reports.length + shown.omitted_reports).toBe(300);
   });
 });

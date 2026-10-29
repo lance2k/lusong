@@ -114,6 +114,15 @@ export const LOOP_MAX_OUTPUT_TOKENS = 3_000;
 /** A call gets at most this long, and never past the deadline. The probe's slowest function turn took 9.8 s (1 draw). */
 export const LOOP_ATTEMPT_MS = 15_000;
 
+/** A reply calling more tools than this, or an investigation past the total, ends without an explanation. */
+export const TOOL_CALLS_PER_TURN = 3;
+export const TOOL_CALLS_TOTAL = 5;
+/** Each tool's output, as sent back, in UTF-8 bytes; lists are cut from the end to fit. */
+export const TOOL_RESULT_MAX_BYTES = 2_000;
+/** The check's summary in the first turn, in UTF-8 bytes. */
+export const CONTEXT_MAX_BYTES = 3_000;
+const LAST_TURN_NOTE = "No more tool calls: write the explanation now.";
+
 /** At most this many ways around the model may ask for in one check: each is a request to the shared Valhalla server. */
 export const ROUTE_AROUND_CAP = 1;
 export const ROUTE_AROUND_MAX_SPOTS = 3;
@@ -192,6 +201,37 @@ const INSTRUCTIONS = [
   "Then write the explanation: two to four plain English sentences saying why the answer is what it is.",
   "Do not call any way safe or clear, do not suggest a different answer, and write no markdown or links.",
 ].join(" ");
+
+const CONTEXT_LEAD = "\n\nThis check: ";
+const utf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
+export const FIRST_TURN_MAX_BYTES = utf8Bytes(INSTRUCTIONS) + utf8Bytes(CONTEXT_LEAD) + CONTEXT_MAX_BYTES;
+
+/**
+ * The object as JSON within `maxBytes`: the longest list loses items from its end (counted in `omitted_<key>`), then the
+ * longest string is cut. Something that still can't fit is an error, never an over-long result.
+ */
+function cappedJson(value: Record<string, unknown>, maxBytes: number): string {
+  const copy: Record<string, unknown> = { ...value };
+  let text = JSON.stringify(copy);
+  while (utf8Bytes(text) > maxBytes) {
+    const lists = Object.keys(copy).filter((k) => Array.isArray(copy[k]) && (copy[k] as unknown[]).length > 0);
+    const strings = Object.keys(copy).filter((k) => typeof copy[k] === "string" && (copy[k] as string).length > 3);
+    if (lists.length > 0) {
+      const key = lists.reduce((a, b) => ((copy[a] as unknown[]).length >= (copy[b] as unknown[]).length ? a : b));
+      copy[key] = (copy[key] as unknown[]).slice(0, -1);
+      copy[`omitted_${key}`] = ((copy[`omitted_${key}`] as number | undefined) ?? 0) + 1;
+    } else if (strings.length > 0) {
+      const key = strings.reduce((a, b) => ((copy[a] as string).length >= (copy[b] as string).length ? a : b));
+      const longest = copy[key] as string;
+      // Removing n characters removes at least n bytes, so this always shrinks the text below its overflow.
+      copy[key] = `${longest.slice(0, Math.max(0, longest.length - (utf8Bytes(text) - maxBytes) - 3))}...`;
+    } else {
+      return JSON.stringify({ error: "result too large" });
+    }
+    text = JSON.stringify(copy);
+  }
+  return text;
+}
 
 function phtClock(iso: string): string {
   return new Date(Date.parse(iso) + 8 * 3_600_000).toISOString().slice(0, 16).replace("T", " ") + " PHT";
@@ -288,7 +328,7 @@ export async function investigate(input: InvestigationInput): Promise<Investigat
 
   const toolCalls: { name: string; outcome: string }[] = [];
   let routeArounds = 0;
-  const runTool = async (call: FunctionCall): Promise<object> => {
+  const runTool = async (call: FunctionCall): Promise<Record<string, unknown>> => {
     let args: Record<string, unknown>;
     try {
       const parsed = JSON.parse(call.arguments || "{}");
@@ -408,9 +448,10 @@ function contextOf(evidence: Evidence) {
 type Written = { text: string } | { unavailable: string };
 
 /** The model's final text, or why there is none. */
-async function explain(input: InvestigationInput, evidence: Evidence, runTool: (call: FunctionCall) => Promise<object>): Promise<Written> {
-  let turnInput: Parameters<typeof respond>[0]["input"] = `${INSTRUCTIONS}\n\nThis check: ${JSON.stringify(contextOf(evidence))}`;
+async function explain(input: InvestigationInput, evidence: Evidence, runTool: (call: FunctionCall) => Promise<Record<string, unknown>>): Promise<Written> {
+  let turnInput: Parameters<typeof respond>[0]["input"] = `${INSTRUCTIONS}${CONTEXT_LEAD}${cappedJson(contextOf(evidence), CONTEXT_MAX_BYTES)}`;
   let previousResponseId: string | undefined;
+  let callsSoFar = 0;
   for (let turn = 1; turn <= LOOP_TURN_CAP; turn++) {
     if (Date.now() >= input.deadline) return { unavailable: "timed out" };
     let reply: SparkReply;
@@ -429,10 +470,15 @@ async function explain(input: InvestigationInput, evidence: Evidence, runTool: (
     }
     if (reply.status !== "completed") return { unavailable: "reply cut off" };
     if (reply.functionCalls.length === 0) return { text: reply.answerText };
+    if (turn === LOOP_TURN_CAP) return { unavailable: "still calling tools at the turn cap" };
+    callsSoFar += reply.functionCalls.length;
+    if (reply.functionCalls.length > TOOL_CALLS_PER_TURN || callsSoFar > TOOL_CALLS_TOTAL) return { unavailable: "too many tool calls" };
     if (reply.id === null) return { unavailable: "reply cut off" };
+    const lastTurnNext = turn + 1 === LOOP_TURN_CAP;
     const outputs = [];
     for (const call of reply.functionCalls) {
-      outputs.push({ type: "function_call_output" as const, call_id: call.callId, output: JSON.stringify(await runTool(call)) });
+      const result = { ...(await runTool(call)), ...(lastTurnNext ? { last_turn: LAST_TURN_NOTE } : {}) };
+      outputs.push({ type: "function_call_output" as const, call_id: call.callId, output: cappedJson(result, TOOL_RESULT_MAX_BYTES) });
     }
     turnInput = outputs;
     previousResponseId = reply.id;
