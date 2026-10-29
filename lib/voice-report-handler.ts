@@ -64,18 +64,24 @@ export interface VoiceReportView {
   effect: string;
 }
 
-function viewOf(report: StoredVoiceReport, now: Date, stored: boolean): VoiceReportView {
+/** `unknown`: the save was sent but its answer never came, so it may or may not have been written. */
+type StoredAs = boolean | "unknown";
+
+function viewOf(report: StoredVoiceReport, now: Date, stored: StoredAs): VoiceReportView {
   const asRule = toReport(report);
   const role = roleOf(asRule, now);
-  const live = stored && counts(asRule, now);
+  const live = stored === true && counts(asRule, now);
   const left = durationWords(REPORT_LIFETIME_MS - (now.getTime() - asRule.receivedAt.getTime()));
-  const effect = !stored
-    ? "Lusong couldn't save the report, so it doesn't count in anyone's check. Try sending it again in a minute."
-    : !live
-      ? "Lusong received this voice note over 3 hours ago, so it no longer counts in anyone's check. Record a new one."
-      : role === "block"
-        ? `Others checking a trip through here will count this spot as not passable for the next ${left}, unless a newer photo of the same road shows it clear.`
-        : "Others will see this report, but a voice report can't mark a street clear: only a recent photo can.";
+  const effect =
+    stored === "unknown"
+      ? "Lusong couldn't confirm the report was saved, so it may not count in others' checks. Wait a few minutes before sending this note again."
+      : !stored
+        ? "Lusong couldn't save the report, so it doesn't count in anyone's check. Try sending it again in a minute."
+        : !live
+          ? "Lusong received this voice note over 3 hours ago, so it no longer counts in anyone's check. Record a new one."
+          : role === "block"
+            ? `Others checking a trip through here will count this spot as not passable for the next ${left}, unless a newer photo of the same road shows it clear.`
+            : "Others will see this report, but a voice report can't mark a street clear: only a recent photo can.";
   return {
     id: report.id,
     kind: "voice",
@@ -245,8 +251,9 @@ export function makeVoiceReportHandler(deps: {
         saved = "late";
       }
       if (saved === "late") {
-        await release(token, releaseBy);
-        return Response.json({ duplicate: false, stored: false, report: viewOf(report, receivedAt, false) });
+        // The save may still land, so the claim is kept for it and lapses on its own: freeing it would let a resend
+        // be read and paid for again while this one could still be written.
+        return Response.json({ duplicate: false, stored: "unknown", report: viewOf(report, receivedAt, "unknown") });
       }
       if (saved.state === "duplicate" && saved.report.kind === "voice") {
         return Response.json({ duplicate: true, stored: true, report: viewOf(saved.report, receivedAt, true) });

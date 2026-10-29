@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { voiceNoteForm } from "../app/voice-recorder";
 import { costMicros, createBudget, MemoryBudgetStore, type Budget } from "./budget";
-import { MemoryReportStore, UpstashReportStore, type ReportStore } from "./report-store";
+import { MemoryReportStore, UpstashReportStore, type ReportStore, type Saved } from "./report-store";
 import type { ValhallaGate } from "./router";
 import { VOICE_CLAIM_INPUT_TOKEN_BOUND, VOICE_CLAIM_MAX_COMPLETION_TOKENS } from "./voice-claim";
 import { makeVoiceReportHandler, VOICE_RESERVE_MICROS as V, type VoiceTiming } from "./voice-report-handler";
@@ -422,4 +422,94 @@ describe("one deadline for the whole request (route maxDuration 120 s)", () => {
     expect(VOICE_TIMING.budgetMs).toBeLessThan(maxDuration * 1_000);
     expect(VOICE_TIMING.storeCallMs).toBeGreaterThanOrEqual(5_000);
   });
+});
+
+/** A store and how many entries its index holds; the Upstash one reads the stand-in's index directly. */
+const indexedStores: [string, (opts?: { claimMs?: number }) => { store: ReportStore; indexEntries: () => Promise<number> }][] = [
+  [
+    "memory store",
+    (opts) => {
+      const store = new MemoryReportStore(opts);
+      return { store, indexEntries: async () => (store.dump()["lusong:reports"] ?? []).length };
+    },
+  ],
+  ...(upstashUrl
+    ? [
+        [
+          "Upstash store",
+          (opts?: { claimMs?: number }) => {
+            const prefix = `lusong-test-${randomUUID()}`;
+            const zcard = async () => {
+              const res = await fetch(upstashUrl, {
+                method: "POST",
+                headers: { Authorization: `Bearer ${upstashToken}`, "Content-Type": "application/json" },
+                body: JSON.stringify(["ZCARD", `${prefix}:reports`]),
+              });
+              return Number(((await res.json()) as { result: unknown }).result);
+            };
+            return { store: new UpstashReportStore(upstashUrl, upstashToken, prefix, opts) as ReportStore, indexEntries: zcard };
+          },
+        ] as [string, (opts?: { claimMs?: number }) => { store: ReportStore; indexEntries: () => Promise<number> }],
+      ]
+    : []),
+];
+
+describe.each(indexedStores)("a save whose outcome is unknown, on the %s (🔴T9-2)", (_name, makeStore) => {
+  const timing: VoiceTiming = { budgetMs: 3_000, storeCallMs: 150, responseMs: 150, minReadMs: 400, locateMinMs: 300 };
+
+  /** Holds the store's first save back until `land()`, as an Upstash call that reaches Redis after its caller gave up. */
+  function holdFirstSave(store: ReportStore) {
+    let land!: () => void;
+    const landed = new Promise<void>((resolve) => (land = resolve));
+    let first: Promise<Saved> | null = null;
+    const save = store.save.bind(store);
+    store.save = (report, token) => {
+      if (first) return save(report, token);
+      first = landed.then(() => save(report, token));
+      return first;
+    };
+    return { land, outcome: () => first! };
+  }
+
+  it("the save hangs past the deadline, the same note is sent again, then the first save lands: one report, one index entry", async () => {
+    const calls = stubMeta();
+    const { store, indexEntries } = makeStore();
+    const held = holdFirstSave(store);
+    const { budget, admits } = meteredBudget();
+    const handler = handlerWith({ store, budget, timing });
+
+    const first = await handler(post());
+    expect(first.status).toBe(200);
+    const body = await first.json();
+    expect(body).toMatchObject({ duplicate: false, stored: "unknown", report: { counts: false } });
+    expect(body.report.effect).toBe("Lusong couldn't confirm the report was saved, so it may not count in others' checks. Wait a few minutes before sending this note again.");
+
+    // The claim is kept while the save's outcome is unknown: the resend is not read or paid for again.
+    const resend = await handler(post());
+    expect(resend.status).toBe(409);
+
+    held.land();
+    expect(await held.outcome()).toEqual({ state: "saved" });
+    expect(await store.recent(NOW)).toHaveLength(1);
+    expect(await indexEntries()).toBe(1);
+    expect(calls).toEqual(["/asr/transcribe", "/chat/completions"]);
+    expect(admits).toHaveLength(1);
+  }, 10_000);
+
+  it("the claim lapses after the hung save, the resend is read and saved, then the first save lands: still one report", async () => {
+    stubMeta();
+    const { store, indexEntries } = makeStore({ claimMs: 3_000 });
+    const held = holdFirstSave(store);
+    const handler = handlerWith({ store, timing });
+
+    expect((await (await handler(post())).json()).stored).toBe("unknown");
+    await sleep(3_100);
+    const resend = await (await handler(post())).json();
+    expect(resend).toMatchObject({ duplicate: false, stored: true });
+
+    held.land();
+    expect(await held.outcome()).toEqual({ state: "duplicate", report: expect.objectContaining({ id: resend.report.id }) });
+    expect((await store.recent(NOW)).map((r) => r.id)).toEqual([resend.report.id]);
+    expect(await indexEntries()).toBe(1);
+  }, 15_000);
 });
