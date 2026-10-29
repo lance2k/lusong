@@ -3,7 +3,7 @@
 import { useEffect, useReducer, useState } from "react";
 import type { AnswerKind, RouteState } from "@/lib/answer";
 import { detourWords } from "@/lib/commute-words";
-import { DEMO_TRIPS, SCENARIOS, type DemoTripId } from "@/lib/samples";
+import { DEMO_TRIPS, SCENARIOS, scenariosFor, type DemoTripId } from "@/lib/samples";
 import { commuteReducer, initialCommuteState, type CommuteInputs, type CommuteState } from "./commute-state";
 
 interface PageReport {
@@ -254,7 +254,7 @@ export default function CommuteCheck() {
       <div className="space-y-1">
         <Choice
           label="Sample reports"
-          options={SCENARIOS}
+          options={scenariosFor(trip)}
           value={scenario}
           onChange={(id) => dispatch({ type: "change", inputs: { scenario: id } })}
         />
