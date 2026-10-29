@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { voiceNoteForm } from "../app/voice-recorder";
 import { costMicros, createBudget, MemoryBudgetStore, type Budget } from "./budget";
 import { MemoryReportStore, UpstashReportStore, type ReportStore } from "./report-store";
 import type { ValhallaGate } from "./router";
@@ -176,6 +177,15 @@ describe("what is stored and what the reporter is shown", () => {
     expect(body.report).toMatchObject({ role: "neutral", saidPlace: null, heard: "Lusong couldn't tell from your note how deep the water is or whether vehicles can pass." });
     const [record] = await store.recent(NOW);
     expect(record).toMatchObject({ claim: { place: null, depth: "not_said", passable: "not_said" } });
+  });
+
+  it("the form the page builds is read in the language the rider picked", async () => {
+    const sent: RequestInit[] = [];
+    stubMeta({ spark: (init) => (sent.push(init), claimed(CLAIM)(init)) });
+    const form = voiceNoteForm(new Blob([new Uint8Array(note())], { type: "audio/wav" }), PIN, "en");
+    const res = await handlerWith()(new Request("http://localhost/api/report/voice", { method: "POST", body: form }));
+    expect(res.status).toBe(200);
+    expect(JSON.stringify(JSON.parse(String(sent[0].body)).messages)).toContain("The rider said the note is in English");
   });
 
   it("Voice Transcribe is asked for Tagalog and English", async () => {

@@ -1,9 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { VoiceReportView } from "@/lib/voice-report-handler";
-import { encodeWav, MAX_VOICE_MS } from "@/lib/wav";
+// Relative, not "@/": vitest doesn't resolve the alias, and this page is rendered in its tests.
+import { BISAYA_VOICE_ENABLED, VOICE_LANGUAGES, type VoiceLanguage } from "../lib/voice-language";
+import type { VoiceReportView } from "../lib/voice-report-handler";
+import { encodeWav, MAX_VOICE_MS } from "../lib/wav";
 import { phoneLocation } from "./phone-location";
+import { voiceNoteForm } from "./voice-recorder";
 
 type State =
   | { step: "idle" }
@@ -116,9 +119,13 @@ function Heard({ report, duplicate }: { report: VoiceReportView; duplicate: bool
 export default function VoiceNote() {
   const [state, setState] = useState<State>({ step: "idle" });
   const [now, setNow] = useState(0);
+  /** Nothing is picked for the rider: the language is theirs to declare, and Lusong goes by it. */
+  const [language, setLanguage] = useState<VoiceLanguage | null>(null);
   const recording = useRef<Recording | null>(null);
   /** Set synchronously, so a second tap can't start a second recording or a second paid read. */
   const busy = useRef(false);
+  /** The language picked when recording started: the one the note is sent with. */
+  const recordedIn = useRef<VoiceLanguage | null>(null);
 
   useEffect(() => () => recording.current?.cancel(), []);
 
@@ -133,8 +140,9 @@ export default function VoiceNote() {
   }, [state.step]);
 
   async function record() {
-    if (busy.current) return;
+    if (busy.current || !language) return;
     busy.current = true;
+    recordedIn.current = language;
     try {
       recording.current = await startRecording();
     } catch {
@@ -149,7 +157,8 @@ export default function VoiceNote() {
 
   async function finish() {
     const rec = recording.current;
-    if (!rec) return;
+    const language = recordedIn.current;
+    if (!rec || !language) return;
     recording.current = null;
     try {
       const audio = await rec.stop();
@@ -162,12 +171,8 @@ export default function VoiceNote() {
         return;
       }
       setState({ step: "sending" });
-      const form = new FormData();
-      form.append("audio", audio, "note.wav");
-      form.append("lat", String(at.lat));
-      form.append("lon", String(at.lon));
       try {
-        const res = await fetch("/api/report/voice", { method: "POST", body: form });
+        const res = await fetch("/api/report/voice", { method: "POST", body: voiceNoteForm(audio, at, language) });
         const body = await res.json();
         if (!res.ok) throw new Error(body.error ?? "Something went wrong.");
         setState({ step: "done", report: body.report, duplicate: body.duplicate });
@@ -183,6 +188,21 @@ export default function VoiceNote() {
   const working = state.step === "locating" || state.step === "sending";
   return (
     <div className="space-y-3">
+      <fieldset disabled={state.step === "recording" || working} className="space-y-2">
+        <legend className="text-[15px] font-medium text-zinc-800 dark:text-zinc-200">Which language will you speak?</legend>
+        <div className="flex gap-3">
+          {VOICE_LANGUAGES.map((l) => (
+            <label
+              key={l.value}
+              className="flex flex-1 items-center gap-2 rounded-xl border border-zinc-300 px-4 py-3 text-[15px] has-[:checked]:border-sky-600 has-[:checked]:bg-sky-50 dark:border-zinc-700 dark:has-[:checked]:bg-sky-950"
+            >
+              <input type="radio" name="voice-language" value={l.value} checked={language === l.value} onChange={() => setLanguage(l.value)} />
+              {l.label}
+            </label>
+          ))}
+        </div>
+        {!BISAYA_VOICE_ENABLED && <p className="text-sm text-zinc-600 dark:text-zinc-400">Bisaya voice notes aren&apos;t supported yet.</p>}
+      </fieldset>
       {state.step === "recording" ? (
         <button
           type="button"
@@ -197,7 +217,7 @@ export default function VoiceNote() {
       ) : (
         <button
           type="button"
-          disabled={working}
+          disabled={working || !language}
           onClick={() => void record()}
           className="w-full rounded-2xl border-2 border-sky-600 px-5 py-4 text-lg font-semibold text-sky-700 transition hover:bg-sky-50 disabled:opacity-60 dark:text-sky-300 dark:hover:bg-sky-950"
         >
@@ -206,7 +226,7 @@ export default function VoiceNote() {
       )}
       {state.step === "idle" && (
         <p className="text-[15px] leading-snug text-zinc-600 dark:text-zinc-400">
-          In Tagalog or English: say the street and how deep the water is. A voice note can warn others a street is not
+          Pick the language, then say the street and how deep the water is. A voice note can warn others a street is not
           passable, never that it is clear. It is sent to Meta&apos;s Model API (Muse Voice Transcribe and Muse Spark) to be
           read; Lusong keeps the place you name and what you said about the water, not the recording or the rest of what you said.
         </p>
