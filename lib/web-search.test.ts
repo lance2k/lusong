@@ -23,7 +23,7 @@ import {
   UpstashKvStore,
   type KvStore,
 } from "./web-search";
-import { fakeMeta, searchReply } from "../test/muse-derived";
+import { fakeMeta, META_RESPONSES_URL, searchReply } from "../test/muse-derived";
 
 const NOW = new Date("2026-10-30T02:00:00Z"); // 10:00 PHT, 2026-10-30
 /** A search budget with room for many searches. */
@@ -242,7 +242,7 @@ describe("one search is shared by every check for a while", () => {
   it("with no shared store, or one that can't be read, there is no search: each check would pay for its own", async () => {
     const meta = fakeMeta({ search: [] });
     const down = () => Promise.reject(new Error("down"));
-    const broken: KvStore = { get: down, set: down, setIfAbsent: down, deleteIfEquals: down };
+    const broken: KvStore = { get: down, set: down, setIfAbsent: down, deleteIfEquals: down, compareAndSet: down };
 
     expect(await planWebSearch(null, NOW, roomy())).toEqual({ kind: "off", why: "no shared store" });
     expect(await planWebSearch(broken, NOW, roomy())).toEqual({ kind: "off", why: "store unreachable" });
@@ -312,15 +312,66 @@ describe("one search is shared by every check for a while", () => {
 
   it("a search whose result can't be stored still answers this check", async () => {
     fakeMeta({ search: [searchReply(closures([MABOLO]))] });
-    const readOnly: KvStore = { get: async () => null, set: () => Promise.reject(new Error("down")), setIfAbsent: async () => true, deleteIfEquals: async () => {} };
+    const down = () => Promise.reject(new Error("down"));
+    const readOnly: KvStore = { get: async () => null, set: down, setIfAbsent: async () => true, deleteIfEquals: async () => {}, compareAndSet: down };
 
     expect(await searchOnce(readOnly)).toMatchObject({ state: "searched", findings: [{ id: "web-0" }] });
   });
 });
 
+const OLDER = closures([{ ...MABOLO, place: "Older Street" }]);
+const NEWER = closures([{ ...MABOLO, place: "Newer Street" }]);
+const stored = async (store: KvStore) => JSON.parse((await store.get(WEB_SEARCH_KEY))!).evidence;
+
+/**
+ * Two searches overlap past the lease: the older one's read of the stored result is held until the newer one has
+ * searched and stored, then the older one writes. The older lease is given up as if it had lapsed, so this runs the
+ * same against a store with a real clock.
+ */
+async function olderPausedWhileNewerStores(store: KvStore) {
+  const later = new Date(NOW.getTime() + SEARCH_LEASE_MS);
+  const older = await planWebSearch(store, NOW, roomy());
+  if (older.kind !== "search") throw new Error(`the older check planned ${older.kind}`);
+  await store.deleteIfEquals(WEB_SEARCH_LEASE_KEY, older.lease.token);
+  const newer = await planWebSearch(store, later, roomy());
+  expect(newer.kind).toBe("search");
+  const realFetch = globalThis.fetch;
+  const { fetchMock } = fakeMeta({ search: [searchReply(OLDER), searchReply(NEWER)] });
+  // Meta is scripted; a real store's own requests still reach it.
+  vi.stubGlobal("fetch", (url: string | URL | Request, init?: RequestInit) => (String(url) === META_RESPONSES_URL ? fetchMock(url, init) : realFetch(url, init)));
+
+  let reached!: () => void;
+  const atRead = new Promise<void>((resolve) => (reached = resolve));
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  let paused = false;
+  const pausing = new Proxy(store, {
+    get(target, prop) {
+      if (prop === "get") {
+        return async (key: string) => {
+          const value = await target.get(key);
+          if (key === WEB_SEARCH_KEY && !paused) {
+            paused = true;
+            reached();
+            await held;
+          }
+          return value;
+        };
+      }
+      const value = Reflect.get(target, prop);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+
+  const olderDone = runWebSearch(older, { store: pausing, now: NOW, deadline: Date.now() + 40_000, meter: new Meter() });
+  await atRead;
+  await runWebSearch(newer, { store, now: later, deadline: Date.now() + 40_000, meter: new Meter() });
+  release();
+  await olderDone;
+}
+
 describe("one search at a time, and the newest result kept (review 🟡3)", () => {
   const run = (plan: WebPlan, store: KvStore, now: Date) => runWebSearch(plan, { store, now, deadline: Date.now() + 40_000, meter: new Meter() });
-  const stored = async (store: KvStore) => JSON.parse((await store.get(WEB_SEARCH_KEY))!).evidence;
 
   it("concurrent misses make one search: the others run without it and say why", async () => {
     expect(WEB_SEARCH_LEASE_KEY.startsWith("lusong:")).toBe(true);
@@ -371,6 +422,7 @@ describe("one search at a time, and the newest result kept (review 🟡3)", () =
       set: (k, v, t) => inner.set(k, v, t),
       setIfAbsent: (k, v, t) => inner.setIfAbsent(k, v, t),
       deleteIfEquals: (k, v) => inner.deleteIfEquals(k, v),
+      compareAndSet: (k, e, v, t) => inner.compareAndSet(k, e, v, t),
     };
 
     expect(await planWebSearch(store, NOW, roomy())).toEqual({ kind: "cached", evidence: fresh.evidence });
@@ -403,8 +455,6 @@ describe("one search at a time, and the newest result kept (review 🟡3)", () =
       }
       return store;
     }
-    const OLDER = closures([{ ...MABOLO, place: "Older Street" }]);
-    const NEWER = closures([{ ...MABOLO, place: "Newer Street" }]);
 
     it("an older search that finishes last never replaces the newer result", async () => {
       const store = await overlapping("newer", OLDER, NEWER);
@@ -423,6 +473,12 @@ describe("one search at a time, and the newest result kept (review 🟡3)", () =
 
     it("a newer success replaces an older one", async () => {
       const store = await overlapping("older", OLDER, NEWER);
+      expect((await stored(store)).findings.map((f: { place: string }) => f.place)).toEqual(["Newer Street"]);
+    });
+
+    it("an older search paused between reading the stored result and writing its own never replaces a newer one stored meanwhile (review 🟡T7-10)", async () => {
+      const store = new MemoryKvStore();
+      await olderPausedWhileNewerStores(store);
       expect((await stored(store)).findings.map((f: { place: string }) => f.place)).toEqual(["Newer Street"]);
     });
   });
@@ -448,6 +504,18 @@ describe("the Upstash store's lease commands", () => {
     await store.deleteIfEquals(WEB_SEARCH_LEASE_KEY, "token-1");
     expect(sent).toEqual([["EVAL", expect.stringContaining('redis.call("GET", KEYS[1]) == ARGV[1]'), "1", WEB_SEARCH_LEASE_KEY, "token-1"]]);
   });
+
+  it("stores a search only over the value it read, in one script, set only when Redis says 1 (review 🟡T7-10)", async () => {
+    const replaced = upstash(1);
+    expect(await replaced.store.compareAndSet(WEB_SEARCH_KEY, '{"old":1}', '{"new":1}', 60_000)).toBe(true);
+    expect(await replaced.store.compareAndSet(WEB_SEARCH_KEY, null, '{"new":1}', 60_000)).toBe(true);
+    expect(replaced.sent).toEqual([
+      ["EVAL", expect.stringContaining('redis.call("SET", KEYS[1], ARGV[3], "PX", ARGV[4])'), "1", WEB_SEARCH_KEY, "equals", '{"old":1}', '{"new":1}', "60000"],
+      ["EVAL", expect.any(String), "1", WEB_SEARCH_KEY, "absent", "", '{"new":1}', "60000"],
+    ]);
+    vi.unstubAllGlobals();
+    expect(await upstash(0).store.compareAndSet(WEB_SEARCH_KEY, null, '{"new":1}', 60_000)).toBe(false);
+  });
 });
 
 /** The real store runs against Redis behind serverless-redis-http (Upstash's REST API), when one is up. */
@@ -460,6 +528,25 @@ describe.skipIf(!upstashUrl)("the Upstash store for the shared search", () => {
     expect(await store.get(WEB_SEARCH_KEY)).toBe('{"a":1}');
     await new Promise((resolve) => setTimeout(resolve, 400));
     expect(await store.get(WEB_SEARCH_KEY)).toBeNull();
+  });
+
+  it("sets a key only while it holds the value expected, or is absent when none is (review 🟡T7-10)", async () => {
+    const store = new UpstashKvStore(upstashUrl!, process.env.LUSONG_TEST_UPSTASH_TOKEN ?? "", `lusong-test-${randomUUID()}`);
+    expect(await store.compareAndSet(WEB_SEARCH_KEY, '{"a":1}', '{"b":1}', 60_000)).toBe(false);
+    expect(await store.get(WEB_SEARCH_KEY)).toBeNull();
+    expect(await store.compareAndSet(WEB_SEARCH_KEY, null, '{"a":1}', 60_000)).toBe(true);
+    expect(await store.compareAndSet(WEB_SEARCH_KEY, null, '{"b":1}', 60_000)).toBe(false);
+    expect(await store.compareAndSet(WEB_SEARCH_KEY, '{"b":1}', '{"c":1}', 60_000)).toBe(false);
+    expect(await store.compareAndSet(WEB_SEARCH_KEY, '{"a":1}', '{"c":1}', 300)).toBe(true);
+    expect(await store.get(WEB_SEARCH_KEY)).toBe('{"c":1}');
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(await store.get(WEB_SEARCH_KEY)).toBeNull();
+  });
+
+  it("an older search paused between its read and its write never replaces a newer one stored meanwhile (review 🟡T7-10)", async () => {
+    const store = new UpstashKvStore(upstashUrl!, process.env.LUSONG_TEST_UPSTASH_TOKEN ?? "", `lusong-test-${randomUUID()}`);
+    await olderPausedWhileNewerStores(store);
+    expect((await stored(store)).findings.map((f: { place: string }) => f.place)).toEqual(["Newer Street"]);
   });
 });
 

@@ -104,6 +104,8 @@ export interface KvStore {
   setIfAbsent(key: string, value: string, ttlMs: number): Promise<boolean>;
   /** Deletes the key only while it still holds this value, so a lapsed lease never frees another check's. */
   deleteIfEquals(key: string, value: string): Promise<void>;
+  /** Sets the key only while it still holds `expected` (null: while it is absent), in one step; true when it was set. */
+  compareAndSet(key: string, expected: string | null, value: string, ttlMs: number): Promise<boolean>;
 }
 
 export class MemoryKvStore implements KvStore {
@@ -133,9 +135,20 @@ export class MemoryKvStore implements KvStore {
   async deleteIfEquals(key: string, value: string) {
     if (this.read(key) === value) this.values.delete(key);
   }
+
+  async compareAndSet(key: string, expected: string | null, value: string, ttlMs: number) {
+    if (this.read(key) !== expected) return false;
+    this.values.set(key, { value, until: this.clock() + ttlMs });
+    return true;
+  }
 }
 
 const DELETE_IF_EQUALS = 'if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) else return 0 end';
+// An absent key reads as false in Lua, so "expect it absent" is its own argument rather than an empty string.
+const COMPARE_AND_SET =
+  'local current = redis.call("GET", KEYS[1]) ' +
+  'if (ARGV[1] == "absent" and current == false) or (ARGV[1] == "equals" and current == ARGV[2]) then ' +
+  'redis.call("SET", KEYS[1], ARGV[3], "PX", ARGV[4]) return 1 else return 0 end';
 
 export class UpstashKvStore implements KvStore {
   constructor(
@@ -175,6 +188,11 @@ export class UpstashKvStore implements KvStore {
 
   async deleteIfEquals(key: string, value: string) {
     await this.command(["EVAL", DELETE_IF_EQUALS, "1", this.key(key), value]);
+  }
+
+  async compareAndSet(key: string, expected: string | null, value: string, ttlMs: number) {
+    const args = expected === null ? ["absent", ""] : ["equals", expected];
+    return (await this.command(["EVAL", COMPARE_AND_SET, "1", this.key(key), ...args, value, String(ttlMs)])) === 1;
   }
 }
 
@@ -285,16 +303,22 @@ export async function releaseWebSearch(plan: WebPlan): Promise<void> {
   await giveBack(plan.lease);
 }
 
+const KEEP_ATTEMPTS = 3;
+
 /**
  * Stores the result unless the stored one should stand: a search that started later, or a success still fresh when
- * this one failed. Not atomic, but the lease keeps two searches from overlapping unless one outlives it.
+ * this one failed. The write only lands on the value that was read, so a search that outlived its lease can't overwrite
+ * one stored between its read and its write; it reads again and decides again.
  */
 async function keep(store: KvStore, record: Stored, now: Date): Promise<void> {
-  const text = await store.get(WEB_SEARCH_KEY);
-  const current = text === null ? null : readStored(text);
-  if (current && current.startedAt > record.startedAt) return;
-  if (current && current.evidence.state === "searched" && current.expiresAt > now.getTime() && record.evidence.state !== "searched") return;
-  await store.set(WEB_SEARCH_KEY, JSON.stringify(record), record.expiresAt - now.getTime());
+  for (let attempt = 0; attempt < KEEP_ATTEMPTS; attempt++) {
+    const text = await store.get(WEB_SEARCH_KEY);
+    const current = text === null ? null : readStored(text);
+    if (current && current.startedAt > record.startedAt) return;
+    if (current && current.evidence.state === "searched" && current.expiresAt > now.getTime() && record.evidence.state !== "searched") return;
+    if (await store.compareAndSet(WEB_SEARCH_KEY, text, JSON.stringify(record), record.expiresAt - now.getTime())) return;
+  }
+  console.error(`couldn't store the web search: the stored result changed under it ${KEEP_ATTEMPTS} times`);
 }
 
 function phtDay(t: Date): string {
