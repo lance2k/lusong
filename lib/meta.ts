@@ -37,8 +37,8 @@ function countOf(value: unknown): number | null {
  */
 export type Operation = "sam" | "spark-chat" | "spark-responses";
 
-/** Responses-API output items billed only through the reply's tokens. Any other item may be a tool
- *  call with a price of its own that the meter cannot count yet. */
+/** Responses-API output items billed only through the reply's tokens. Any other item, such as
+ *  `web_search_call`, may carry a fee of its own that the meter cannot count yet. */
 const TOKEN_PRICED_OUTPUT = new Set(["message", "reasoning", "function_call"]);
 
 type Usage = Record<string, unknown> | undefined;
@@ -57,14 +57,13 @@ const READERS: Record<Operation, (usage: Usage, body: unknown) => Reading> = {
   "spark-chat"(usage) {
     return tokens(countOf(usage?.prompt_tokens), countOf(usage?.completion_tokens));
   },
-  // UNVERIFIED for Muse Spark: input_tokens and output_tokens are the names Meta's /responses
-  // returned for SAM (measured); #7's feasibility probe confirms them for Spark.
+  // Field names and the `web_search_call` item type from a live probe, 2026-10-30, 3 calls.
   "spark-responses"(usage, body) {
     const reading = tokens(countOf(usage?.input_tokens), countOf(usage?.output_tokens));
     const output = (body as { output?: unknown } | null)?.output;
-    const items: { type?: unknown }[] = Array.isArray(output) ? output : [];
-    const unpriced = items.some((item) => !TOKEN_PRICED_OUTPUT.has(String(item?.type)));
-    return unpriced ? { ...reading, complete: false } : reading;
+    const unreadable = !Array.isArray(output);
+    const unpriced = !unreadable && output.some((item: { type?: unknown } | null) => !TOKEN_PRICED_OUTPUT.has(String(item?.type)));
+    return unreadable || unpriced ? { ...reading, complete: false } : reading;
   },
 };
 

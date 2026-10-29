@@ -115,6 +115,18 @@ describe("the meter reads each operation's usage", () => {
     expect(meter.usage().complete).toBe(false);
   });
 
+  it("a Spark reply whose output is missing or not a list is not a complete count, and its tokens still count", () => {
+    for (const body of [
+      { usage: { input_tokens: 2_000, output_tokens: 3_000 } },
+      { output: { type: "message" }, usage: { input_tokens: 2_000, output_tokens: 3_000 } },
+      { output: null, usage: { input_tokens: 2_000, output_tokens: 3_000 } },
+    ]) {
+      const meter = new Meter();
+      meter.reply("spark-responses", body);
+      expect(meter.usage()).toEqual({ samImages: 0, museInputTokens: 2_000, museOutputTokens: 3_000, complete: false });
+    }
+  });
+
   it("reasoning and function calls are paid for in tokens, so they keep the count complete", () => {
     const meter = new Meter();
     meter.reply(
