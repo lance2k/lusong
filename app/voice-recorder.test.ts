@@ -79,6 +79,23 @@ describe("a recording the page stopped wanting while it was starting (🟡T9-3)"
     expect(seen.contextClosed).toBe(true);
   });
 
+  it.each([
+    ["the audio context's resume never returns", { resume: () => new Promise<void>(() => {}) }],
+    ["the capture module never finishes loading", { addModule: () => new Promise<void>(() => {}) }],
+  ])("the page goes away while %s: the microphone is let go at once and the start gives up", async (_why, stall) => {
+    const { media, seen } = fakeMedia(stall);
+    const page = new AbortController();
+    const starting = startRecording({ media, signal: page.signal });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(seen.granted).toBe(true);
+    expect(seen.track.stopped).toBe(false);
+    page.abort();
+    expect(seen.track.stopped).toBe(true);
+    expect(seen.contextClosed).toBe(true);
+    await expect(starting).rejects.toMatchObject({ name: "AbortError" });
+    expect(seen.workletNodes).toBe(0);
+  });
+
   it("the page goes away after recording started: the microphone is let go at once", async () => {
     const { media, seen } = fakeMedia();
     const page = new AbortController();

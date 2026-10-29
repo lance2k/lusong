@@ -37,8 +37,9 @@ export const browserMedia = (): RecorderMedia => ({
  * ScriptProcessor where it doesn't; resampled to 16 kHz only when the note is encoded.
  *
  * However setup fails, the microphone's tracks are stopped and the audio context closed before the error is thrown.
- * `signal` is the page's: aborted while recording is starting, the start is given up and everything let go once the
- * pending step returns (an AbortError is thrown); aborted after, the recording is cancelled at once.
+ * `signal` is the page's: aborted while recording is starting, the microphone and the audio context are let go at once
+ * and the start gives up with an AbortError, even if the pending step never returns; a microphone allowed only after
+ * that is stopped as soon as it arrives. Aborted after, the recording is cancelled at once.
  */
 export async function startRecording(opts: { media?: RecorderMedia; signal?: AbortSignal } = {}): Promise<Recording> {
   const media = opts.media ?? browserMedia();
@@ -49,18 +50,30 @@ export async function startRecording(opts: { media?: RecorderMedia; signal?: Abo
   const nodes: AudioNode[] = [];
   let released = false;
   const release = () => {
+    // Outside the guard: a stream that arrives after the page gave up still has its tracks stopped.
+    for (const track of stream?.getTracks() ?? []) track.stop();
     if (released) return;
     released = true;
     for (const node of nodes) node.disconnect();
-    for (const track of stream?.getTracks() ?? []) track.stop();
     void ctx.close();
   };
+  const givenUp = () => new DOMException("The page stopped the recording while it was starting.", "AbortError");
   const unlessGivenUp = () => {
-    if (signal?.aborted) throw new DOMException("The page stopped the recording while it was starting.", "AbortError");
+    if (signal?.aborted) {
+      release();
+      throw givenUp();
+    }
   };
+  let abandon: (err: DOMException) => void = () => {};
+  const abandoned = new Promise<never>((_, reject) => (abandon = reject));
+  const onAbort = () => {
+    release();
+    abandon(givenUp());
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
 
   const chunks: Float32Array[] = [];
-  try {
+  const setup = async () => {
     stream = await media.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
     unlessGivenUp();
     await ctx.resume();
@@ -92,11 +105,14 @@ export async function startRecording(opts: { media?: RecorderMedia; signal?: Abo
     nodes.push(node);
     source.connect(node);
     node.connect(mute);
+  };
+  try {
+    // A setup step that never returns would otherwise hold the start open for good.
+    await Promise.race([setup(), abandoned]);
   } catch (err) {
     release();
     throw err;
   }
-  signal?.addEventListener("abort", release, { once: true });
 
   return {
     async stop() {
