@@ -182,6 +182,16 @@ describe("the demo commute check", () => {
     },
   );
 
+  it("the active Cebu record with its areaDesc changed to 'Unknown' (geocode and polygon kept) is still active: no dry Go (🔴2)", async () => {
+    const onlyCebu = feedWith((t) => t === "GFA #5 - Region 7 (Central Visayas)");
+    const derived = SAVED[CV_GFA5].replace("<areaDesc>Cebu</areaDesc>", "<areaDesc>Unknown</areaDesc>");
+    expect(derived).not.toBe(SAVED[CV_GFA5]);
+    const { handler } = handlerAt(ADVISORY_ACTIVE, { pagasa: { [FEED_URL]: onlyCebu, [CV_GFA5]: derived } });
+    const body = await (await handler(demo("banilad-itpark", "none"))).json();
+    expect(body.advisory.state).toBe("active");
+    expect(body.answer.kind).toBe("no_one_knows");
+  });
+
   it("an unreachable routing server is said so, with no answer", async () => {
     const { handler } = handlerAt(NO_ADVISORY, { valhalla: "down" });
     const res = await handler(demo("banilad-itpark", "none"));

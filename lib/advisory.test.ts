@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { FEED_URL, readAdvisory } from "./advisory";
+import { areaCoverage, FEED_URL, readAdvisory } from "./advisory";
 
 import { CAP_EDITS, CV_GFA5, CV_GFA5_LONG, CV_GFA6_FINAL, FEED, feedWith, GFA_URL, NEWEST_PER_REGION, SAVED } from "../test/pagasa-fixtures";
 
@@ -251,5 +251,59 @@ describe("anything malformed or failed is 'unreadable', never 'none'", () => {
     await readAdvisory({ fetch: fetchMock as unknown as typeof fetch, now: at("2026-10-29T12:00:00+08:00") });
     expect(seen.length).toBeGreaterThan(1);
     expect(new Set(seen)).toEqual(new Set(["Lusong/0.1 (hackathon entry; github.com/lance2k/lusong)"]));
+  });
+});
+
+describe("an area is outside Cebu only when its usable geography says so; anything less is unreadable (🔴2, round 2)", () => {
+  const onlyCebuEntry = feedWith((t) => t === "GFA #5 - Region 7 (Central Visayas)");
+  const now = at("2026-10-25T20:00:00+08:00");
+  const cap = SAVED[CV_GFA5];
+  const cebuArea = /<area><areaDesc>Cebu<\/areaDesc>[\s\S]*?<\/area>/.exec(cap)![0];
+  const boholPolygon = /<area><areaDesc>Bohol<\/areaDesc>(<polygon>[^<]*<\/polygon>)/.exec(cap)![1];
+  /** The saved active record with only its Cebu <area> edited: derived, not real. */
+  const derivedWithCebuArea = (edit: (area: string) => string) => {
+    const edited = cap.replace(cebuArea, edit(cebuArea));
+    expect(edited).not.toBe(cap);
+    return edited;
+  };
+  const desc = (name: string) => (a: string) => a.replace("<areaDesc>Cebu</areaDesc>", `<areaDesc>${name}</areaDesc>`);
+  const noPolygon = (a: string) => a.replace(/<polygon>[^<]*<\/polygon>/, "");
+  const noGeocode = (a: string) => a.replace(/<geocode>[\s\S]*?<\/geocode>/, "");
+  const geocode = (name: string, value: string) => (a: string) =>
+    a.replace(/<geocode>[\s\S]*?<\/geocode>/, `<geocode><valueName>${name}</valueName><value>${value}</value></geocode>`);
+  const polygon = (text: string) => (a: string) => a.replace(/<polygon>[^<]*<\/polygon>/, text);
+  const all = (...edits: ((a: string) => string)[]) => (a: string) => edits.reduce((x, e) => e(x), a);
+
+  it.each([
+    { name: "the reviewer's edit: areaDesc 'Unknown', geocode and polygon kept", edit: all(desc("Unknown")), state: "active" },
+    { name: "geocode only: areaDesc 'Unknown', polygon removed", edit: all(desc("Unknown"), noPolygon), state: "active" },
+    { name: "polygon only: areaDesc 'Unknown', geocode removed", edit: all(desc("Unknown"), noGeocode), state: "active" },
+    { name: "areaDesc 'Cebu' with Bohol's geocode (contradictory)", edit: all(geocode("SAME", "071200000")), state: "active" },
+    { name: "areaDesc 'Bohol' with Cebu's geocode (contradictory)", edit: all(desc("Bohol"), noPolygon), state: "active" },
+    { name: "areaDesc 'Bohol' with Cebu's polygon (contradictory)", edit: all(desc("Bohol"), noGeocode), state: "active" },
+    { name: "description only, naming nowhere: 'Unknown', no geocode or polygon", edit: all(desc("Unknown"), noGeocode, noPolygon), state: "unreadable" },
+    { name: "description only, naming another province: 'Leyte'", edit: all(desc("Leyte"), noGeocode, noPolygon), state: "unreadable" },
+    { name: "a polygon that can't be read and no geocode", edit: all(desc("Unknown"), noGeocode, polygon("<polygon>not a polygon</polygon>")), state: "unreadable" },
+    { name: "a polygon of two points and no geocode", edit: all(desc("Unknown"), noGeocode, polygon("<polygon>10.3,123.8 10.4,123.9</polygon>")), state: "unreadable" },
+    { name: "a SAME geocode that isn't nine digits and no polygon", edit: all(desc("Unknown"), noPolygon, geocode("SAME", "07220")), state: "unreadable" },
+    { name: "a geocode in a scheme Lusong doesn't know and no polygon", edit: all(desc("Unknown"), noPolygon, geocode("PSGC", "072200000")), state: "unreadable" },
+    { name: "Bohol's geocode beside a polygon that can't be read", edit: all(desc("Unknown"), geocode("SAME", "071200000"), polygon("<polygon>garbled</polygon>")), state: "unreadable" },
+    { name: "every indicator says elsewhere: 'Unknown', Bohol's geocode, no polygon", edit: all(desc("Unknown"), geocode("SAME", "071200000"), noPolygon), state: "none" },
+    { name: "every indicator says elsewhere: 'Unknown', no geocode, Bohol's polygon", edit: all(desc("Unknown"), noGeocode, polygon(boholPolygon)), state: "none" },
+  ] as const)("$name ⇒ $state", async ({ edit, state }) => {
+    const { fetch } = pagasa({ [FEED_URL]: onlyCebuEntry, [CV_GFA5]: derivedWithCebuArea(edit) });
+    expect((await readAdvisory({ fetch, now })).state).toBe(state);
+  });
+
+  it("every area of every saved PAGASA record reads as before: Cebu where its name says Cebu, outside everywhere else", () => {
+    const records = { ...SAVED, derived: CV_GFA5_LONG };
+    let areas = 0;
+    for (const [url, xml] of Object.entries(records)) {
+      const names = [...xml.matchAll(/<areaDesc>([^<]*)<\/areaDesc>/g)].map((m) => m[1]);
+      expect(areaCoverage(xml), url).toEqual(names.map((n) => (/\bcebu\b/i.test(n) ? "cebu" : "outside")));
+      areas += names.length;
+    }
+    expect(Object.keys(records)).toHaveLength(10);
+    expect(areas).toBe(24);
   });
 });
