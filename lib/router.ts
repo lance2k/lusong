@@ -129,7 +129,11 @@ export function decodePolyline6(encoded: string): Point[] {
       let byte: number;
       do {
         if (index >= encoded.length) throw new Error("truncated polyline");
-        byte = encoded.charCodeAt(index++) - 63;
+        // Six 5-bit chunks hold ±536 degrees at 1e6; a seventh would overflow 32-bit shifts into a plausible point.
+        if (shift >= 30) throw new Error("overlong polyline value");
+        const code = encoded.charCodeAt(index++);
+        if (code < 63 || code > 126) throw new Error("character outside the polyline encoding");
+        byte = code - 63;
         result |= (byte & 0x1f) << shift;
         shift += 5;
       } while (byte >= 0x20);
