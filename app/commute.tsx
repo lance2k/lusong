@@ -4,6 +4,7 @@ import { useEffect, useReducer, useState } from "react";
 import type { AnswerKind, RouteState } from "@/lib/answer";
 import { detourWords } from "@/lib/commute-words";
 import { DEMO_TRIPS, SCENARIOS, scenariosFor, type DemoTripId } from "@/lib/samples";
+import { MuseSummary, WebFindings, type PageMuse } from "./commute-muse";
 import { commuteReducer, initialCommuteState, type CommuteInputs, type CommuteState } from "./commute-state";
 
 interface PageReport {
@@ -38,8 +39,17 @@ interface CommuteResult {
   rainingHere: boolean;
   answer: { kind: AnswerKind; title: string; reason: string; thin: string | null };
   route: { lengthKm: number; timeMin: number; streets: string[] };
-  detour: { state: RouteState; lengthKm: number; timeMin: number; extraKm: number; extraMin: number; streets: string[] } | null;
+  detour: {
+    state: RouteState;
+    proposedBy: "rules" | "muse_spark";
+    lengthKm: number;
+    timeMin: number;
+    extraKm: number;
+    extraMin: number;
+    streets: string[];
+  } | null;
   advisory: PageAdvisory;
+  muse: PageMuse;
   reports: PageReport[];
   mmdaCredit: string;
 }
@@ -170,7 +180,11 @@ function ResultView({ result, checkedFor }: { result: CommuteResult; checkedFor:
         </div>
       </section>
 
+      {result.muse && <MuseSummary summary={result.muse.summary} />}
+
       <Advisory advisory={result.advisory} />
+
+      {result.muse && <WebFindings web={result.muse.web} />}
 
       <section>
         <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-500">Reports</h3>
@@ -204,6 +218,9 @@ function ResultView({ result, checkedFor }: { result: CommuteResult; checkedFor:
               {detour.streets.length > 0 && <>, via {detour.streets.join(", ")}</>}.
             </p>
             <p className="font-semibold">{detourWords(detour)}.</p>
+            {detour.proposedBy === "muse_spark" && (
+              <p className="text-sm text-zinc-500">Muse Spark suggested this way; Lusong&apos;s rules judged it on the reports along it.</p>
+            )}
           </div>
         )}
         <p className="mt-1 text-sm text-zinc-500">
@@ -282,7 +299,7 @@ export default function CommuteCheck() {
       <div aria-live="polite">
         {view.step === "checking" && (
           <p className="text-center text-zinc-600 dark:text-zinc-400">
-            Reading PAGASA&apos;s flood advisory, getting the motorbike route, gathering reports and, if your way is blocked, looking for another… <Elapsed since={view.startedAt} /> s
+            Reading PAGASA&apos;s flood advisory, getting the motorbike route, gathering reports, checking the web for road closures and, if your way is blocked, looking for another… <Elapsed since={view.startedAt} /> s
           </p>
         )}
         {view.step === "failed" && (

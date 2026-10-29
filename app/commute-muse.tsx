@@ -1,0 +1,49 @@
+export interface PageMuse {
+  summary: { shown: boolean; label: string; sentences: string[]; note: string | null };
+  web: {
+    line: string;
+    findings: { place: string; url: string; sourceDate: string | null; summary: string; counted: boolean; note: string }[];
+  };
+}
+
+/** Muse Spark's words are shown as plain text, never as HTML, and only below the rules' own reason. */
+export function MuseSummary({ summary }: { summary: PageMuse["summary"] }) {
+  if (!summary.shown && !summary.note) return null;
+  return (
+    <section className="space-y-1 rounded-2xl border border-violet-200 px-4 py-3 text-[15px] dark:border-violet-900">
+      <h3 className="text-sm font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">{summary.label}</h3>
+      {summary.shown ? (
+        summary.sentences.map((sentence, i) => <p key={i}>{sentence}</p>)
+      ) : (
+        <p className="text-zinc-600 dark:text-zinc-400">{summary.note}</p>
+      )}
+      <p className="text-sm text-zinc-500">Written by Muse Spark from the evidence below. Lusong&apos;s rules picked the answer.</p>
+    </section>
+  );
+}
+
+export function WebFindings({ web }: { web: PageMuse["web"] }) {
+  return (
+    <section className="space-y-2 text-[15px]">
+      <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">Road closures on the web</h3>
+      <p className="text-zinc-600 dark:text-zinc-400">{web.line}</p>
+      {web.findings.length > 0 && (
+        <ul className="divide-y divide-zinc-200 rounded-2xl border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+          {web.findings.map((f, i) => (
+            <li key={i} className="space-y-1 px-4 py-3">
+              <p className="font-medium">{f.place}</p>
+              {f.summary && <p>{f.summary}</p>}
+              <p className="text-zinc-600 dark:text-zinc-400">
+                {f.sourceDate ? `Dated ${f.sourceDate}. ` : ""}
+                {f.note}
+              </p>
+              <a className="break-all text-sm text-sky-700 underline dark:text-sky-400" href={f.url} rel="noopener noreferrer nofollow" target="_blank">
+                {f.url}
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
