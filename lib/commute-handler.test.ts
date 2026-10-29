@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FEED_URL } from "./advisory";
 import { createBudget, MemoryBudgetStore, type Budget, type BudgetStore } from "./budget";
 import {
@@ -122,6 +122,25 @@ function network(opts: Options = {}) {
   });
   return { fetch: fetchMock as unknown as typeof fetch, calls, valhallaCalls: () => calls.filter((c) => c.url.startsWith(VALHALLA_URL)) };
 }
+
+// Several describes below set MODEL_API_KEY, which turns Muse Spark on for any handler built without `muse`: a test
+// that forgets it would call Meta for real. Each test runs with Meta's address refused and recorded; fakeMeta's own
+// stub replaces this one for the tests that script Meta's replies.
+const realFetch = globalThis.fetch;
+const realMetaCalls: string[] = [];
+beforeEach(() => {
+  realMetaCalls.length = 0;
+  vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (!url.startsWith("https://api.meta.ai")) return realFetch(input, init);
+    realMetaCalls.push(url);
+    throw new TypeError(`fetch failed: this file never calls Meta for real (${url})`);
+  });
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
+  expect(realMetaCalls, "a test reached Meta's API: build its handler with muse: MUSE_OFF or fakeMeta").toEqual([]);
+});
 
 const openBudget = () => createBudget({ store: new MemoryBudgetStore(), budgetUsd: 10, ipLimit: 100 });
 
@@ -260,7 +279,7 @@ describe("the demo commute check", () => {
 
   it("a routing gate with no store makes no request and gives no answer", async () => {
     const net = network();
-    const handler = makeCommuteHandler({ fetch: net.fetch, now: () => NO_ADVISORY, gate: () => makeValhallaGate(null), budget: openBudget });
+    const handler = makeCommuteHandler({ fetch: net.fetch, now: () => NO_ADVISORY, gate: () => makeValhallaGate(null), budget: openBudget, muse: MUSE_OFF });
     const res = await handler(demo("banilad-itpark", "none"));
     expect(res.status).toBe(503);
     expect((await res.json()).answer).toBeUndefined();
@@ -282,7 +301,7 @@ describe("the demo commute check", () => {
     let now = NO_ADVISORY;
     const net = network();
     const gate = makeValhallaGate(new MemorySlotStore());
-    const handler = makeCommuteHandler({ fetch: net.fetch, now: () => now, gate: () => gate, budget: openBudget });
+    const handler = makeCommuteHandler({ fetch: net.fetch, now: () => now, gate: () => gate, budget: openBudget, muse: MUSE_OFF });
     await handler(demo("banilad-itpark", "none"));
     await handler(demo("banilad-itpark", "unclear"));
     expect(net.valhallaCalls()).toHaveLength(1);
@@ -296,7 +315,7 @@ describe("the demo commute check", () => {
     let now = NO_ADVISORY;
     const net = network();
     const gate = makeValhallaGate(new MemorySlotStore());
-    const handler = makeCommuteHandler({ fetch: net.fetch, now: () => now, gate: () => gate, budget: openBudget });
+    const handler = makeCommuteHandler({ fetch: net.fetch, now: () => now, gate: () => gate, budget: openBudget, muse: MUSE_OFF });
     const feedCalls = () => net.calls.filter((c) => c.url === FEED_URL).length;
     await handler(demo("banilad-itpark", "none"));
     await handler(demo("mabolo-cbp", "none"));
@@ -310,7 +329,7 @@ describe("the demo commute check", () => {
     let now = NO_ADVISORY;
     const down = network({ feed: "down" });
     const gate = makeValhallaGate(new MemorySlotStore());
-    const handler = makeCommuteHandler({ fetch: down.fetch, now: () => now, gate: () => gate, budget: openBudget });
+    const handler = makeCommuteHandler({ fetch: down.fetch, now: () => now, gate: () => gate, budget: openBudget, muse: MUSE_OFF });
     const feedCalls = () => down.calls.filter((c) => c.url === FEED_URL).length;
     for (const scenario of ["none", "flooded", "unclear", "none"]) {
       expect((await (await handler(demo("banilad-itpark", scenario))).json()).advisory.state).toBe("unreadable");
@@ -470,7 +489,7 @@ describe("go another way", () => {
     let grants = 0;
     const counted = { acquire: async () => ((await inner.acquire()) === "ok" ? (grants++, "ok" as const) : "busy" as const) };
     const net = network();
-    const handler = makeCommuteHandler({ fetch: net.fetch, now: () => NO_ADVISORY, gate: () => counted, budget: openBudget });
+    const handler = makeCommuteHandler({ fetch: net.fetch, now: () => NO_ADVISORY, gate: () => counted, budget: openBudget, muse: MUSE_OFF });
     expect((await handler(demo("banilad-itpark", "flooded"))).status).toBe(200);
     const [first, second] = net.valhallaCalls();
     expect(grants).toBe(2);
@@ -482,7 +501,7 @@ describe("go another way", () => {
     let asked = 0;
     const firstOnly = { acquire: async () => (++asked === 1 ? inner.acquire() : ("busy" as const)) };
     const net = network();
-    const handler = makeCommuteHandler({ fetch: net.fetch, now: () => NO_ADVISORY, gate: () => firstOnly, budget: openBudget });
+    const handler = makeCommuteHandler({ fetch: net.fetch, now: () => NO_ADVISORY, gate: () => firstOnly, budget: openBudget, muse: MUSE_OFF });
     const res = await handler(demo("banilad-itpark", "flooded"));
     expect(res.status).toBe(503);
     expect((await res.json()).answer).toBeUndefined();
