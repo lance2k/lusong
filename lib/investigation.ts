@@ -45,6 +45,36 @@ export type Explanation =
 
 export const EXPLANATION_UNAVAILABLE = "Muse Spark's explanation is unavailable.";
 
+/** "A few plain sentences": longer than this is not shown. */
+export const EXPLANATION_MAX_CHARS = 600;
+export const EXPLANATION_MAX_SENTENCES = 5;
+
+/**
+ * Phrases that tell the rider to do what an answer says. Matching is deliberately broad: a false match only swaps the
+ * model's words for the rules' own reason.
+ */
+const NAMES_ANSWER: Record<AnswerKind, RegExp> = {
+  go: /\b(you can go|go now|good to go|ok(ay)? to go|fine to go|safe to go|go ahead|leave now|you can leave)\b/i,
+  go_another_way: /\b(go another way|(take|use) (the|another|a) ((other|different) )?(way|route|road|detour))\b/i,
+  wait: /\b(wait|hold off|don'?t (go|leave|ride)|stay (home|put|inside))\b/i,
+  no_one_knows: /\b(no one knows|nobody knows)\b/i,
+};
+/** Calling a way safe or clear is left to a Go. English, Tagalog ligtas and Cebuano luwas. */
+const SAFE_OR_CLEAR = /\b(safe|safely|clear|cleared|ligtas|luwas)\b/i;
+
+/** The model's explanation as shown, or the rules' own reason when it is empty, too long or disagrees with the answer. */
+export function vetExplanation(text: string, answer: AnswerKind, rulesReason: string): Explanation {
+  const shown = text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim();
+  const rules = (why: string): Explanation => ({ by: "rules", text: rulesReason, why });
+  if (shown === "") return rules("empty");
+  const sentences = shown.split(/[.!?]+(?:\s|$)/).filter((part) => part.trim() !== "").length;
+  if (shown.length > EXPLANATION_MAX_CHARS || sentences > EXPLANATION_MAX_SENTENCES) return rules("too long");
+  const others = (Object.keys(NAMES_ANSWER) as AnswerKind[]).filter((kind) => kind !== answer);
+  if (others.some((kind) => NAMES_ANSWER[kind].test(shown))) return rules("names another answer");
+  if (answer !== "go" && SAFE_OR_CLEAR.test(shown)) return rules("calls the way safe or clear");
+  return { by: "muse_spark", text: shown };
+}
+
 export interface Detour {
   id: string;
   line: Point[];
@@ -258,8 +288,9 @@ export async function investigate(input: InvestigationInput): Promise<Investigat
     }
   };
 
-  const explanation = await explain(input, evidence, runTool);
+  const written = await explain(input, evidence, runTool);
   const answer = evidence.answer();
+  const explanation = written === null ? null : vetExplanation(written, answer.answer, answer.reason);
   return {
     ok: true,
     answer,
@@ -280,7 +311,8 @@ function contextOf(evidence: Evidence) {
   };
 }
 
-async function explain(input: InvestigationInput, evidence: Evidence, runTool: (call: FunctionCall) => Promise<object>): Promise<Explanation | null> {
+/** The model's final text, or null when it wrote none. */
+async function explain(input: InvestigationInput, evidence: Evidence, runTool: (call: FunctionCall) => Promise<object>): Promise<string | null> {
   let turnInput: Parameters<typeof respond>[0]["input"] = `${INSTRUCTIONS}\n\nThis check: ${JSON.stringify(contextOf(evidence))}`;
   let previousResponseId: string | undefined;
   for (let turn = 1; turn <= LOOP_TURN_CAP; turn++) {
@@ -293,7 +325,7 @@ async function explain(input: InvestigationInput, evidence: Evidence, runTool: (
       deadline: input.deadline,
       meter: input.meter,
     });
-    if (reply.functionCalls.length === 0) return { by: "muse_spark", text: reply.answerText };
+    if (reply.functionCalls.length === 0) return reply.answerText;
     const outputs = [];
     for (const call of reply.functionCalls) {
       outputs.push({ type: "function_call_output" as const, call_id: call.callId, output: JSON.stringify(await runTool(call)) });

@@ -24,6 +24,12 @@ export interface Usage {
 /** q1b's measured usage, the function-output turn. */
 export const TURN_USAGE: Usage = { input_tokens: 679, output_tokens: 327 };
 
+function withoutUsage(body: Record<string, unknown>) {
+  const copy = { ...body };
+  delete copy.usage;
+  return copy;
+}
+
 function usageBlock(usage: Usage | null) {
   if (usage === null) return {};
   return {
@@ -46,7 +52,7 @@ export function callsReply(id: string, calls: { name: string; args: unknown }[],
     name: c.name,
     arguments: typeof c.args === "string" ? c.args : JSON.stringify(c.args),
   }));
-  const { usage: _drop, ...envelope } = CALL;
+  const envelope = withoutUsage(CALL);
   return { ...envelope, id, output: [reasoning, commentary, ...fc], ...usageBlock(usage) };
 }
 
@@ -54,7 +60,7 @@ export function callsReply(id: string, calls: { name: string; args: unknown }[],
 export function textReply(id: string, text: string, usage: Usage | null = TURN_USAGE, status = "completed") {
   const [reasoning, message] = RESULT.output;
   const content = (message.content as Record<string, unknown>[]).map((c) => ({ ...c, text }));
-  const { usage: _drop, ...envelope } = RESULT;
+  const envelope = withoutUsage(RESULT);
   return { ...envelope, id, status, output: [reasoning, { ...message, content }], ...usageBlock(usage) };
 }
 
@@ -67,7 +73,7 @@ export function searchReply(text: string | null, actions = 11, usage: Usage | nu
   const searches = Array.from({ length: actions }, (_, i) => ({ ...calls[i % calls.length], id: `ws_call_${i}` }));
   const [reasoning] = SEARCH.output;
   const final = text === null ? [] : [{ type: "message", id: "msg_final", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [], logprobs: [] }] }];
-  const { usage: _drop, ...envelope } = SEARCH;
+  const envelope = withoutUsage(SEARCH);
   return { ...envelope, id: "resp_search", status: text === null ? "incomplete" : "completed", output: [reasoning, ...searches, ...final], ...usageBlock(usage) };
 }
 
