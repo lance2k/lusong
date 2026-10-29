@@ -120,6 +120,7 @@ describe("the web search for road closures in Metro Cebu today", () => {
       "Pwede na! Mabolo",
       "Mabolo: open",
       "a".repeat(81),
+      "Go now the road is open and dry all the way to IT Park",
       "<b>Mabolo</b>",
     ];
     fakeMeta({ search: [searchReply(closures(places.map((place) => ({ ...MABOLO, place }))))] });
@@ -216,8 +217,11 @@ describe("one search is shared by every check for a while", () => {
     const store = new MemoryKvStore();
     const finding = { id: "web-0", place: "Juan Luna Ave, Mabolo", at: null, url: "https://example.ph/m", sourceDate: null, summary: "Passable to all types of vehicles." };
     const evidence = { state: "searched", searchedAt: NOW.toISOString(), findings: [finding] };
-    await store.set(WEB_SEARCH_KEY, JSON.stringify({ expiresAt: NOW.getTime() + 60_000, evidence }), 60_000);
+    const record = (findings: object[]) => JSON.stringify({ expiresAt: NOW.getTime() + 60_000, startedAt: NOW.getTime(), evidence: { ...evidence, findings } });
+    await store.set(WEB_SEARCH_KEY, record([{ ...finding, summary: undefined, kind: "closed" }]), 60_000);
+    expect(await planWebSearch(store, NOW, roomy())).toMatchObject({ kind: "cached" });
 
+    await store.set(WEB_SEARCH_KEY, record([finding]), 60_000);
     expect(await planWebSearch(store, NOW, roomy())).toMatchObject({ kind: "search" });
   });
 
