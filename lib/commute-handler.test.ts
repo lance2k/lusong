@@ -73,6 +73,8 @@ type Options = {
   /** Hold the plain route's reply this long; a detour that "hangs" answers only when its own timeout aborts it. */
   plainDelayMs?: number;
   detourHangs?: boolean;
+  /** The plain route never answers until its own timeout aborts it. */
+  plainHangs?: boolean;
   /** Valhalla answers only after this long. */
   valhallaDelayMs?: number;
 };
@@ -91,6 +93,10 @@ function network(opts: Options = {}) {
       if (opts.valhalla === "down") throw new TypeError("fetch failed");
       const sent = JSON.parse(String(init!.body));
       const from = `${sent.locations[0].lat},${sent.locations[0].lon}`;
+      if (!sent.exclude_polygons && opts.plainHangs) {
+        const signal = init!.signal!;
+        return new Promise<Response>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
+      }
       if (!sent.exclude_polygons) {
         if (opts.plainDelayMs) await new Promise((resolve) => setTimeout(resolve, opts.plainDelayMs));
         return new Response(opts.plainReply ?? ROUTES[from], { status: 200 });
@@ -1117,5 +1123,168 @@ describe("one deadline for the whole commute check", () => {
     expect(body.answer.kind).toBe("go_another_way");
     expect(body.muse.pick.note).toBe(PICK_UNAVAILABLE);
     expect(body.muse.web.line).toBe("Web search skipped: the search failed.");
+  });
+});
+
+describe("Muse Spark in a real check (#6 with #7)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  process.env.MODEL_API_KEY = "test-key";
+
+  const roomy = () => createBudget({ store: new MemoryBudgetStore(), budgetUsd: 100, ipLimit: 1 });
+  const museOn = (kv = new MemoryKvStore(), searchBudget: Budget = roomy()): MuseDeps => ({ enabled: true, searchStore: () => kv, searchBudget: () => searchBudget });
+  const closures = JSON.stringify({ closures: [{ place: "Colon St", lat: null, lon: null, url: "https://example.ph/colon", date: null, kind: "flooded" }] });
+  const pickOf = (answer: string, evidence: unknown[]) => JSON.stringify({ answer, evidence });
+  function watched() {
+    const admits: number[] = [];
+    const settles: boolean[] = [];
+    const inner = openBudget();
+    const budget: Budget = {
+      admit: (ip, at, reserve) => (admits.push(reserve!), inner.admit(ip, at, reserve)),
+      settle: (a, u, ok) => (settles.push(ok), inner.settle(a, u, ok)),
+    };
+    return { budget, admits, settles };
+  }
+  /** A search budget with room for exactly one search: a second plan finds a search only if the first was given back. */
+  const oneSearch = () => createBudget({ store: new MemoryBudgetStore(), budgetUsd: SEARCH_RESERVE_MICROS / 1e6, ipLimit: 1 });
+
+  it("runs the investigation a demo check runs: reports_near_route reads the stored report, and Muse Spark's pick of it is shown in Lusong's words beside the web findings", async () => {
+    const store = new MemoryReportStore();
+    const flooded = storedReport(NO_ADVISORY);
+    await store.save(flooded);
+    const meta = fakeMeta({
+      search: [searchReply(closures)],
+      turns: [callsReply("resp_1", [{ name: "reports_near_route", args: { route: "plain" } }]), textReply("resp_2", pickOf("go_another_way", [flooded.id, "detour"]))],
+    });
+    const { admits, budget } = watched();
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), budget, store, museOn());
+
+    const res = await handler(real());
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.demo).toBe(false);
+    expect(body.answer.kind).toBe("go_another_way");
+    expect(admits).toEqual([COMMUTE_RESERVE_MICROS + investigationReserveMicros({ kind: "search" })]);
+    const toolOutput = JSON.parse((meta.requests[1].input as { output: string }[])[0].output);
+    expect(toolOutput.reports.map((r: { id: string }) => r.id)).toEqual([flooded.id]);
+    expect(body.muse.pick).toEqual({
+      shown: true,
+      label: "Muse Spark picked this evidence",
+      sentences: [expect.stringMatching(/^A report 40 min ago on Governor M\. Cuenco Avenue reads /), "Nothing reported blocks the other way."],
+      note: null,
+    });
+    expect(body.muse.web.line).toBe("Searched the web at 29 Oct, 12:00 p.m. PHT");
+    expect(body.muse.web.findings.map((f: { place: string }) => f.place)).toEqual(["Colon St"]);
+    expect(meta.searchRequests).toHaveLength(1);
+  });
+
+  it("when Muse Spark fails on a real check, the rules' answer and the stored report stand and the page says the explanation is unavailable", async () => {
+    const store = new MemoryReportStore();
+    const flooded = storedReport(NO_ADVISORY);
+    await store.save(flooded);
+    fakeMeta({ search: [searchReply(closures)], turns: [new Response("{}", { status: 500 }), new Response("{}", { status: 500 })] });
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store, museOn());
+
+    const body = await (await handler(real())).json();
+
+    expect(body.answer.kind).toBe("go_another_way");
+    expect(body.reports.map((r: { id: string }) => r.id)).toEqual([flooded.id]);
+    expect(body.muse.pick).toEqual({ shown: false, label: "Muse Spark picked this evidence", sentences: [], note: PICK_UNAVAILABLE });
+  });
+
+  it("with Muse Spark off a real check reserves 1 µ$, calls no model, and says the explanation is unavailable", async () => {
+    const meta = fakeMeta({});
+    const { admits, budget } = watched();
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), budget);
+
+    const body = await (await handler(real())).json();
+
+    expect(admits).toEqual([COMMUTE_RESERVE_MICROS]);
+    expect(meta.fetchMock).not.toHaveBeenCalled();
+    expect(body.muse.pick.note).toBe(PICK_UNAVAILABLE);
+    expect(body.muse.web.line).toBe("Web search skipped: Muse Spark is off.");
+  });
+
+  it("a real check whose report store can't be read asks neither Valhalla nor Meta, settles, and gives its web search back", async () => {
+    const store = new MemoryReportStore();
+    store.recent = async () => {
+      throw new Error("Upstash HTTP 500");
+    };
+    const meta = fakeMeta({});
+    const kv = new MemoryKvStore();
+    const searchBudget = oneSearch();
+    const { settles, budget } = watched();
+    const { handler, valhallaCalls } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), budget, store, museOn(kv, searchBudget));
+
+    const res = await handler(real());
+
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toMatch(/reports/);
+    expect(meta.fetchMock).not.toHaveBeenCalled();
+    expect(valhallaCalls()).toHaveLength(0);
+    expect(settles).toEqual([false]);
+    expect(await planWebSearch(kv, NO_ADVISORY, searchBudget)).toMatchObject({ kind: "search" });
+  });
+
+  describe("a real check that stalls returns by the deadline with its reservation settled", () => {
+    const timing: CommuteTiming = { deadlineMs: 1_500, routeWorstMs: 500, storeCallMs: 200 };
+    const limit = timing.deadlineMs + timing.storeCallMs;
+
+    it("a report store that never answers: no answer, Valhalla and Meta never asked, the web search given back", async () => {
+      const store = new MemoryReportStore();
+      store.recent = () => new Promise(() => {});
+      const meta = fakeMeta({});
+      const kv = new MemoryKvStore();
+      const searchBudget = oneSearch();
+      const { settles, budget } = watched();
+      const { handler, valhallaCalls } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), budget, store, museOn(kv, searchBudget), timing);
+
+      const started = Date.now();
+      const res = await handler(real());
+
+      expect(Date.now() - started).toBeLessThan(limit);
+      expect(res.status).toBe(503);
+      expect((await res.json()).answer).toBeUndefined();
+      expect(valhallaCalls()).toHaveLength(0);
+      expect(meta.fetchMock).not.toHaveBeenCalled();
+      expect(settles).toEqual([false]);
+      expect(await planWebSearch(kv, NO_ADVISORY, searchBudget)).toMatchObject({ kind: "search" });
+    }, 10_000);
+
+    it("a routing server that never answers, with a web search that never answers: no answer, out of time", async () => {
+      const store = new MemoryReportStore();
+      await store.save(storedReport(NO_ADVISORY));
+      fakeMeta({ search: [hangs] });
+      const { settles, budget } = watched();
+      const { handler } = handlerAt(NO_ADVISORY, { plainHangs: true }, new MemorySlotStore(), budget, store, museOn(), timing);
+
+      const started = Date.now();
+      const res = await handler(real());
+
+      expect(Date.now() - started).toBeLessThan(limit);
+      expect(res.status).toBe(503);
+      const body = await res.json();
+      expect(body.answer).toBeUndefined();
+      expect(body.routing).toBe("out_of_time");
+      expect(settles).toEqual([false]);
+    }, 10_000);
+
+    it("a Valhalla slot store that never answers: no answer, out of time, and Valhalla never asked", async () => {
+      const slots: SlotStore = { claim: () => new Promise(() => {}) };
+      fakeMeta({ search: [hangs] });
+      const { settles, budget } = watched();
+      const { handler, valhallaCalls } = handlerAt(NO_ADVISORY, {}, slots, budget, new MemoryReportStore(), museOn(), timing);
+
+      const started = Date.now();
+      const res = await handler(real());
+
+      expect(Date.now() - started).toBeLessThan(limit);
+      expect(res.status).toBe(503);
+      expect((await res.json()).routing).toBe("out_of_time");
+      expect(valhallaCalls()).toHaveLength(0);
+      expect(settles).toEqual([false]);
+    }, 10_000);
   });
 });
