@@ -24,6 +24,11 @@ export function tapTrip(draft: TripDraft, at: Point): { draft: TripDraft; outsid
   return { draft: { step: "work", home: at }, outside: false };
 }
 
+/** The only way the trip leaves the phone: as a real check's start and end, which the server uses and doesn't keep. */
+export function checkRequest(trip: Trip, rainingHere: boolean) {
+  return { mode: "real" as const, from: trip.home, to: trip.work, rainingHere };
+}
+
 function pointFrom(value: unknown): Point | null {
   if (typeof value !== "object" || value === null) return null;
   const { lat, lon } = value as Record<string, unknown>;
