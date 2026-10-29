@@ -40,8 +40,16 @@ One way along the roads to make a trip.
 _Avoid_: path, way (in written text)
 
 **Watcher**:
-A standing request to check a trip during a time window and message the commuter when the answer changes.
+A standing request to check a trip during a time window and message the commuter on Telegram when the window opens and whenever the answer changes.
 _Avoid_: alert, subscription
+
+**Window**:
+The hours, in Philippine time, when a watcher checks its trip: up to 4 hours within one day, such as 06:00 to 08:00.
+_Avoid_: schedule (the scheduler is what calls the tick)
+
+**Tick**:
+One run of the watcher's scheduler, every 10 minutes: it checks each linked watcher that is inside its window.
+_Avoid_: cron job, poll
 
 **Light vehicle**:
 A car or a motorbike, the vehicles that the "not passable to light vehicles" line stops.
