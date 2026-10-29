@@ -16,11 +16,12 @@ export interface EvidenceFacts {
   routes: readonly { routeId: string; state: RouteState }[];
 }
 
-const VOICE_WORDS = {
+const VOICE_WORDS: Record<Extract<Report["reading"], { source: "voice" }>["says"], string> = {
   passable: "the road is passable",
   knee_deep_or_deeper: "the water is knee-deep or deeper",
   not_passable: "the road is not passable",
-} as const;
+  unsure: "nothing Lusong could read about the water",
+};
 
 function routeName(routeId: string): string {
   if (routeId === "plain") return "your usual way";

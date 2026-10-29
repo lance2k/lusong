@@ -32,10 +32,9 @@ function countOf(value: unknown): number | null {
 }
 
 /**
- * What a call was, which decides how its usage is read and priced. Voice Transcribe joins this list once a
- * live probe has shown its usage shape and it has a price in lib/budget.ts.
+ * What a call was, which decides how its usage is read and priced.
  */
-export type Operation = "sam" | "spark-chat" | "spark-responses";
+export type Operation = "sam" | "spark-chat" | "spark-responses" | "voice-transcribe";
 
 /** Responses-API output items billed only through the reply's tokens. Any other item but `web_search_call`
  *  may carry a fee of its own that the meter cannot count. */
@@ -49,6 +48,7 @@ type Reading = {
   museInputTokens?: number;
   museOutputTokens?: number;
   webSearchQueries?: number;
+  transcribeSeconds?: number;
   complete: boolean;
 };
 
@@ -75,6 +75,15 @@ const READERS: Record<Operation, (usage: Usage, body: unknown) => Reading> = {
     const unpriced = types.some((t) => t !== WEB_SEARCH_CALL && !TOKEN_PRICED_OUTPUT.has(t));
     return { ...reading, webSearchQueries, complete: reading.complete && !unpriced };
   },
+  /**
+   * Billed per whole second of audio, rounded down; `audioDurationMs` is the reply's "Total audio duration processed"
+   * (dev.meta.ai/docs/api-reference/voice/schemas, read 2026-10-30). UNVERIFIED: no live call has shown that field or
+   * that it is what is billed, so the count is never complete and a settle keeps the whole reservation.
+   */
+  "voice-transcribe"(_usage, body) {
+    const ms = countOf((body as { audioDurationMs?: unknown } | null)?.audioDurationMs);
+    return { transcribeSeconds: ms === null ? 0 : Math.floor(ms / 1000), complete: false };
+  },
 };
 
 /** Adds up what one run's Meta calls report using, attempt by attempt, for the spending budget. */
@@ -83,6 +92,7 @@ export class Meter {
   private museInputTokens = 0;
   private museOutputTokens = 0;
   private webSearchQueries = 0;
+  private transcribeSeconds = 0;
   private complete = true;
 
   /** A failed attempt may still have been billed, and it is the only way a call gets retried. */
@@ -98,6 +108,7 @@ export class Meter {
     this.museInputTokens += reading.museInputTokens ?? 0;
     this.museOutputTokens += reading.museOutputTokens ?? 0;
     this.webSearchQueries += reading.webSearchQueries ?? 0;
+    this.transcribeSeconds += reading.transcribeSeconds ?? 0;
   }
 
   /** Adds another meter's counts, such as a web search metered against its own daily cap. */
@@ -107,12 +118,13 @@ export class Meter {
     this.museInputTokens += u.museInputTokens;
     this.museOutputTokens += u.museOutputTokens;
     this.webSearchQueries += u.webSearchQueries;
+    this.transcribeSeconds += u.transcribeSeconds;
     if (!u.complete) this.complete = false;
   }
 
   usage(): MeteredUsage {
-    const { samImages, museInputTokens, museOutputTokens, webSearchQueries, complete } = this;
-    return { samImages, museInputTokens, museOutputTokens, webSearchQueries, complete };
+    const { samImages, museInputTokens, museOutputTokens, webSearchQueries, transcribeSeconds, complete } = this;
+    return { samImages, museInputTokens, museOutputTokens, webSearchQueries, transcribeSeconds, complete };
   }
 }
 
@@ -131,15 +143,24 @@ function retryWaitMs(res: Response): number {
   return Number.isFinite(at) ? Math.max(0, at - Date.now()) : DEFAULT_RETRY_WAIT_MS;
 }
 
+/** A JSON request body, or a multipart form (fetch writes its boundary). A FormData can be sent again on a retry. */
+type Payload = { json: unknown } | { form: FormData };
+
+function requestOf(payload: Payload): { headers: Record<string, string>; body: string | FormData } {
+  const auth = { Authorization: `Bearer ${apiKey()}` };
+  if ("form" in payload) return { headers: { ...auth, Accept: "application/json" }, body: payload.form };
+  return { headers: { ...auth, "Content-Type": "application/json" }, body: JSON.stringify(payload.json) };
+}
+
 /**
- * POSTs JSON with at most one retry, on 429, 5xx or a dropped connection. Every attempt and every
- * wait must fit before `deadline` (epoch ms); a Retry-After that does not fit fails the call rather
- * than retrying early. A timeout is not retried.
+ * POSTs with at most one retry, on 429, 5xx or a dropped connection, and returns the JSON reply. Every
+ * attempt and every wait must fit before `deadline` (epoch ms); a Retry-After that does not fit fails
+ * the call rather than retrying early. A timeout is not retried.
  */
 async function postJson(
   endpoint: string,
   operation: Operation,
-  body: unknown,
+  payload: Payload,
   attemptTimeoutMs: number,
   deadline: number,
   meter: Meter,
@@ -151,8 +172,7 @@ async function postJson(
     try {
       res = await fetch(`${BASE_URL}${endpoint}`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${apiKey()}`, "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        ...requestOf(payload),
         signal: AbortSignal.timeout(Math.min(attemptTimeoutMs, remaining)),
       });
     } catch (err) {
@@ -185,17 +205,19 @@ export async function segment(imageDataUrl: string, phrase: string, deadline: nu
     "/responses",
     "sam",
     {
-      model: "sam-3.1",
-      input: [
-        {
-          role: "user",
-          content: [
-            { type: "input_text", text: phrase },
-            { type: "input_image", image_url: imageDataUrl },
-          ],
-        },
-      ],
-      metadata: { mask_encoding: "one_bit" },
+      json: {
+        model: "sam-3.1",
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: phrase },
+              { type: "input_image", image_url: imageDataUrl },
+            ],
+          },
+        ],
+        metadata: { mask_encoding: "one_bit" },
+      },
     },
     20_000,
     deadline,
@@ -221,13 +243,15 @@ export async function chatJson(request: {
     "/chat/completions",
     "spark-chat",
     {
-      model: "muse-spark-1.3",
-      messages: request.messages,
-      response_format: {
-        type: "json_schema",
-        json_schema: { name: request.schemaName, schema: request.schema, strict: true },
+      json: {
+        model: "muse-spark-1.3",
+        messages: request.messages,
+        response_format: {
+          type: "json_schema",
+          json_schema: { name: request.schemaName, schema: request.schema, strict: true },
+        },
+        max_completion_tokens: request.maxCompletionTokens,
       },
-      max_completion_tokens: request.maxCompletionTokens,
     },
     // 8,000 output tokens at the slowest measured rate (156 tokens/s, 27 draws) take about 51 s.
     70_000,
@@ -247,5 +271,26 @@ export async function sparkResponse(
   deadline: number,
   meter: Meter,
 ): Promise<unknown> {
-  return postJson("/responses", "spark-responses", { model: "muse-spark-1.3", ...body }, attemptTimeoutMs, deadline, meter);
+  return postJson("/responses", "spark-responses", { json: { model: "muse-spark-1.3", ...body } }, attemptTimeoutMs, deadline, meter);
+}
+
+/**
+ * Muse Voice Transcribe on one complete clip, as the buffered JSON reply (dev.meta.ai/docs/api-reference/voice/transcribe
+ * and /voice/schemas, read 2026-10-30): a `request` part of settings as JSON and an `audio` part holding the WAV. From
+ * the docs only; no live call has been made. UNVERIFIED: the reply's `transcript` field and the endpoint's behaviour on
+ * a 16 kHz clip, beyond the docs' word that 16 kHz is accepted and resampled.
+ */
+export async function transcribe(
+  wav: Uint8Array<ArrayBuffer>,
+  opts: { languages: readonly string[]; deadline: number; meter: Meter },
+): Promise<string> {
+  const form = new FormData();
+  const settings = { model: "muse-voice-transcribe-1.0", audioEncoding: "WAV", mode: "PUSH_TO_TALK", languageBias: opts.languages };
+  form.append("request", new Blob([JSON.stringify(settings)], { type: "application/json" }));
+  form.append("audio", new File([wav], "note.wav", { type: "audio/wav" }));
+  // UNVERIFIED: how long a 30 s clip takes; 20 s per attempt is a guess with room for one retry inside the deadline.
+  const reply = await postJson("/asr/transcribe", "voice-transcribe", { form }, 20_000, opts.deadline, opts.meter);
+  const body = reply as { transcript?: unknown } | null;
+  if (typeof body?.transcript !== "string") throw new MetaApiError("/asr/transcribe", 0);
+  return body.transcript;
 }

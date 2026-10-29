@@ -4,7 +4,7 @@ import { placeOnRoute, ROUTE_CORRIDOR_M, type AnswerKind, type Point, type Repor
 import { budgetFromEnv, type Budget } from "./budget";
 import { clientIp } from "./check-handler";
 import { boxAround, lineForTrip } from "./detour";
-import { ageWords, depthWords, MMDA_CREDIT, passabilityLine, phtTime } from "./commute-words";
+import { ageWords, depthWords, MMDA_CREDIT, passabilityLine, phtTime, voiceDepthWords, voicePassabilityLine } from "./commute-words";
 import { evidenceSentences } from "./evidence-words";
 import {
   investigate,
@@ -473,6 +473,7 @@ export function makeCommuteHandler(deps: {
       .map((r) => {
         const j = judged.get(r.id)!;
         const verdict = r.reading.source === "photo" ? r.reading.verdict : null;
+        const voice = r.reading.source === "voice" ? r.reading.says : null;
         const routes = judgedLines.filter((l) => placeOnRoute(r.at, l.line).offM <= ROUTE_CORRIDOR_M).map((l) => l.id);
         return {
           id: r.id,
@@ -480,8 +481,8 @@ export function makeCommuteHandler(deps: {
           place: r.place,
           at: r.at,
           age: ageWords(at.getTime() - r.receivedAt.getTime()),
-          depth: verdict ? depthWords(verdict) : null,
-          passability: verdict ? passabilityLine(verdict) : null,
+          depth: verdict ? depthWords(verdict) : voice === "knee_deep_or_deeper" ? voiceDepthWords("knee_or_deeper") : null,
+          passability: verdict ? passabilityLine(verdict) : voice ? voicePassabilityLine(voice) : null,
           origin: r.origin,
           credit: r.credit,
           sourceUrl: r.sourceUrl,

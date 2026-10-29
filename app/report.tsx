@@ -4,10 +4,11 @@ import { useRef, useState } from "react";
 import type { Role } from "@/lib/answer";
 import { readExifTimeText, withExifTime } from "@/lib/exif";
 import type { ReportView } from "@/lib/report-handler";
+import { phoneLocation } from "./phone-location";
+import VoiceNote from "./voice-note";
 
 const MAX_SIDE = 1600;
 const JPEG_QUALITY = 0.85;
-const LOCATION_TIMEOUT_MS = 15_000;
 
 type State =
   | { step: "idle" }
@@ -35,17 +36,6 @@ async function preparePhoto(file: File): Promise<Blob> {
   if (!timeText) return shrunk;
   const bytes = withExifTime(new Uint8Array(await shrunk.arrayBuffer()), timeText);
   return new Blob([bytes as Uint8Array<ArrayBuffer>], { type: "image/jpeg" });
-}
-
-function phoneLocation(): Promise<{ lat: number; lon: number }> {
-  return new Promise((resolve, reject) => {
-    if (!("geolocation" in navigator)) return reject(new Error("This browser can't share its location."));
-    navigator.geolocation.getCurrentPosition(
-      (p) => resolve({ lat: p.coords.latitude, lon: p.coords.longitude }),
-      () => reject(new Error("Lusong needs your phone's location to place the report. Allow location and try again.")),
-      { enableHighAccuracy: true, timeout: LOCATION_TIMEOUT_MS, maximumAge: 60_000 },
-    );
-  });
 }
 
 const ROLE_TONES: Record<Role, string> = {
@@ -144,6 +134,7 @@ export default function ReportStreet() {
           {state.message}
         </p>
       )}
+      <VoiceNote />
     </div>
   );
 }

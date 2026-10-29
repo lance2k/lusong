@@ -11,7 +11,7 @@ import { locateSpot } from "./locate";
 import { MetaApiError } from "./meta";
 import { inMetroCebu } from "./metro-cebu";
 import { beforeDeadline, readBody } from "./deadline";
-import { reportStoreFromEnv, toReport, type ReportStore, type StoredReport } from "./report-store";
+import { reportStoreFromEnv, toReport, type ReportStore, type Saved, type StoredPhotoReport } from "./report-store";
 import type { ValhallaGate } from "./router";
 
 const MAX_BYTES = 3 * 1024 * 1024;
@@ -73,7 +73,7 @@ export interface ReportView {
   mmdaCredit: string;
 }
 
-function durationWords(ms: number): string {
+export function durationWords(ms: number): string {
   const totalMin = Math.floor(ms / 60_000);
   if (totalMin < 1) return "less than a minute";
   const h = Math.floor(totalMin / 60);
@@ -81,7 +81,7 @@ function durationWords(ms: number): string {
   return h === 0 ? `${m} min` : m === 0 ? `${h} h` : `${h} h ${m} min`;
 }
 
-function effectOf(report: StoredReport, role: Role, leftMs: number): string {
+function effectOf(report: StoredPhotoReport, role: Role, leftMs: number): string {
   const left = durationWords(leftMs);
   if (role === "clear") return `Others checking a trip through here will count this spot as clear for the next ${left}.`;
   if (role === "block") {
@@ -95,7 +95,7 @@ function effectOf(report: StoredReport, role: Role, leftMs: number): string {
 }
 
 /** What the report does for others as of `now`: nothing if it wasn't saved or its 3 h are up. */
-function viewOf(report: StoredReport, now: Date, stored: boolean): ReportView {
+function viewOf(report: StoredPhotoReport, now: Date, stored: boolean): ReportView {
   const asRule = toReport(report);
   const role = roleOf(asRule, now);
   const live = stored && counts(asRule, now);
@@ -174,8 +174,8 @@ export function makeReportHandler(deps: {
 
     const store = reportStore();
     if (!store) return fail(503, "Lusong can't take reports right now.");
-    const release = (by: number) =>
-      beforeDeadline(store.releasePhoto(photoHash), by).catch((err: unknown) => {
+    const release = (token: string, by: number) =>
+      beforeDeadline(store.releasePhoto(photoHash, token), by).catch((err: unknown) => {
         console.error("report store unreachable on release:", err instanceof Error ? err.message : err);
       });
 
@@ -192,7 +192,7 @@ export function makeReportHandler(deps: {
       // The claim may still land; free it then, so the photo can be sent again.
       void claiming.then(
         async (c) => {
-          if (c.state === "claimed") await release(Infinity);
+          if (c.state === "claimed") await release(c.token, Infinity);
         },
         () => {},
       );
@@ -200,9 +200,10 @@ export function makeReportHandler(deps: {
     }
     if (claim.state === "duplicate") return Response.json({ duplicate: true, stored: true, report: viewOf(claim.report, receivedAt, true) });
     if (claim.state === "in_flight") return fail(409, "Lusong is already reading this photo.");
+    const { token } = claim;
 
     if (Date.now() > admitBy) {
-      await release(releaseBy);
+      await release(token, releaseBy);
       return fail(503, OUT_OF_TIME);
     }
     const admitting = admit(budget(), { clientIp: clientIp(request), reserveMicros: RESERVE_MICROS, now: receivedAt });
@@ -215,29 +216,29 @@ export function makeReportHandler(deps: {
         },
         () => {},
       );
-      await release(releaseBy);
+      await release(token, releaseBy);
       return fail(503, OUT_OF_TIME);
     }
     if (!admission.ok) {
-      await release(releaseBy);
+      await release(token, releaseBy);
       return admission.response();
     }
 
     const { run } = admission;
     if (finishBy - Date.now() < timing.minReadMs) {
-      await release(releaseBy);
+      await release(token, releaseBy);
       await beforeDeadline(run.settle(true), settleBy);
       return fail(503, OUT_OF_TIME);
     }
     let succeeded = false;
     try {
       const imageDataUrl = `data:image/jpeg;base64,${Buffer.from(jpeg.bytes).toString("base64")}`;
-      let verdict: StoredReport["verdict"];
+      let verdict: StoredPhotoReport["verdict"];
       try {
         verdict = (await checkPhoto(imageDataUrl, { width: jpeg.width, height: jpeg.height }, run.meter, { deadline: finishBy })).verdict;
       } catch (err) {
         console.error("report read failed:", err instanceof MetaApiError ? err.message : err);
-        await release(releaseBy);
+        await release(token, releaseBy);
         return fail(502, "The measuring service didn't answer. Try again in a minute.");
       }
       succeeded = true;
@@ -246,7 +247,7 @@ export function makeReportHandler(deps: {
         finishBy - Date.now() >= timing.locateMinMs
           ? await locateSpot(at, { fetch: doFetch, gate: deps.gate() }, { deadline: finishBy })
           : { wayId: null, place: null };
-      const report: StoredReport = {
+      const report: StoredPhotoReport = {
         id: randomUUID(),
         kind: "photo",
         at,
@@ -257,18 +258,23 @@ export function makeReportHandler(deps: {
         verdict,
         photoHash,
       };
-      let saved: void | "late";
+      let saved: Saved | "late";
       try {
-        saved = await beforeDeadline(store.save(report), saveBy);
+        saved = await beforeDeadline(store.save(report, token), saveBy);
       } catch (err) {
         console.error("report store unreachable on save:", err instanceof Error ? err.message : err);
         saved = "late";
       }
       if (saved === "late") {
-        await release(releaseBy);
+        await release(token, releaseBy);
         return Response.json({ duplicate: false, stored: false, report: viewOf(report, receivedAt, false) });
       }
-      return Response.json({ duplicate: false, stored: true, report: viewOf(report, receivedAt, true) });
+      if (saved.state === "duplicate" && saved.report.kind === "photo") {
+        return Response.json({ duplicate: true, stored: true, report: viewOf(saved.report, receivedAt, true) });
+      }
+      // not_owner: the claim lapsed and the store says it wrote nothing.
+      const stored = saved.state === "saved";
+      return Response.json({ duplicate: false, stored, report: viewOf(report, receivedAt, stored) });
     } finally {
       // A settle cut off here keeps the whole reservation charged: the safe side.
       await beforeDeadline(run.settle(succeeded), settleBy);

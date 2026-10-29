@@ -101,7 +101,7 @@ describe("rain with no reports", () => {
 
 
 describe("what one report on the way can do, with no advisory and no rain tap", () => {
-  const voice = (says: "passable" | "knee_deep_or_deeper" | "not_passable") => report({ source: "voice", says });
+  const voice = (says: "passable" | "knee_deep_or_deeper" | "not_passable" | "unsure") => report({ source: "voice", says });
   const web = (sourceDate: string | null) => report({ source: "web", says: "closed", sourceDate });
 
   it.each([
@@ -116,6 +116,7 @@ describe("what one report on the way can do, with no advisory and no rain tap", 
     { name: "an unsure photo never clears", make: () => photoReport(measured("unsure")), expected: "no_one_knows" },
     { name: "a cannot_measure photo never clears", make: () => photoReport({ kind: "cannot_measure" }), expected: "no_one_knows" },
     { name: "a voice report of passable can't clear", make: () => voice("passable"), expected: "no_one_knows" },
+    { name: "a voice report that says neither depth nor passability is neutral", make: () => voice("unsure"), expected: "no_one_knows" },
     { name: "a no_flood photo taken 5 min before receipt clears", make: () => clear({ capturedMinBeforeReceipt: 5 }), expected: "go" },
     { name: "a no_flood photo taken exactly 60 min before receipt clears", make: () => clear({ capturedMinBeforeReceipt: 60 }), expected: "go" },
     { name: "a no_flood photo taken 61 min before receipt is neutral", make: () => clear({ capturedMinBeforeReceipt: 61 }), expected: "no_one_knows" },

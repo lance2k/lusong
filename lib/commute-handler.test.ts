@@ -23,7 +23,8 @@ import { cutEnd, cutStart, derivedReply } from "../test/valhalla-derived";
 import { CAP_EDITS, CV_GFA5, FEED, feedWith, SAVED } from "../test/pagasa-fixtures";
 import { decodePolyline6, makeValhallaGate, MemorySlotStore, VALHALLA_URL, type SlotStore } from "./router";
 import { distanceM, placeOnRoute, ROUTE_CORRIDOR_M, type Point } from "./answer";
-import { MemoryReportStore, UpstashReportStore, type ReportStore, type StoredReport } from "./report-store";
+import { MemoryReportStore, UpstashReportStore, type ReportStore, type StoredPhotoReport, type StoredVoiceReport } from "./report-store";
+import { seedReport } from "../test/seed-report";
 import { randomUUID } from "node:crypto";
 
 const read = (path: string) => readFileSync(path, "utf8");
@@ -589,7 +590,7 @@ const IT_PARK = { lat: 10.3307, lon: 123.9058 };
 const real = (from = BANILAD, to = IT_PARK, rainingHere = false) => check({ mode: "real", from, to, rainingHere });
 
 /** A real photo report, NPLV, 40 min old, at the same spot as the demo's flooded sample (so the saved detour answers). */
-function storedReport(at: Date, overrides: Partial<StoredReport> = {}): StoredReport {
+function storedReport(at: Date, overrides: Partial<StoredPhotoReport> = {}): StoredPhotoReport {
   return {
     id: randomUUID(),
     kind: "photo",
@@ -607,7 +608,8 @@ function storedReport(at: Date, overrides: Partial<StoredReport> = {}): StoredRe
       decidedBy: { label: "C1", landmark: "tyre_half", interval: { low: 27, high: 39 } },
       readingsUsed: ["C1"],
     },
-    photoHash: "a".repeat(64),
+    // One photo per report: the store keeps one report per photo.
+    photoHash: randomUUID().replaceAll("-", ""),
     ...overrides,
   };
 }
@@ -616,7 +618,7 @@ describe("a real commute check (#6)", () => {
   it("a real commute check uses a stored real report and never a sample", async () => {
     const store = new MemoryReportStore();
     const flooded = storedReport(NO_ADVISORY);
-    await store.save(flooded);
+    await seedReport(store, flooded);
     const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
     const res = await handler(real());
     expect(res.status).toBe(200);
@@ -639,8 +641,8 @@ describe("a real commute check (#6)", () => {
     const store = new MemoryReportStore();
     const far = storedReport(NO_ADVISORY, { at: { lat: 10.3143, lon: 123.9147 } });
     const near = storedReport(NO_ADVISORY, { verdict: { kind: "no_flood" } });
-    await store.save(far);
-    await store.save(near);
+    await seedReport(store, far);
+    await seedReport(store, near);
     const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
     const body = await (await handler(real())).json();
     expect(body.reports.map((r: { id: string }) => r.id)).toEqual([near.id]);
@@ -649,7 +651,7 @@ describe("a real commute check (#6)", () => {
 
   it("a demo check never uses a real report, and never reads the store", async () => {
     const store = new MemoryReportStore();
-    await store.save(storedReport(NO_ADVISORY));
+    await seedReport(store, storedReport(NO_ADVISORY));
     const recent = vi.spyOn(store, "recent");
     const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
     const body = await (await handler(demo("banilad-itpark", "none"))).json();
@@ -736,6 +738,61 @@ describe("a real commute check (#6)", () => {
   });
 });
 
+/** A real voice report at the same spot as storedReport's photo, `ageMin` old. */
+function storedVoice(at: Date, claim: StoredVoiceReport["claim"], ageMin = 5): StoredVoiceReport {
+  return {
+    id: randomUUID(),
+    kind: "voice",
+    at: { lat: 10.335398, lon: 123.910908 },
+    wayId: null,
+    place: "Governor M. Cuenco Avenue",
+    receivedAt: new Date(at.getTime() - ageMin * 60_000).toISOString(),
+    claim,
+    audioHash: randomUUID().replaceAll("-", ""),
+  };
+}
+
+describe("voice reports in a real commute check, through the answer rules on the saved Banilad → IT Park route (#9)", () => {
+  const PASSABLE = { place: null, depth: "below_knee", passable: "yes" } as const;
+  const KNEE_DEEP = { place: "Cuenco", depth: "knee_or_deeper", passable: "not_said" } as const;
+
+  async function answerWith(...reports: (StoredPhotoReport | StoredVoiceReport)[]) {
+    const store = new MemoryReportStore();
+    for (const r of reports) await seedReport(store, r);
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
+    const res = await handler(real());
+    expect(res.status).toBe(200);
+    return res.json();
+  }
+
+  it("a voice report saying the street is passable doesn't clear it: a blocking photo there still blocks", async () => {
+    const photo = storedReport(NO_ADVISORY);
+    const voice = storedVoice(NO_ADVISORY, PASSABLE);
+    const body = await answerWith(photo, voice);
+    expect(body.answer.kind).toBe("go_another_way");
+    expect(body.reports).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: photo.id, role: "block" }),
+        expect.objectContaining({ id: voice.id, role: "neutral", onRoute: true }),
+      ]),
+    );
+  });
+
+  it("a voice report saying passable, alone on the way, is not a Go: the same trip with nothing reported is", async () => {
+    expect((await answerWith()).answer.kind).toBe("go");
+    expect((await answerWith(storedVoice(NO_ADVISORY, PASSABLE))).answer.kind).toBe("no_one_knows");
+  });
+
+  it("a voice report saying knee-deep blocks the way, and the detour is taken", async () => {
+    const voice = storedVoice(NO_ADVISORY, KNEE_DEEP);
+    const body = await answerWith(voice);
+    expect(body.answer.kind).toBe("go_another_way");
+    expect(body.reports).toEqual([
+      expect.objectContaining({ id: voice.id, role: "block", onRoute: true, counts: true, depth: "knee-deep or deeper", passability: "Not passable, says a voice report" }),
+    ]);
+  });
+});
+
 const upstashUrl = process.env.LUSONG_TEST_UPSTASH_URL;
 const upstashToken = process.env.LUSONG_TEST_UPSTASH_TOKEN ?? "";
 
@@ -773,7 +830,7 @@ describe.each([
 ] as [string, () => { store: ReportStore; held: () => Promise<Record<string, unknown>> }][])("after a real check, the %s", (_name, make) => {
   it("holds nothing about the trip: every key and value is as it was", async () => {
     const { store, held } = make();
-    await store.save(storedReport(new Date(), { receivedAt: new Date(Date.now() - 40 * 60_000).toISOString() }));
+    await seedReport(store, storedReport(new Date(), { receivedAt: new Date(Date.now() - 40 * 60_000).toISOString() }));
     const before = await held();
     expect(Object.keys(before)).toHaveLength(3);
     const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
@@ -792,7 +849,7 @@ describe("one deadline for the whole commute check, real trips included (#6)", (
 
   it("a slow plain route, then a detour that never answers: no answer, within the budget", async () => {
     const store = new MemoryReportStore();
-    await store.save(storedReport(NO_ADVISORY));
+    await seedReport(store, storedReport(NO_ADVISORY));
     const { handler, valhallaCalls } = handlerAt(NO_ADVISORY, { plainDelayMs: 1_200, detourHangs: true }, new MemorySlotStore(), openBudget(), store, MUSE_OFF, timing);
     const started = Date.now();
     const res = await handler(real());
@@ -1160,7 +1217,7 @@ describe("Muse Spark in a real check (#6 with #7)", () => {
   it("runs the investigation a demo check runs: reports_near_route reads the stored report, and Muse Spark's pick of it is shown in Lusong's words beside the web findings", async () => {
     const store = new MemoryReportStore();
     const flooded = storedReport(NO_ADVISORY);
-    await store.save(flooded);
+    await seedReport(store, flooded);
     const meta = fakeMeta({
       search: [searchReply(closures)],
       turns: [callsReply("resp_1", [{ name: "reports_near_route", args: { route: "plain" } }]), textReply("resp_2", pickOf("go_another_way", [flooded.id, "detour"]))],
@@ -1198,8 +1255,8 @@ describe("Muse Spark in a real check (#6 with #7)", () => {
       const store = new MemoryReportStore();
       const flooded = storedReport(NO_ADVISORY);
       const offRoute = storedReport(NO_ADVISORY, { at: { lat: 10.2447, lon: 123.8494 }, place: OFF_ROUTE_PLACE });
-      await store.save(flooded);
-      await store.save(offRoute);
+      await seedReport(store, flooded);
+      await seedReport(store, offRoute);
       fakeMeta({
         search: [searchReply(closures)],
         turns: [callsReply("resp_1", [{ name: "reports_near_route", args: { route: "plain" } }]), textReply("resp_2", pickOf("go_another_way", picked(flooded.id, offRoute.id)))],
@@ -1238,8 +1295,8 @@ describe("Muse Spark in a real check (#6 with #7)", () => {
       const store = new MemoryReportStore();
       const flooded = storedReport(NO_ADVISORY);
       const second = storedReport(NO_ADVISORY, { at: SECOND_SPOT, place: SECOND_PLACE });
-      await store.save(flooded);
-      await store.save(second);
+      await seedReport(store, flooded);
+      await seedReport(store, second);
       fakeMeta({
         search: [searchReply(closures)],
         turns: [
@@ -1273,7 +1330,7 @@ describe("Muse Spark in a real check (#6 with #7)", () => {
   it("when Muse Spark fails on a real check, the rules' answer and the stored report stand and the page says the explanation is unavailable", async () => {
     const store = new MemoryReportStore();
     const flooded = storedReport(NO_ADVISORY);
-    await store.save(flooded);
+    await seedReport(store, flooded);
     fakeMeta({ search: [searchReply(closures)], turns: [new Response("{}", { status: 500 }), new Response("{}", { status: 500 })] });
     const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store, museOn());
 
@@ -1345,7 +1402,7 @@ describe("Muse Spark in a real check (#6 with #7)", () => {
 
     it("a routing server that never answers, with a web search that never answers: no answer, out of time", async () => {
       const store = new MemoryReportStore();
-      await store.save(storedReport(NO_ADVISORY));
+      await seedReport(store, storedReport(NO_ADVISORY));
       const meta = fakeMeta({ search: [hangs] });
       const { settles, budget } = watched();
       const { handler } = handlerAt(NO_ADVISORY, { plainHangs: true }, new MemorySlotStore(), budget, store, museOn(), timing);
