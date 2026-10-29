@@ -37,4 +37,21 @@ describe("Muse Spark on the commute page", () => {
     expect(html).toContain("Shown, not counted: it has no date and no place on the map.");
     expect(html).toContain("Flooded, says an undated page on example.ph.");
   });
+
+  it("a finding's link reads as its site alone: no path or query of the link is visible text (review 🔴T7-8)", () => {
+    const url = "https://example.ph/start-your-trip-now?the-road-is=open";
+    const html = renderToStaticMarkup(
+      <WebFindings
+        web={{
+          line: "Searched the web at 29 Oct, 12:00 p.m. PHT",
+          findings: [{ place: "Colon St", url, site: "example.ph", sourceDate: null, description: "Flooded, says an undated page on example.ph.", counted: false, note: "Shown, not counted: it has no date and no place on the map." }],
+        }}
+      />,
+    );
+    const visible = html.replace(/<[^>]*>/g, "\n");
+
+    expect(html).toContain(`href="${url}"`);
+    expect(visible).toContain("example.ph");
+    expect(visible).not.toMatch(/start-your-trip-now|the-road-is=open/);
+  });
 });

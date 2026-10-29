@@ -35,7 +35,7 @@ export function WebFindings({ web }: { web: PageMuse["web"] }) {
               <p>{f.description}</p>
               <p className="text-zinc-600 dark:text-zinc-400">{f.note}</p>
               <a className="break-all text-sm text-sky-700 underline dark:text-sky-400" href={f.url} rel="noopener noreferrer nofollow" target="_blank">
-                {f.url}
+                {f.site}
               </a>
             </li>
           ))}
