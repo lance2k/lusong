@@ -11,7 +11,10 @@ const LABELS = [...json("test/fixtures/depth-set/labels.json"), ...json("test/fi
   licence: string;
   author: string;
 }[];
-const LOCATE = json("test/fixtures/valhalla/locate-sample-pins.json") as { input_lat: number; input_lon: number }[];
+const LOCATE = [
+  ...json("test/fixtures/valhalla/locate-sample-pins.json"),
+  ...json("test/fixtures/valhalla/locate-detour-pin.json"),
+] as { input_lat: number; input_lon: number }[];
 const ROUTE_LINES = {
   "banilad-itpark": decodePolyline6(json("test/fixtures/valhalla/banilad-itpark-plain.json").trip.legs[0].shape),
   "mabolo-cbp": decodePolyline6(json("test/fixtures/valhalla/mabolo-cbp-plain.json").trip.legs[0].shape),

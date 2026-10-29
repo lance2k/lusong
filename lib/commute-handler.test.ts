@@ -11,13 +11,27 @@ const ROUTES: Record<string, string> = {
   "10.346,123.911": read("test/fixtures/valhalla/banilad-itpark-plain.json"),
   "10.3143,123.9147": read("test/fixtures/valhalla/mabolo-cbp-plain.json"),
 };
+/** Valhalla's replies with each trip's blocked spots excluded (2026-10-30 01:16 and 02:24 PHT). */
+const DETOURS: Record<string, string> = {
+  "10.346,123.911": read("test/fixtures/valhalla/banilad-itpark-excluded.json"),
+  "10.3143,123.9147": read("test/fixtures/valhalla/mabolo-cbp-excluded.json"),
+};
+/** Valhalla's real reply when the excluded box leaves no way to the destination (2026-10-30 02:24 PHT). */
+const NO_ROUTE = read("test/fixtures/valhalla/banilad-itpark-destination-excluded.json");
+const EXCLUDED_REQUEST = JSON.parse(read("test/fixtures/valhalla/banilad-itpark-excluded.request.json"));
 
 /** 20:00 PHT on 2026-10-25: the Central Visayas advisory sent at 17:27 is active. */
 const ADVISORY_ACTIVE = new Date("2026-10-25T20:00:00+08:00");
 /** Noon on 2026-10-29: no GFA entry in the feed's last 24 h, so no advisory. */
 const NO_ADVISORY = new Date("2026-10-29T12:00:00+08:00");
 
-type Options = { valhalla?: "ok" | "down"; feed?: "ok" | "down"; pagasa?: Record<string, string> };
+type Options = {
+  valhalla?: "ok" | "down";
+  /** How Valhalla answers a request with spots excluded: its recorded detour, no route, the plain route again, or down. */
+  detour?: "ok" | "no_route" | "plain" | "down";
+  feed?: "ok" | "down";
+  pagasa?: Record<string, string>;
+};
 
 /** PAGASA and Valhalla faked at fetch with their saved records; any CAP link not saved fails as a dropped connection. */
 function network(opts: Options = {}) {
@@ -30,8 +44,12 @@ function network(opts: Options = {}) {
     if (u in pagasa) return new Response(pagasa[u]);
     if (u === `${VALHALLA_URL}/route`) {
       if (opts.valhalla === "down") throw new TypeError("fetch failed");
-      const from = JSON.parse(String(init!.body)).locations[0];
-      return new Response(ROUTES[`${from.lat},${from.lon}`], { status: 200 });
+      const sent = JSON.parse(String(init!.body));
+      const from = `${sent.locations[0].lat},${sent.locations[0].lon}`;
+      if (!sent.exclude_polygons) return new Response(ROUTES[from], { status: 200 });
+      if (opts.detour === "down") throw new TypeError("fetch failed");
+      if (opts.detour === "no_route") return new Response(NO_ROUTE, { status: 400 });
+      return new Response(opts.detour === "plain" ? ROUTES[from] : DETOURS[from], { status: 200 });
     }
     throw new TypeError("fetch failed");
   });
@@ -62,12 +80,14 @@ describe("the demo commute check", () => {
     { trip: "banilad-itpark", scenario: "none", now: NO_ADVISORY, rain: false, answer: "go" },
     { trip: "banilad-itpark", scenario: "none", now: NO_ADVISORY, rain: true, answer: "no_one_knows" },
     { trip: "banilad-itpark", scenario: "none", now: ADVISORY_ACTIVE, rain: false, answer: "no_one_knows" },
-    { trip: "banilad-itpark", scenario: "flooded", now: NO_ADVISORY, rain: false, answer: "wait" },
-    { trip: "banilad-itpark", scenario: "flooded", now: ADVISORY_ACTIVE, rain: false, answer: "wait" },
+    { trip: "banilad-itpark", scenario: "flooded", now: NO_ADVISORY, rain: false, answer: "go_another_way" },
+    { trip: "banilad-itpark", scenario: "flooded", now: NO_ADVISORY, rain: true, answer: "no_one_knows" },
+    { trip: "banilad-itpark", scenario: "flooded", now: ADVISORY_ACTIVE, rain: false, answer: "no_one_knows" },
     { trip: "banilad-itpark", scenario: "unclear", now: NO_ADVISORY, rain: false, answer: "no_one_knows" },
     { trip: "mabolo-cbp", scenario: "none", now: NO_ADVISORY, rain: false, answer: "go" },
     { trip: "mabolo-cbp", scenario: "none", now: NO_ADVISORY, rain: true, answer: "no_one_knows" },
-    { trip: "mabolo-cbp", scenario: "flooded", now: ADVISORY_ACTIVE, rain: true, answer: "wait" },
+    { trip: "mabolo-cbp", scenario: "flooded", now: NO_ADVISORY, rain: false, answer: "go_another_way" },
+    { trip: "mabolo-cbp", scenario: "flooded", now: ADVISORY_ACTIVE, rain: true, answer: "no_one_knows" },
     { trip: "mabolo-cbp", scenario: "unclear", now: NO_ADVISORY, rain: false, answer: "no_one_knows" },
   ])("$trip, $scenario, rain tap $rain, at $now ⇒ $answer", async ({ trip, scenario, now, rain, answer }) => {
     const { handler } = handlerAt(now);
@@ -109,9 +129,8 @@ describe("the demo commute check", () => {
       }),
       expect.objectContaining({ place: "Leyte Loop, Cebu Business Park", age: "3 h 20 min ago", counts: false }),
     ]);
-    expect(body.answer.kind).toBe("wait");
+    expect(body.answer.kind).toBe("go_another_way");
     expect(body.answer.reason).toContain("M.J. Cuenco Avenue at H. Joaquino Street, Mabolo");
-    expect(body.answer.thin).toBe("This answer rests on one report.");
   });
 
   it("an unreadable advisory feed is said so on the page and counts as active", async () => {
@@ -170,7 +189,7 @@ describe("the demo commute check", () => {
     const gate = makeValhallaGate(new MemorySlotStore());
     const handler = makeCommuteHandler({ fetch: net.fetch, now: () => now, gate: () => gate, budget: openBudget });
     await handler(demo("banilad-itpark", "none"));
-    await handler(demo("banilad-itpark", "flooded"));
+    await handler(demo("banilad-itpark", "unclear"));
     expect(net.valhallaCalls()).toHaveLength(1);
     expect(ROUTE_CACHE_MS).toBe(10 * 60_000);
     now = new Date(NO_ADVISORY.getTime() + ROUTE_CACHE_MS);
@@ -208,14 +227,15 @@ describe("the demo commute check", () => {
     expect(UNREADABLE_RETRY_MS).toBe(60_000);
   });
 
-  it("clicking through every demo choice asks Valhalla once per trip and PAGASA's feed once", async () => {
+  it("clicking through every demo choice asks Valhalla once per trip, once per detour, and PAGASA's feed once", async () => {
     const { handler, calls, valhallaCalls } = handlerAt(NO_ADVISORY);
     for (const trip of ["banilad-itpark", "mabolo-cbp"]) {
       for (const scenario of ["none", "flooded", "unclear"]) {
         for (const rain of [false, true]) expect((await handler(demo(trip, scenario, rain))).status).toBe(200);
       }
     }
-    expect(valhallaCalls()).toHaveLength(2);
+    expect(valhallaCalls().filter((c) => !JSON.parse(c.body!).exclude_polygons)).toHaveLength(2);
+    expect(valhallaCalls().filter((c) => JSON.parse(c.body!).exclude_polygons)).toHaveLength(2);
     expect(calls.filter((c) => c.url === FEED_URL)).toHaveLength(1);
   }, 10_000);
 
@@ -281,15 +301,112 @@ describe("the demo commute check", () => {
 
   it("never says 'passable to all types of vehicles' or PATV, in any demo answer", async () => {
     for (const now of [NO_ADVISORY, ADVISORY_ACTIVE]) {
+      const { handler } = handlerAt(now);
       for (const trip of ["banilad-itpark", "mabolo-cbp"]) {
         for (const scenario of ["none", "flooded", "unclear"]) {
           for (const rain of [false, true]) {
-            const text = await (await handlerAt(now).handler(demo(trip, scenario, rain))).text();
+            const text = await handler(demo(trip, scenario, rain)).then((r) => r.text());
             expect(text.toLowerCase()).not.toContain("passable to all types of vehicles");
             expect(text).not.toMatch(/\bPATV\b/);
           }
         }
       }
     }
+  }, 20_000);
+});
+
+describe("go another way", () => {
+  it("Banilad → IT Park with a flooded spot reported on Governor M. Cuenco Avenue ⇒ Go another way, with the detour's length and time", async () => {
+    const { handler, valhallaCalls } = handlerAt(NO_ADVISORY);
+    const res = await handler(demo("banilad-itpark", "flooded"));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.answer.kind).toBe("go_another_way");
+    expect(body.answer.title).toBe("Go another way");
+    expect(body.answer.reason).toContain("Governor M. Cuenco Avenue");
+    expect(body.route).toMatchObject({ lengthKm: 2.552, timeMin: 11 });
+    expect(body.detour).toMatchObject({ lengthKm: 3.293, timeMin: 15, extraKm: 0.7, extraMin: 4 });
+    expect(body.detour.streets).toContain("Camp Lapu-Lapu Road");
+    expect(body.detour.streets).not.toContain("Jose Maria Del Mar Avenue");
+    expect(body.answer.thin).toBe("Nobody has reported the other way. This answer rests on no advisory and no rain tap.");
+
+    const [, second] = valhallaCalls();
+    const sent = JSON.parse(second.body!);
+    expect(sent.locations).toEqual(EXCLUDED_REQUEST.locations);
+    expect(sent.costing).toBe("motorcycle");
+    expect(sent.exclude_polygons).toHaveLength(1);
+    sent.exclude_polygons[0].forEach(([lon, lat]: number[], i: number) => {
+      expect(lon).toBeCloseTo(EXCLUDED_REQUEST.exclude_polygons[0][i][0], 9);
+      expect(lat).toBeCloseTo(EXCLUDED_REQUEST.exclude_polygons[0][i][1], 9);
+    });
+  });
+
+  it("no route avoids every blocked spot ⇒ Wait, saying no way around the reported spots was found", async () => {
+    const { handler } = handlerAt(NO_ADVISORY, { detour: "no_route" });
+    const body = await (await handler(demo("banilad-itpark", "flooded"))).json();
+    expect(body.answer.kind).toBe("wait");
+    expect(body.answer.reason).toBe(
+      "Your way is blocked at Governor M. Cuenco Avenue at Jose Maria Del Mar Avenue, and no way around the reported spots was found.",
+    );
+    expect(body.detour).toBeNull();
+  });
+
+  it("rain + plain blocked + a detour nobody has reported ⇒ No one knows, naming the blocked spot (🔴P2)", async () => {
+    const { handler } = handlerAt(NO_ADVISORY);
+    const body = await (await handler(demo("banilad-itpark", "flooded", true))).json();
+    expect(body.answer.kind).toBe("no_one_knows");
+    expect(body.answer.reason).toBe(
+      "Your usual way is blocked at Governor M. Cuenco Avenue at Jose Maria Del Mar Avenue and nobody has reported the other way.",
+    );
+    expect(body.detour).toMatchObject({ state: "unknown", lengthKm: 3.293 });
+  });
+
+  it("a reply that still runs through the blocked spot is no way around it ⇒ Wait, not Go another way", async () => {
+    const { handler } = handlerAt(NO_ADVISORY, { detour: "plain" });
+    const body = await (await handler(demo("banilad-itpark", "flooded"))).json();
+    expect(body.answer.kind).toBe("wait");
+    expect(body.detour).toBeNull();
+  });
+
+  it("the detour request goes through the same 1-a-second gate: two requests, two grants, at least 1 s apart", async () => {
+    const store = new MemorySlotStore();
+    const inner = makeValhallaGate(store);
+    let grants = 0;
+    const counted = { acquire: async () => ((await inner.acquire()) === "ok" ? (grants++, "ok" as const) : "busy" as const) };
+    const net = network();
+    const handler = makeCommuteHandler({ fetch: net.fetch, now: () => NO_ADVISORY, gate: () => counted, budget: openBudget });
+    expect((await handler(demo("banilad-itpark", "flooded"))).status).toBe(200);
+    const [first, second] = net.valhallaCalls();
+    expect(grants).toBe(2);
+    expect(second.at - first.at).toBeGreaterThanOrEqual(1_000);
+  }, 10_000);
+
+  it("when the gate refuses the detour request, nothing is sent and there is no answer", async () => {
+    const inner = makeValhallaGate(new MemorySlotStore());
+    let asked = 0;
+    const firstOnly = { acquire: async () => (++asked === 1 ? inner.acquire() : ("busy" as const)) };
+    const net = network();
+    const handler = makeCommuteHandler({ fetch: net.fetch, now: () => NO_ADVISORY, gate: () => firstOnly, budget: openBudget });
+    const res = await handler(demo("banilad-itpark", "flooded"));
+    expect(res.status).toBe(503);
+    expect((await res.json()).answer).toBeUndefined();
+    expect(net.valhallaCalls()).toHaveLength(1);
+  });
+
+  it("an unreachable routing server on the detour request gives no answer, not Wait", async () => {
+    const { handler } = handlerAt(NO_ADVISORY, { detour: "down" });
+    const res = await handler(demo("banilad-itpark", "flooded"));
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.answer).toBeUndefined();
+    expect(body.routing).toBe("unreachable");
+  }, 10_000);
+
+  it("Mabolo → Cebu Business Park around the flooded M.J. Cuenco corner ⇒ Go another way by Pope John Paul II Avenue", async () => {
+    const { handler } = handlerAt(NO_ADVISORY);
+    const body = await (await handler(demo("mabolo-cbp", "flooded"))).json();
+    expect(body.answer.kind).toBe("go_another_way");
+    expect(body.detour).toMatchObject({ lengthKm: 1.909, timeMin: 7 });
+    expect(body.detour.streets[0]).toBe("Pope John Paul Ⅱ Avenue");
   });
 });

@@ -25,7 +25,7 @@ export interface SampleSpec {
   id: string;
   trip: DemoTripId;
   scenarios: ScenarioId[];
-  /** Where the pin sits, by street and barangay (Valhalla /locate and OSM Nominatim, 2026-10-30, one lookup each). */
+  /** Where the pin sits, by street (Valhalla /locate, 2026-10-30, one lookup each) and, for most, barangay (OSM Nominatim). */
   place: string;
   at: Point;
   wayId: number | null;
@@ -44,9 +44,11 @@ export const SAMPLE_SPECS: readonly SampleSpec[] = [
     id: "sample-cavite-2013",
     trip: "banilad-itpark",
     scenarios: ["flooded"],
-    place: "Governor M. Cuenco Avenue, Apas",
-    at: { lat: 10.338566, lon: 123.911461 },
-    wayId: 1116002958,
+    place: "Governor M. Cuenco Avenue at Jose Maria Del Mar Avenue",
+    // The plain route's midpoint, where the 2026-10-30 probe found a way around a 330 m box. /locate finds three ways
+    // at 0 m there (Governor M. Cuenco, Jose Maria Del Mar, Paradise Village Road), so it has no single way id.
+    at: { lat: 10.335398, lon: 123.910908 },
+    wayId: null,
     ageMin: 40,
     verdict: {
       kind: "measured",
