@@ -47,7 +47,17 @@ export default function VoiceNote() {
   /** The language picked when recording started: the one the note is sent with. */
   const recordedIn = useRef<VoiceLanguage | null>(null);
 
-  useEffect(() => () => recording.current?.cancel(), []);
+  /** Aborted when the page goes away, so a recording still starting then is let go as soon as it is. */
+  const mounted = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    const page = new AbortController();
+    mounted.current = page;
+    return () => {
+      page.abort();
+      recording.current?.cancel();
+    };
+  }, []);
 
   useEffect(() => {
     if (state.step !== "recording") return;
@@ -63,10 +73,12 @@ export default function VoiceNote() {
     if (busy.current || !language) return;
     busy.current = true;
     recordedIn.current = language;
+    const page = mounted.current;
     try {
-      recording.current = await startRecording();
+      recording.current = await startRecording({ signal: page?.signal });
     } catch {
       busy.current = false;
+      if (page?.signal.aborted) return;
       setState({ step: "failed", message: "Lusong needs the microphone to record a voice note. Allow it and tap record again." });
       return;
     }

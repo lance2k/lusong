@@ -50,3 +50,51 @@ describe("the microphone is let go on every way recording can fail to start (ðŸŸ
     expect(seen.contextClosed).toBe(true);
   });
 });
+
+describe("a recording the page stopped wanting while it was starting (ðŸŸ¡T9-3)", () => {
+  it("the page goes away while the microphone is being asked for: once allowed, it is let go at once and nothing captures", async () => {
+    let allow!: () => void;
+    const { media, seen } = fakeMedia({ permission: new Promise<void>((resolve) => (allow = resolve)) });
+    const page = new AbortController();
+    const starting = startRecording({ media, signal: page.signal });
+    page.abort();
+    allow();
+    await expect(starting).rejects.toMatchObject({ name: "AbortError" });
+    expect(seen.granted).toBe(true);
+    expect(seen.track.stopped).toBe(true);
+    expect(seen.contextClosed).toBe(true);
+    expect(seen.workletNodes).toBe(0);
+  });
+
+  it("the page goes away while the capture module loads: the microphone is let go", async () => {
+    let loaded!: () => void;
+    const { media, seen } = fakeMedia({ addModule: () => new Promise<void>((resolve) => (loaded = resolve)) });
+    const page = new AbortController();
+    const starting = startRecording({ media, signal: page.signal });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    page.abort();
+    loaded();
+    await expect(starting).rejects.toMatchObject({ name: "AbortError" });
+    expect(seen.track.stopped).toBe(true);
+    expect(seen.contextClosed).toBe(true);
+  });
+
+  it("the page goes away after recording started: the microphone is let go at once", async () => {
+    const { media, seen } = fakeMedia();
+    const page = new AbortController();
+    await startRecording({ media, signal: page.signal });
+    expect(seen.track.stopped).toBe(false);
+    page.abort();
+    expect(seen.track.stopped).toBe(true);
+    expect(seen.contextClosed).toBe(true);
+  });
+
+  it("a recording stopped normally lets the microphone go and returns the note", async () => {
+    const { media, seen } = fakeMedia();
+    const recording = await startRecording({ media, signal: new AbortController().signal });
+    const note = await recording.stop();
+    expect(note.type).toBe("audio/wav");
+    expect(seen.track.stopped).toBe(true);
+    expect(seen.contextClosed).toBe(true);
+  });
+});
