@@ -592,6 +592,25 @@ describe("a real commute check (#6)", () => {
     expect(body.detour).not.toBeNull();
   });
 
+  it("a report with a published blurred photo carries its URL to the page; one without carries none (#8)", async () => {
+    const store = new MemoryReportStore();
+    const shown = storedReport(NO_ADVISORY, { photoUrl: "https://blob.test/report-photos/a.jpg" });
+    const hidden = storedReport(NO_ADVISORY, { verdict: { kind: "no_flood" } });
+    await seedReport(store, shown);
+    await seedReport(store, hidden);
+    const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
+    const body = await (await handler(real())).json();
+    const byId = Object.fromEntries(body.reports.map((r: { id: string; photoUrl: string | null }) => [r.id, r.photoUrl]));
+    expect(byId).toEqual({ [shown.id]: "https://blob.test/report-photos/a.jpg", [hidden.id]: null });
+  });
+
+  it("a demo check's sample reports carry no blurred photo URL (#8)", async () => {
+    const { handler } = handlerAt(NO_ADVISORY);
+    const body = await (await handler(demo("banilad-itpark", "flooded"))).json();
+    expect(body.reports.length).toBeGreaterThan(0);
+    expect(body.reports.every((r: { photoUrl: unknown }) => r.photoUrl === null)).toBe(true);
+  });
+
   it("with no stored reports, the same trip is Go: no sample stands in for a report", async () => {
     const { handler } = handlerAt(NO_ADVISORY);
     const body = await (await handler(real())).json();
