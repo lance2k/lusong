@@ -14,7 +14,7 @@ export default function Home() {
       </header>
 
       <section className="space-y-4">
-        <h2 className="text-xl font-semibold">Commute check (demo)</h2>
+        <h2 className="text-xl font-semibold">Commute check</h2>
         <CommuteCheck />
       </section>
 
