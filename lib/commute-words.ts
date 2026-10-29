@@ -67,3 +67,15 @@ export function phtTime(iso: string): string {
   const period = parts.dayPeriod.toLowerCase().startsWith("a") ? "a.m." : "p.m.";
   return `${parts.day} ${parts.month}, ${parts.hour}:${parts.minute} ${period} PHT`;
 }
+
+/** The detour's extra distance and time, against the plain route, in one phrase. */
+export function detourWords(extra: { extraKm: number; extraMin: number }): string {
+  const longer = (n: number) => (n > 0 ? "longer" : "shorter");
+  const km = `${Math.abs(extra.extraKm).toFixed(1)} km`;
+  const min = `${Math.abs(extra.extraMin)} min`;
+  const usual = "than your usual way";
+  if (extra.extraMin === 0) return `${km} ${longer(extra.extraKm)} ${usual}, about the same time`;
+  if (extra.extraKm === 0) return `${min} ${longer(extra.extraMin)} ${usual}, about the same distance`;
+  if (Math.sign(extra.extraKm) === Math.sign(extra.extraMin)) return `${km} and ${min} ${longer(extra.extraKm)} ${usual}`;
+  return `${km} ${longer(extra.extraKm)} and ${min} ${longer(extra.extraMin)} ${usual}`;
+}
