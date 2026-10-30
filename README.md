@@ -35,11 +35,11 @@ Pick a trip (a preset one such as Banilad → IT Park, or your own two points on
   Lusong writes every sentence on the page from those ids, so the model can't change the answer or put its own words
   in front of the rider. A closure it finds blocks a way only when it is dated today and placed on that way.
 - **Voice notes:** someone at the water can record up to 30 seconds in Tagalog or English, recorded in the browser
-  as 16 kHz WAV. Meta's Voice Transcribe turns it into words, and Muse Spark turns the words into a fixed-choice
+  as 16 kHz WAV. Meta's Voice Transcribe turns it into words (written from Meta's docs; not yet tried live), and Muse Spark turns the words into a fixed-choice
   claim (a place, a depth, passable or not). Neither the audio nor the words are kept or shown, and a voice note
   can warn but never clear. Bisaya is off until it is tested on a real clip.
 - **Blurred photos:** a report's photo is shown to others only after SAM 3.1 has found and pixelated every person and
-  licence plate in it. SAM found all 9 clear plates on the 5 test photos that show plates, on both of 2 runs. That
+  licence plate in it. SAM found all 9 plates labelled on the 5 test photos that show plates, on both of 2 runs. That
   is too few photos to trust, so photos stay hidden for now, and a report shows its pin and reading.
 - **A watcher** re-runs the check every 10 minutes during a window you pick (6–8 a.m., say) and sends a Telegram
   message when the window opens and whenever the answer changes. Switching it off deletes the trip and its history.
