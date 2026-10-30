@@ -82,7 +82,7 @@ const stores: [string, (opts?: { claimMs?: number }) => Made][] = [
           (opts?: { claimMs?: number }) => {
             const prefix = `lusong-test-${randomUUID()}`;
             return {
-              store: new UpstashReportStore(upstashUrl, upstashToken, prefix, opts),
+              store: new UpstashReportStore(upstashUrl, upstashToken, prefix, { now: () => T0.getTime(), ...opts }),
               indexEntries: async () => Number(await upstash(["ZCARD", `${prefix}:reports`])),
             };
           },

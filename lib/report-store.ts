@@ -292,6 +292,7 @@ return out
 
 /** Upstash's REST API, one EVAL per operation, in the same database as the budget (lib/budget.ts). */
 export class UpstashReportStore implements ReportStore {
+  private readonly now: () => number;
   private readonly ttlMs: number;
   private readonly claimMs: number;
 
@@ -299,8 +300,9 @@ export class UpstashReportStore implements ReportStore {
     private readonly url: string,
     private readonly token: string,
     private readonly prefix = "lusong",
-    opts: { ttlMs?: number; claimMs?: number } = {},
+    opts: { now?: () => number; ttlMs?: number; claimMs?: number } = {},
   ) {
+    this.now = opts.now ?? Date.now;
     this.ttlMs = opts.ttlMs ?? REPORT_TTL_MS;
     this.claimMs = opts.claimMs ?? PHOTO_CLAIM_MS;
   }
@@ -353,7 +355,7 @@ export class UpstashReportStore implements ReportStore {
     const result = await this.evalScript(
       SAVE_SCRIPT,
       [`${this.prefix}:report:${report.id}`, hashKey(this.prefix, report), `${this.prefix}:reports`, `${this.prefix}:report:`],
-      [JSON.stringify(report), this.ttlMs, report.id, Date.parse(report.receivedAt), Date.now() - this.ttlMs, token],
+      [JSON.stringify(report), this.ttlMs, report.id, Date.parse(report.receivedAt), this.now() - this.ttlMs, token],
     );
     if (result === "saved" || result === "not_owner") return { state: result };
     const saved = this.parse(result);

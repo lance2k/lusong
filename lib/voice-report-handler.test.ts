@@ -99,7 +99,7 @@ afterEach(() => {
 const stores: [string, () => ReportStore][] = [
   ["memory store", () => new MemoryReportStore()],
   ...(upstashUrl
-    ? [["Upstash store", () => new UpstashReportStore(upstashUrl, upstashToken, `lusong-test-${randomUUID()}`)] as [string, () => ReportStore]]
+    ? [["Upstash store", () => new UpstashReportStore(upstashUrl, upstashToken, `lusong-test-${randomUUID()}`, { now: () => NOW.getTime() })] as [string, () => ReportStore]]
     : []),
 ];
 
@@ -448,7 +448,7 @@ const indexedStores: [string, (opts?: { claimMs?: number }) => { store: ReportSt
               });
               return Number(((await res.json()) as { result: unknown }).result);
             };
-            return { store: new UpstashReportStore(upstashUrl, upstashToken, prefix, opts) as ReportStore, indexEntries: zcard };
+            return { store: new UpstashReportStore(upstashUrl, upstashToken, prefix, { now: () => NOW.getTime(), ...opts }) as ReportStore, indexEntries: zcard };
           },
         ] as [string, (opts?: { claimMs?: number }) => { store: ReportStore; indexEntries: () => Promise<number> }],
       ]
