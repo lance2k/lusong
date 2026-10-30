@@ -1,0 +1,27 @@
+name: watch-tick
+
+# The watcher's scheduler (docs/watcher-setup.md §5). GitHub may start a scheduled run some minutes late; the next
+# tick picks up whatever the late one missed.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: watch-tick
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: POST /api/watch/tick
+        env:
+          WATCH_TICK_SECRET: ${{ secrets.WATCH_TICK_SECRET }}
+        run: |
+          curl -sS --fail-with-body -m 70 -X POST \
+            -H "Authorization: Bearer $WATCH_TICK_SECRET" \
+            https://lusong-mocha.vercel.app/api/watch/tick

@@ -6,7 +6,13 @@ owner, who has to create the bot. Every value below is a placeholder; real value
 scheduler, never into this repo.
 
 Why Telegram and an outside scheduler: see the comment on issue #10 (Messenger's 24-hour window, and Vercel Hobby
-cron running once a day).
+cron running once a day). Correction to the Messenger half: Meta's Utility Messages are meant for sending outside that
+window, and a utility template for the Lusong Page was approved on creation (2026-10-31). Reaching people outside the
+app's own roles still needs Meta's App Review, so Telegram stays the channel for now.
+
+As set up on 2026-10-31: the bot is `@lusong_cebu_bot`; the four values are on Vercel **Production**, not Preview,
+because previews sit behind Vercel Authentication and answer 401 to outside calls; the webhook points at
+`https://lusong-mocha.vercel.app/api/watch/telegram`; the scheduler is `.github/workflows/watch-tick.yml` (§5).
 
 ## 1. Create the bot (BotFather)
 
@@ -65,9 +71,14 @@ a message has been sent to the bot.
 
 ## 5. The scheduler: QStash, every 10 minutes
 
-Recommended: an Upstash QStash schedule. It runs on the Upstash account that already holds the database, and it can
-fire every minute or less often ("The maximum schedule resolution is 1 minute", QStash's create-a-schedule API page).
-GitHub Actions' `schedule` and cron-job.org are the other choices, and either can send the same header.
+In use: GitHub Actions, `.github/workflows/watch-tick.yml`, every 10 minutes, with `WATCH_TICK_SECRET` as a repository
+secret (`gh secret set WATCH_TICK_SECRET`, value from stdin). GitHub can start a scheduled run late or skip one under
+load (GitHub's docs on the `schedule` event), so a rider's message can arrive later than the 10 minutes. "Run workflow"
+on the Actions tab runs a tick by hand.
+
+The alternative: an Upstash QStash schedule. It can fire every minute or less often ("The maximum schedule resolution
+is 1 minute", QStash's create-a-schedule API page), but the Upstash account behind this project was made through
+Vercel's integration, so its console needs a sign-in through Vercel first.
 
 In the Upstash console, open QStash, then Schedules, then create one:
 
