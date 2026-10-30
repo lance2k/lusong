@@ -289,6 +289,22 @@ describe.runIf(upstashUrl)("expiry on the Upstash stand-in (🟡P15)", () => {
     expect(await Promise.all(keys.map((k) => upstash(["EXISTS", k])))).toEqual([0, 0, 0]);
     expect(await store.recent(new Date())).toEqual([]);
   });
+
+  it("a save prunes index entries received before its clock minus the expiry, and keeps one received exactly then", async () => {
+    const prefix = `lusong-test-${randomUUID()}`;
+    const clock = steppedClock();
+    const store = new UpstashReportStore(upstashUrl!, upstashToken, prefix, { now: clock.now, ttlMs: 60_000 });
+    const old = report({ receivedAt: new Date(T0.getTime() - 1).toISOString() });
+    const atCutoff = report();
+    await seedReport(store, old);
+    await seedReport(store, atCutoff);
+    clock.advance(60_000);
+    await seedReport(store, report({ receivedAt: new Date(clock.now()).toISOString() }));
+    const index = (await upstash(["ZRANGE", `${prefix}:reports`, 0, -1])) as string[];
+    expect(index).toContain(atCutoff.id);
+    expect(index).not.toContain(old.id);
+    expect(index).toHaveLength(2);
+  });
 });
 
 describe("which store", () => {
