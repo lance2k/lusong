@@ -43,8 +43,8 @@ Pick a trip (a preset one such as Banilad → IT Park, or your own two points on
   is too few photos to trust, so photos stay hidden for now, and a report shows its pin and reading.
 - **A watcher** re-runs the check every 10 minutes during a window you pick (6–8 a.m., say) and sends a Telegram
   message when the window opens and whenever the answer changes. Switching it off deletes the trip and its history.
-  It needs a Telegram bot and an outside scheduler, which `docs/watcher-setup.md` describes; Vercel's free plan runs
-  scheduled jobs once a day.
+  It is live on Telegram through `@lusong_cebu_bot`. A GitHub Actions job runs the 10-minute tick, because Vercel's
+  free plan runs scheduled jobs once a day; `docs/watcher-setup.md` has the setup.
 - **The demo trips** are recorded routes with sample reports. Every sample says it is a sample and where the photo was
   really taken (Cavite, Manila or Shah Alam in Malaysia, from Lusong's labelled test photos), so it is never
   mistaken for a report from Cebu.
@@ -243,6 +243,11 @@ track). Everything in this repository was written during the event; the commit h
 - 2026-10-30 08:21 PHT `c3e73ab` test: acceptance gate passes on candidate/all, 15 photos × 2 draws at fa4d6a9 (5 under-reads, 6 can't-measure, as at 6fa88e6)
 - 2026-10-30 08:21 PHT `04ea1a8` docs: README commit list rebuilt from git
 - 2026-10-30 09:15 PHT `a95cd47` merge: #5–#10 into commute-check (Lance said yes to decisions 4, 8 and 9)
+- 2026-10-30 09:36 PHT `1a36cfb` docs: README commit list rebuilt from git
+- 2026-10-31 04:21 PHT `2b445ae` ci: run the watcher's tick every 10 minutes from GitHub Actions
+- 2026-10-31 06:29 PHT `a211104` test: the Upstash store takes a clock, so report tests no longer fail once their fixed date is older than the TTL
+- 2026-10-31 06:30 PHT `494d9f8` ci: the watcher's tick runs off the round minutes, since no scheduled run had started 2 h after the schedule merged
+- 2026-10-31 06:37 PHT `55a115e` test: a save prunes index entries older than its clock minus the expiry and keeps the one exactly at it
 <!-- commits:end -->
 
 ## How it works
