@@ -36,7 +36,7 @@ const memoryStore = (): StoreUnderTest => {
 const upstashStore = (): StoreUnderTest => {
   const prefix = `lusong-test-${randomUUID()}`;
   return {
-    store: new UpstashReportStore(upstashUrl!, upstashToken, prefix),
+    store: new UpstashReportStore(upstashUrl!, upstashToken, prefix, { now: () => NOW.getTime() }),
     async held() {
       const call = async (command: string[]) => {
         const res = await fetch(upstashUrl!, {
