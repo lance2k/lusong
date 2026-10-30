@@ -241,6 +241,8 @@ track). Everything in this repository was written during the event; the commit h
 - 2026-10-30 08:08 PHT `a072800` docs: the README describes voice notes, blurred photos and the watcher
 - 2026-10-30 08:08 PHT `fa4d6a9` docs: the README says how far the plate probe and the voice path were tested
 - 2026-10-30 08:21 PHT `c3e73ab` test: acceptance gate passes on candidate/all, 15 photos × 2 draws at fa4d6a9 (5 under-reads, 6 can't-measure, as at 6fa88e6)
+- 2026-10-30 08:21 PHT `04ea1a8` docs: README commit list rebuilt from git
+- 2026-10-30 09:15 PHT `a95cd47` merge: #5–#10 into commute-check (Lance said yes to decisions 4, 8 and 9)
 <!-- commits:end -->
 
 ## How it works
