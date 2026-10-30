@@ -4,7 +4,8 @@ name: watch-tick
 # tick picks up whatever the late one missed.
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    # Off the round minutes, which GitHub's docs name as its busiest.
+    - cron: "3,13,23,33,43,53 * * * *"
   workflow_dispatch:
 
 permissions: {}
