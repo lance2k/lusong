@@ -9,7 +9,7 @@ export interface Point {
 
 export type ReportReading =
   | { source: "photo"; verdict: Verdict; capturedAt: Date | null }
-  | { source: "voice"; says: "passable" | "knee_deep_or_deeper" | "not_passable" }
+  | { source: "voice"; says: "passable" | "knee_deep_or_deeper" | "not_passable" | "unsure" }
   | { source: "web"; says: "closed"; sourceDate: string | null };
 
 export interface Report {
@@ -66,7 +66,7 @@ export function roleOf(report: Report, now: Date): Role {
       return "neutral";
     }
     case "voice":
-      return r.says === "passable" ? "neutral" : "block";
+      return r.says === "knee_deep_or_deeper" || r.says === "not_passable" ? "block" : "neutral";
     case "web":
       return r.sourceDate !== null && r.sourceDate === phtDate(now) ? "block" : "neutral";
   }

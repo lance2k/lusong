@@ -3,3 +3,6 @@ CC BY-SA 4.0, Wikimedia Commons, taken 2024-07-24; caption "Knee-deep flood lash
 1280px thumbnails. Attribution + share-alike apply if shown in the demo.
 quiapo-1-progressive.jpg: the same quiapo-1 photo re-saved as a progressive JPEG (PIL, quality 80) to test
 multi-scan parsing; same licence (CC BY-SA 4.0) and author.
+quiapo-1-exif.jpg: quiapo-1.jpg with the original upload's EXIF APP1 segment (realme GT 6, DateTimeOriginal
+2024:07:24 17:25:53, no GPS IFD; first 128 KiB of the Commons original, fetched 2026-10-30) spliced in after
+its ICC segment, to test reading the capture time before metadata is stripped. Same licence and author.

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
   budgetFromEnv,
+  costMicros,
   createBudget,
   MemoryBudgetStore,
   MUSE_INPUT_TOKEN_BOUND,
@@ -16,9 +17,9 @@ import { MUSE_MAX_COMPLETION_TOKENS } from "./readings";
 const NOON = new Date("2026-11-05T04:00:00Z");
 const R = RESERVE_MICROS;
 /** Three SAM images and no Muse call: $0.0075. */
-const THREE_SAM_IMAGES: MeteredUsage = { samImages: 3, museInputTokens: 0, museOutputTokens: 0, complete: true };
+const THREE_SAM_IMAGES: MeteredUsage = { samImages: 3, museInputTokens: 0, museOutputTokens: 0, webSearchQueries: 0, transcribeSeconds: 0, complete: true };
 /** A settle that refunds the whole reservation, so a second refund shows up as room for one more check. */
-const NOTHING_SPENT: MeteredUsage = { samImages: 0, museInputTokens: 0, museOutputTokens: 0, complete: true };
+const NOTHING_SPENT: MeteredUsage = { samImages: 0, museInputTokens: 0, museOutputTokens: 0, webSearchQueries: 0, transcribeSeconds: 0, complete: true };
 
 function admitted(a: Awaited<ReturnType<ReturnType<typeof createBudget>["admit"]>>): Admitted {
   if (!a.ok) throw new Error(`expected an admission, got ${a.reason}`);
@@ -139,7 +140,7 @@ describe.each(stores)("%s", (_name, makeStore) => {
   });
 
   it("an overrun is charged, not ignored", async () => {
-    const overrun: MeteredUsage = { samImages: 3, museInputTokens: 80_000, museOutputTokens: 5_000, complete: true };
+    const overrun: MeteredUsage = { samImages: 3, museInputTokens: 80_000, museOutputTokens: 5_000, webSearchQueries: 0, transcribeSeconds: 0, complete: true };
     const overrunMicros = 3 * 2_500 + 80_000 * 1.25 + 5_000 * 4.25;
     expect(overrunMicros).toBeGreaterThan(R);
     const budget = budgetOfMicros(overrunMicros + R - 1);
@@ -195,11 +196,21 @@ describe("the reservation", () => {
       samImages: 8,
       museInputTokens: 2 * MUSE_INPUT_TOKEN_BOUND,
       museOutputTokens: 2 * MUSE_MAX_COMPLETION_TOKENS,
+      webSearchQueries: 0,
+      transcribeSeconds: 0,
       complete: true,
     };
     const budget = createBudget({ store: new MemoryBudgetStore(), budgetUsd: (2 * R) / 1e6, ipLimit: 10 });
     await budget.settle(admitted(await budget.admit("192.0.2.1", NOON)), everyAttempt, true);
     expect((await budget.admit("192.0.2.2", NOON)).ok).toBe(true);
+  });
+});
+
+describe("the price of each operation (dev.meta.ai/docs/pricing-rate-limits, 2026-10-30)", () => {
+  it("Voice Transcribe costs $0.18 per hour of audio: an hour is 180,000 µ$, 30 s is 1,500 µ$", () => {
+    const audio = (transcribeSeconds: number): MeteredUsage => ({ samImages: 0, museInputTokens: 0, museOutputTokens: 0, webSearchQueries: 0, transcribeSeconds, complete: true });
+    expect(costMicros(audio(3_600))).toBe(180_000);
+    expect(costMicros(audio(30))).toBe(1_500);
   });
 });
 

@@ -1,26 +1,22 @@
 "use client";
 
-import { useEffect, useReducer, useState } from "react";
-import type { AnswerKind, RouteState } from "@/lib/answer";
+import dynamic from "next/dynamic";
+import { useEffect, useReducer, useRef, useState } from "react";
+import type { AnswerKind, Point, RouteState } from "@/lib/answer";
 import { detourWords } from "@/lib/commute-words";
 import { DEMO_TRIPS, SCENARIOS, scenariosFor, type DemoTripId } from "@/lib/samples";
-import { commuteReducer, initialCommuteState, type CommuteInputs, type CommuteState } from "./commute-state";
+import { MusePick, WebFindings, type PageMuse } from "./commute-muse";
+import { commuteReducer, initialCommuteState, OWN_TRIP, type CommuteInputs, type CommuteState } from "./commute-state";
+import { OwnTripPanel, useOwnTrip } from "./own-trip";
+import { tripMapProps } from "./map-props";
+import { ReportEvidence, type PageReport } from "./report-evidence";
+import { checkRequest } from "./trip";
 
-interface PageReport {
-  id: string;
-  sample: boolean;
-  place: string;
-  age: string;
-  depth: string | null;
-  passability: string | null;
-  origin: string;
-  credit: string;
-  sourceUrl: string;
-  counts: boolean;
-  onRoute: boolean;
-  onDetour: boolean;
-  role: "clear" | "block" | "neutral";
-}
+// Leaflet needs the browser's window, so the map is never rendered on the server.
+const TripMap = dynamic(() => import("./map"), {
+  ssr: false,
+  loading: () => <div className="h-72 w-full rounded-2xl bg-zinc-100 dark:bg-zinc-900" />,
+});
 
 interface PageAdvisory {
   state: "active" | "none" | "unreadable";
@@ -34,12 +30,22 @@ interface PageAdvisory {
 }
 
 interface CommuteResult {
-  trip: { id: DemoTripId; label: string };
+  trip: { id: DemoTripId | null; label: string };
   rainingHere: boolean;
   answer: { kind: AnswerKind; title: string; reason: string; thin: string | null };
-  route: { lengthKm: number; timeMin: number; streets: string[] };
-  detour: { state: RouteState; lengthKm: number; timeMin: number; extraKm: number; extraMin: number; streets: string[] } | null;
+  route: { lengthKm: number; timeMin: number; streets: string[]; line: Point[] };
+  detour: {
+    state: RouteState;
+    proposedBy: "rules" | "muse_spark";
+    lengthKm: number;
+    timeMin: number;
+    extraKm: number;
+    extraMin: number;
+    streets: string[];
+    line: Point[];
+  } | null;
   advisory: PageAdvisory;
+  muse: PageMuse;
   reports: PageReport[];
   mmdaCredit: string;
 }
@@ -51,13 +57,8 @@ const TONES: Record<AnswerKind, string> = {
   no_one_knows: "bg-amber-500 text-black",
 };
 
-const ROLE_WORDS: Record<PageReport["role"], string> = {
-  block: "Marks the spot not passable",
-  neutral: "Neither clears nor blocks the spot",
-  clear: "Shows the spot clear",
-};
-
 const TRIP_IDS = Object.keys(DEMO_TRIPS) as DemoTripId[];
+const TRIP_OPTIONS = [...TRIP_IDS.map((id) => ({ id, label: DEMO_TRIPS[id].label })), { id: OWN_TRIP, label: "Your trip" } as const];
 
 function Choice<T extends string>({
   label,
@@ -80,7 +81,7 @@ function Choice<T extends string>({
             type="button"
             aria-pressed={o.id === value}
             onClick={() => onChange(o.id)}
-            className="rounded-full border border-zinc-300 px-3 py-1.5 text-sm aria-pressed:bg-zinc-900 aria-pressed:text-white dark:border-zinc-700 dark:aria-pressed:bg-zinc-100 dark:aria-pressed:text-zinc-900"
+            className="min-h-11 rounded-full border border-zinc-300 px-3 py-1.5 text-sm aria-pressed:bg-zinc-900 aria-pressed:text-white dark:border-zinc-700 dark:aria-pressed:bg-zinc-100 dark:aria-pressed:text-zinc-900"
           >
             {o.label}
           </button>
@@ -124,34 +125,11 @@ function Advisory({ advisory }: { advisory: PageAdvisory }) {
   );
 }
 
-function Report({ r }: { r: PageReport }) {
-  const where = r.onRoute ? "" : r.onDetour ? "On the other way. " : null;
-  const status = !r.counts ? "Older than 3 hours: shown, not counted." : where === null ? "Not on your route." : where + ROLE_WORDS[r.role] + ".";
-  return (
-    <li className="space-y-1 px-4 py-3">
-      <p className="flex flex-wrap items-center gap-2">
-        {r.sample && <span className="rounded bg-zinc-200 px-1.5 py-0.5 text-xs font-semibold uppercase dark:bg-zinc-700">Sample</span>}
-        <span className="font-medium">{r.place}</span>
-        <span className="text-zinc-500">{r.age}</span>
-      </p>
-      {r.depth && <p>Water {r.depth}.</p>}
-      {r.passability && <p>{r.passability}.</p>}
-      <p className="text-zinc-600 dark:text-zinc-400">{status}</p>
-      {r.sample && (
-        <p className="text-sm text-zinc-500">
-          Sample, not a report from this street. Where the photo was really taken: {r.origin}. {r.credit}.{" "}
-          <a className="text-sky-700 underline dark:text-sky-400" href={r.sourceUrl}>
-            See the photo
-          </a>
-        </p>
-      )}
-    </li>
-  );
-}
-
 function inputWords(inputs: CommuteInputs): string {
+  const rain = inputs.rainingHere ? "raining here" : "no rain tap";
+  if (inputs.trip === OWN_TRIP) return `Your trip · ${rain}`;
   const scenario = SCENARIOS.find((s) => s.id === inputs.scenario)!.label;
-  return `${DEMO_TRIPS[inputs.trip].label} · ${scenario} · ${inputs.rainingHere ? "raining here" : "no rain tap"}`;
+  return `Demo: ${DEMO_TRIPS[inputs.trip].label} · ${scenario} · ${rain}`;
 }
 
 function ResultView({ result, checkedFor }: { result: CommuteResult; checkedFor: CommuteInputs }) {
@@ -161,7 +139,7 @@ function ResultView({ result, checkedFor }: { result: CommuteResult; checkedFor:
       <section className="overflow-hidden rounded-2xl border border-zinc-200 dark:border-zinc-800">
         <div className={`px-5 py-4 ${TONES[answer.kind]}`}>
           <p className="text-2xl font-bold leading-tight">{answer.title}</p>
-          <p className="mt-1 text-sm opacity-90">Demo: {inputWords(checkedFor)}</p>
+          <p className="mt-1 text-sm opacity-90">{inputWords(checkedFor)}</p>
         </div>
         <div className="space-y-2 px-5 py-4 text-[15px] leading-relaxed">
           <p>{answer.reason}</p>
@@ -170,7 +148,11 @@ function ResultView({ result, checkedFor }: { result: CommuteResult; checkedFor:
         </div>
       </section>
 
+      {result.muse && <MusePick pick={result.muse.pick} />}
+
       <Advisory advisory={result.advisory} />
+
+      {result.muse && <WebFindings web={result.muse.web} />}
 
       <section>
         <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-500">Reports</h3>
@@ -179,7 +161,7 @@ function ResultView({ result, checkedFor }: { result: CommuteResult; checkedFor:
         ) : (
           <ul className="divide-y divide-zinc-200 rounded-2xl border border-zinc-200 text-[15px] dark:divide-zinc-800 dark:border-zinc-800">
             {result.reports.map((r) => (
-              <Report key={r.id} r={r} />
+              <ReportEvidence key={r.id} r={r} />
             ))}
           </ul>
         )}
@@ -204,6 +186,9 @@ function ResultView({ result, checkedFor }: { result: CommuteResult; checkedFor:
               {detour.streets.length > 0 && <>, via {detour.streets.join(", ")}</>}.
             </p>
             <p className="font-semibold">{detourWords(detour)}.</p>
+            {detour.proposedBy === "muse_spark" && (
+              <p className="text-sm text-zinc-500">Muse Spark suggested this way; Lusong&apos;s rules judged it on the reports along it.</p>
+            )}
           </div>
         )}
         <p className="mt-1 text-sm text-zinc-500">
@@ -221,6 +206,17 @@ export default function CommuteCheck() {
   );
   const { trip, scenario, rainingHere } = state.inputs;
   const view = state.view;
+  const own = useOwnTrip(() => dispatch({ type: "change", inputs: {} }));
+  const ownTrip = trip === OWN_TRIP;
+  const savedTrip = own.draft.step === "set" ? own.draft.trip : null;
+  // A trip saved on an earlier visit is chosen once it is read, so the next check is one tap.
+  const restored = useRef(false);
+  useEffect(() => {
+    if (!savedTrip || restored.current) return;
+    restored.current = true;
+    dispatch({ type: "change", inputs: { trip: OWN_TRIP } });
+  }, [savedTrip]);
+  const map = tripMapProps({ demo: ownTrip ? null : DEMO_TRIPS[trip], draft: own.draft, result: view.step === "done" ? view.result : null });
 
   async function check() {
     const ticket = state.ticket + 1;
@@ -230,7 +226,7 @@ export default function CommuteCheck() {
       const res = await fetch("/api/commute", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "demo", ...inputs }),
+        body: JSON.stringify(inputs.trip === OWN_TRIP ? checkRequest(savedTrip!, inputs.rainingHere) : { mode: "demo", ...inputs }),
       });
       const body = await res.json().catch(() => null);
       if (!res.ok || !body?.answer) {
@@ -246,22 +242,26 @@ export default function CommuteCheck() {
   return (
     <div className="space-y-5">
       <Choice
-        label="Demo trip"
-        options={TRIP_IDS.map((id) => ({ id, label: DEMO_TRIPS[id].label }))}
+        label="Trip"
+        options={TRIP_OPTIONS}
         value={trip}
         onChange={(id) => dispatch({ type: "change", inputs: { trip: id } })}
       />
-      <div className="space-y-1">
-        <Choice
-          label="Sample reports"
-          options={scenariosFor(trip)}
-          value={scenario}
-          onChange={(id) => dispatch({ type: "change", inputs: { scenario: id } })}
-        />
-        <p className="text-sm text-zinc-500">
-          Samples are labelled test photos from elsewhere, pinned on these streets for the demo. Real checks never use them.
-        </p>
-      </div>
+      {ownTrip && <OwnTripPanel own={own} />}
+      <TripMap {...map} onTap={ownTrip ? own.tap : undefined} />
+      {!ownTrip && (
+        <div className="space-y-1">
+          <Choice
+            label="Sample reports"
+            options={scenariosFor(trip)}
+            value={scenario}
+            onChange={(id) => dispatch({ type: "change", inputs: { scenario: id } })}
+          />
+          <p className="text-sm text-zinc-500">
+            Samples are labelled test photos from elsewhere, pinned on these streets for the demo. Real checks never use them.
+          </p>
+        </div>
+      )}
       <button
         type="button"
         aria-pressed={rainingHere}
@@ -273,16 +273,16 @@ export default function CommuteCheck() {
       <button
         type="button"
         onClick={check}
-        disabled={view.step === "checking"}
+        disabled={view.step === "checking" || (ownTrip && !savedTrip)}
         className="w-full rounded-2xl bg-sky-600 px-5 py-4 text-lg font-semibold text-white shadow-sm transition hover:bg-sky-700 disabled:opacity-60"
       >
-        Check this commute
+        {ownTrip ? "Check my trip" : "Check this commute"}
       </button>
 
       <div aria-live="polite">
         {view.step === "checking" && (
           <p className="text-center text-zinc-600 dark:text-zinc-400">
-            Reading PAGASA&apos;s flood advisory, getting the motorbike route, gathering reports and, if your way is blocked, looking for another… <Elapsed since={view.startedAt} /> s
+            Reading PAGASA&apos;s flood advisory, getting the motorbike route, gathering reports, checking the web for road closures and, if your way is blocked, looking for another… <Elapsed since={view.startedAt} /> s
           </p>
         )}
         {view.step === "failed" && (

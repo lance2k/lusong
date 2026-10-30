@@ -119,6 +119,22 @@ describe("settling a Muse Spark Responses-API run", () => {
     expect(await roomForAnother(RESERVE + SPARK_COST, spend, false)).toBe(false);
   });
 
+  it("charges each web search query at $2.50 per 1,000 on top of the reply's tokens", async () => {
+    const searches = [{ type: "web_search_call" }, { type: "web_search_call" }, { type: "message" }];
+    const spend = (meter: Meter) => meter.reply("spark-responses", { output: searches, usage: SPARK_USAGE });
+    expect(await roomForAnother(RESERVE + SPARK_COST + 2 * 2_500, spend)).toBe(true);
+    expect(await roomForAnother(RESERVE + SPARK_COST + 2 * 2_500 - 1, spend)).toBe(false);
+  });
+
+  it("charges a search's whole cost when its queries and tokens run past the reservation", async () => {
+    // 40 queries (100,000 µ$) plus the tokens: more than the 100,000 µ$ reserved, so the overrun is charged.
+    const output = [...Array.from({ length: 40 }, () => ({ type: "web_search_call" })), { type: "message" }];
+    const spend = (meter: Meter) => meter.reply("spark-responses", { output, usage: SPARK_USAGE });
+    const cost = SPARK_COST + 40 * 2_500;
+    expect(await roomForAnother(cost + RESERVE, spend)).toBe(true);
+    expect(await roomForAnother(cost + RESERVE - 1, spend)).toBe(false);
+  });
+
   it("charges SAM images and Spark tokens together when one run uses both", async () => {
     const spend = (meter: Meter) => {
       meter.reply("sam", { usage: { input_tokens: 0, output_tokens: 0, images_processed: 1 } });
