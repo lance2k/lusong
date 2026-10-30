@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<alert xmlns="urn:oasis:names:tc:emergency:cap:1.2"><identifier>9c46f1ee-c145-4f09-877b-c41b031ec7d1</identifier><sender>PAGASA-DOST</sender><sent>2026-10-25T05:15:50+08:00</sent><status>Actual</status><msgType>Update</msgType><scope>Public</scope><references>PAGASA-DOST,fd4190b2-831e-46a4-9cb5-eae65f7a725c,2026-10-24T17:29:53+08:00</references><info><category>Met</category><event>General Flood Advisory (Final)</event><responseType>AllClear</responseType><urgency>Past</urgency><severity>Minor</severity><certainty>Unlikely</certainty><expires>2026-10-25T17:15:50+08:00</expires><senderName>PAGASA-DOST</senderName><headline>General Flood Advisory (Final)</headline><description>Under present weather conditions, Intertropical Convergence Zone (ITCZ) affecting Palawan, Visayas, and Mindanao.  
+The 12-hour rainfall forecast is light rains and thunderstorms.  
+WATERCOURSES NO LONGER TO BE AFFECTED :  
+
+ + **Lanao Del Sur** - Rivers and its tributaries particularly Dapao and Matling.  
+ + **Maguindanao** - Rivers and its tributaries particularly Nituan, Mindanao, Dalican, Allah, Buluan, Matuber, Mlang and Lower Mlang.  
+</description><instruction>With this development and unless significant rain occurs, this is the final general flood advisory for this event.</instruction><web>http://www.pagasa.dost.gov.ph/index.php/26-hydromet/1582-flood-forecast-terms-and-symbols</web><contact>PAGASA-DOST</contact><parameter><valueName>layer:Google:Region:0.1</valueName><value>BARMM (Bangsamoro Autonomous Region of Muslim Mindanao)</value></parameter><area><areaDesc>Lanao Del Sur</areaDesc><polygon>7.7848171965635,124.30962483828 7.7860628345175,124.31313302625 8.0016053083799,124.28311576306 8.001190683192,124.15695334226 8.0579232076135,124.2638488863 8.2260605317188,124.31397566585 8.1187647090304,124.53460737082 8.0079628806503,124.59854194074 7.901010298366,124.59990712814 7.6108541816393,124.80915241862 7.6625661293833,124.44756585661 7.6059492752175,124.31278719462 7.4357721205093,124.15753984959 7.6343863668095,124.02795450809 7.6952898819786,123.85271560872 7.6945054948195,123.99054370854 7.9407753443272,124.12918610996 7.7848171965635,124.30962483828</polygon><geocode><valueName>SAME</valueName><value>153600000</value></geocode></area><area><areaDesc>Maguindanao</areaDesc><polygon>7.0867919549048,124.43286590089 7.0276954153796,124.50349997173 7.0933213886909,124.81047330492 6.8204376062964,124.8248193819 6.7331976081862,124.99453374429 6.6413284007485,124.86168191004 6.6425676627641,124.86251421126 6.7556784445209,124.75702023048 6.854636813861,124.56120816767 6.727791168152,124.50481352299 6.746032379188,124.04183941448 6.8166802921236,123.95561737242 7.141572852018,124.06623002704 7.1923755274096,124.20472054181 7.0867919549048,124.43286590089</polygon><polygon>7.1280850263146,124.32032484318 7.1291852704755,124.3208730988 7.1678798526416,124.33842521438 7.1280850263146,124.32032484318</polygon><polygon>7.1716532363531,124.33828411177 7.2315683175387,124.23550849663 7.40694308334,124.25184368 7.4357721205093,124.15753984959 7.6059492752175,124.31278719462 7.6625661293833,124.44756585661 7.445951865219,124.49385839724 7.1716532363531,124.33828411177</polygon><geocode><valueName>SAME</valueName><value>153800000</value></geocode></area></info><Signature xmlns="http://www.w3.org/2000/09/xmldsig#"><SignedInfo><CanonicalizationMethod Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"/><SignatureMethod Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1"/><Reference URI=""><Transforms><Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/></Transforms><DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"/><DigestValue>5gR2VMiRAICH9R4Z2oOL3CU/Jds=</DigestValue></Reference></SignedInfo><SignatureValue>Do8SplytNqVGepa1WFgA3qMzXyhTRU59AkrEJ+nRDgPAOUXc2asZYh0HAcKyk/ks
+aRy8VY+69DsgWezxvk1j6g62LTgBdFEQAd+fBBLgR6pvDnmchiyJRinp0BwnqOT7
+Gi+UakS2Tw0y83tkvTZoizQe9yJ9itCyNTQmrhKtRo+SHbp3xGTMmATekOTjQcIR
+75X/PvNYH5TLH9Q+KcvKQ1hxjMvAjGGrXU1iEprLzL9KKkq0KS4z43Um9qVCXLRo
+pNNL/3jfhmxOqKhk9y88kAz5n9DARZED+90dPvUXr2q9jiDyKhh4AlN4cKd6CCbJ
+LKy4SNq0MAeDnc0DUq6Dgt3MUtpeIB/Hf7CG+jtOndLziVF8sC9X5FN15Fgsqpy9
+kUz5ehvBU0q7Gy6BzI/KR5PHDPNDpZLRcX/ZiJ9rYJXA2iKBag1j3gkPmsMVANpY
+pYmYIZ9aUgvDTN35oqdxUkCGv4jcZm2O6WASFFAK1dd3GY22vKa7vaeTaWAEjoV6
+s83qZbiEBVpiWXQTNnS/Cizi2QjnomHx2RT7LPBDJcv2GPpZQYhRv74byXPGlCo2
+5/QJ3jAEUNzwnkahZzND3Z3ZJ8+uHYPYpic9IRO+8SOpc+3/S1xyZzkrzRj2CbIH
+b6jwL0nQ5iAc+E8fTjwJydGoIuhZLZ+1+xnKyc3/lMs=</SignatureValue><KeyInfo><KeyValue>
+<RSAKeyValue>
+<Modulus>
+1pm7X28TTIESx7uWklHbVIlO0Y+fUBZ7LynhaRQ9w1rMsMhF0dNEvUdYBKVF1xPz
+SGD0IrbU6Uemw8Xb/sOy263ZOkSxqWIh3UEluOW7s6J3Hgv8UMDZkWDgj3+m2qWT
+UTgbNO3drHGvlRBg6liD15iNusSdSMw/kqmHxe/9tnStpsHo/u57rsH3/ROTvuz2
+yHD2t7I7zo0Kv7mfAAHodU4QoL8/7c3u29szxRu13M4SRkiLKwbgrwlsMCvXhkys
+oEKlX8/SnXDL8iSPExAiP7xVpfbmh8TNiGvtbjH7Ro2EYjUsEcv9qC7G5jLu7Klt
+8TkTobHqES26/F5/u42Ra3rIDunTxczbIHF1qoumAzdsJmFCBc9D1IKTTWKR3D2J
+eAZfpuvMeOEcpRxBayYf2jOBx8iD8gag5cIZWl2/62IfUxTk92A00M5QrzTocNkg
+0U5K1gN5WmhObUN/3fa/Ob5uriELGzRdzXJ+3QE8FpPmSPJZFA//UWmpJqsboO7p
+AhbB8efPIV42nxjwQEbJdkxUOlfAyPMRGcp4RhmaAnX7KmB33j4klYeNktH+OeV8
+S9q/nMJoA/d76K1hCbo9PJTa/UxwZJYh0LEs1YnHP/5wgydZJcyNjmcu7P5ur90L
+qyr2FB0fZYAmWi6SEaA0F7yi2Y0uqV4FP7dfcbfOf+E=
+</Modulus>
+<Exponent>
+AQAB
+</Exponent>
+</RSAKeyValue>
+</KeyValue></KeyInfo></Signature></alert>

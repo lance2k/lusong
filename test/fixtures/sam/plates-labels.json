@@ -1,0 +1,69 @@
+{
+ "about": "Positive control for the SAM 3.1 plate probe (issue #8). Every photo in test/fixtures/acceptance and test/fixtures/depth-set was looked at by eye (2026-10-30), zoomed where a vehicle appeared. Boxes are hand-drawn, slightly loose, in the source pixels of the fixture as committed. Plate text is deliberately not recorded. 'sure: false' marks a lit rectangle that is probably a plate but too dark or blurred to tell; it is scored apart from the sure plates.",
+ "positives": [
+  {
+   "file": "acceptance/shah-alam-2021.jpg",
+   "plates": [
+    { "where": "front of the white Mazda, bottom left", "box": { "left": 10, "top": 880, "right": 98, "bottom": 925 }, "readable": true, "sure": true },
+    { "where": "front of the blue car, two-line plate", "box": { "left": 234, "top": 840, "right": 260, "bottom": 875 }, "readable": false, "sure": true },
+    { "where": "front of the white Honda, right edge", "box": { "left": 1120, "top": 812, "right": 1200, "bottom": 835 }, "readable": true, "sure": true }
+   ],
+   "note": "The row of cars further back may carry plates too small to see; they are not labelled."
+  },
+  {
+   "file": "depth-set/king-tide-flooding-into-great-island-cabin-camp-ff61424f-7d7.jpg",
+   "plates": [
+    { "where": "front of the white Ford pickup, seen at an angle", "box": { "left": 425, "top": 1200, "right": 495, "bottom": 1330 }, "readable": true, "sure": true }
+   ]
+  },
+  {
+   "file": "depth-set/banksstreetflooding12dec2009nola.jpg",
+   "plates": [
+    { "where": "rear of the white pickup", "box": { "left": 355, "top": 220, "right": 380, "bottom": 232 }, "readable": false, "sure": true },
+    { "where": "rear of the red pickup", "box": { "left": 915, "top": 220, "right": 950, "bottom": 232 }, "readable": false, "sure": true },
+    { "where": "front of the dark SUV", "box": { "left": 1210, "top": 220, "right": 1235, "bottom": 232 }, "readable": false, "sure": true },
+    { "where": "lit rectangle at the rear left of the Jeep", "box": { "left": 580, "top": 200, "right": 602, "bottom": 215 }, "readable": false, "sure": false }
+   ],
+   "note": "Night shot; every plate is a few pixels high."
+  },
+  {
+   "file": "depth-set/au-morandarte-flickr-cavite-floods-2013-19-08-13-9547554519.jpg",
+   "plates": [
+    { "where": "rear of the SUV ahead, washed out by its own plate light", "box": { "left": 458, "top": 765, "right": 552, "bottom": 808 }, "readable": false, "sure": true }
+   ],
+   "note": "A sticker on the SUV's rear window carries a number but is not a plate. The motorbike at the right may show a plate; too blurred to label."
+  },
+  {
+   "file": "depth-set/au-morandarte-flickr-stranded-7-eleven-store-in-bacoor-due-t.jpg",
+   "plates": [
+    { "where": "lit plate between the tail lights of the truck, left edge", "box": { "left": 55, "top": 713, "right": 105, "bottom": 732 }, "readable": false, "sure": true }
+   ]
+  }
+ ],
+ "negatives": [
+  {
+   "file": "acceptance/new-orleans-2018.jpg",
+   "vehicles": "a police SUV seen from the front, two sedans, a scooter from behind",
+   "note": "No plate visible: the police SUV carries none on its push bar, and the scooter's sits below the waterline."
+  },
+  {
+   "file": "acceptance/minot-2011-soldiers.jpg",
+   "vehicles": "two semi-trailers behind a fence",
+   "note": "No plate visible. A roadside sign at the bottom left carries a phone number, a likely false match for a plate prompt."
+  }
+ ],
+ "rejected": [
+  { "file": "acceptance/manila-2009-pedicabs.jpg", "reason": "The pedicabs carry a painted franchise number, not a licence plate; the truck at the right shows none. An identifier worth blurring, but not a plate to score recall on." },
+  { "file": "acceptance/manila-2012-raincoats.jpg", "reason": "Cars only in the far background; no plate can be made out." },
+  { "file": "depth-set/flooded-street-14479903302.jpg", "reason": "Parked cars seen through rain and branches; no plate can be made out." },
+  { "file": "depth-set/olga-stranded-motorist.jpg", "reason": "Newsprint halftone of a car side-on; no plate visible." },
+  { "file": "depth-set/dfc-5296-a-lone-attendant-stands-waist-deep-in-calm-waters-b.jpg", "reason": "A jet ski with a hull registration, not a road plate." },
+  { "file": "depth-set/2016-southeastern-texas-floods-160421-z-zz999-002.jpg", "reason": "Military truck, no plate visible." },
+  { "file": "depth-set/2016-southeastern-texas-floods-160421-z-zz999-004.jpg", "reason": "Military truck from the side, no plate visible." },
+  { "file": "depth-set/2016-southeastern-texas-floods-160421-z-zz999-015.jpg", "reason": "Military truck front with bumper markings, no civilian plate." },
+  { "file": "depth-set/texas-national-guard-responds-to-floods-in-southeast-texas-1.jpg", "reason": "Military truck far off, no plate visible." },
+  { "file": "depth-set/miami-tidal-flooding-with-rain-at-high-tide-during-king-tide.jpg", "reason": "Only a car's edge in the dark; no plate visible." },
+  { "file": "depth-set/statelibqld-1-79551-floodwaters-outside-the-hotel-shakespear.jpg", "reason": "1940s cars far off; no plate can be made out." },
+  { "file": "(all other fixtures)", "reason": "No vehicle in the photo, or a historical photo from before plates." }
+ ]
+}

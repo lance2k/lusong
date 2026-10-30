@@ -1,0 +1,11 @@
+/* Leaflet's touch zoom buttons are 30 px; a thumb needs 44. More specific than leaflet.css, so stylesheet order doesn't decide. */
+.leaflet-container.leaflet-touch .leaflet-bar a {
+  width: 44px;
+  height: 44px;
+  line-height: 44px;
+  font-size: 22px;
+}
+
+.leaflet-popup-content p {
+  margin: 0 0 0.25rem;
+}

@@ -1,5 +1,5 @@
 import type { MeteredUsage } from "./budget";
-import { outputTextOf } from "./sam";
+import { samReplyOf, type SamReply } from "./sam";
 
 const BASE_URL = "https://api.meta.ai/v1";
 const DEFAULT_RETRY_WAIT_MS = 500;
@@ -31,11 +31,68 @@ function countOf(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
 }
 
-/** Adds up what one check's Meta calls report using, attempt by attempt, for the spending budget. */
+/**
+ * What a call was, which decides how its usage is read and priced.
+ */
+export type Operation = "sam" | "spark-chat" | "spark-responses" | "voice-transcribe";
+
+/** Responses-API output items billed only through the reply's tokens. Any other item but `web_search_call`
+ *  may carry a fee of its own that the meter cannot count. */
+const TOKEN_PRICED_OUTPUT = new Set(["message", "reasoning", "function_call"]);
+const WEB_SEARCH_CALL = "web_search_call";
+
+type Usage = Record<string, unknown> | undefined;
+/** The counts a reply reports, as a floor; `complete` is false when a billed count may be missing. */
+type Reading = {
+  samImages?: number;
+  museInputTokens?: number;
+  museOutputTokens?: number;
+  webSearchQueries?: number;
+  transcribeSeconds?: number;
+  complete: boolean;
+};
+
+function tokens(input: number | null, output: number | null): Reading {
+  return { museInputTokens: input ?? 0, museOutputTokens: output ?? 0, complete: input !== null && output !== null };
+}
+
+const READERS: Record<Operation, (usage: Usage, body: unknown) => Reading> = {
+  sam(usage) {
+    const images = countOf(usage?.images_processed);
+    return { samImages: images ?? 0, complete: images !== null };
+  },
+  "spark-chat"(usage) {
+    return tokens(countOf(usage?.prompt_tokens), countOf(usage?.completion_tokens));
+  },
+  // Field names and the `web_search_call` item type from a live probe, 2026-10-30, 3 calls. Whether an `open_page`
+  // action bills as a query is not documented, so every web_search_call item is charged as one.
+  "spark-responses"(usage, body) {
+    const reading = tokens(countOf(usage?.input_tokens), countOf(usage?.output_tokens));
+    const output = (body as { output?: unknown } | null)?.output;
+    if (!Array.isArray(output)) return { ...reading, complete: false };
+    const types = output.map((item: { type?: unknown } | null) => String(item?.type));
+    const webSearchQueries = types.filter((t) => t === WEB_SEARCH_CALL).length;
+    const unpriced = types.some((t) => t !== WEB_SEARCH_CALL && !TOKEN_PRICED_OUTPUT.has(t));
+    return { ...reading, webSearchQueries, complete: reading.complete && !unpriced };
+  },
+  /**
+   * Billed per whole second of audio, rounded down; `audioDurationMs` is the reply's "Total audio duration processed"
+   * (dev.meta.ai/docs/api-reference/voice/schemas, read 2026-10-30). UNVERIFIED: no live call has shown that field or
+   * that it is what is billed, so the count is never complete and a settle keeps the whole reservation.
+   */
+  "voice-transcribe"(_usage, body) {
+    const ms = countOf((body as { audioDurationMs?: unknown } | null)?.audioDurationMs);
+    return { transcribeSeconds: ms === null ? 0 : Math.floor(ms / 1000), complete: false };
+  },
+};
+
+/** Adds up what one run's Meta calls report using, attempt by attempt, for the spending budget. */
 export class Meter {
   private samImages = 0;
   private museInputTokens = 0;
   private museOutputTokens = 0;
+  private webSearchQueries = 0;
+  private transcribeSeconds = 0;
   private complete = true;
 
   /** A failed attempt may still have been billed, and it is the only way a call gets retried. */
@@ -43,24 +100,31 @@ export class Meter {
     this.complete = false;
   }
 
-  reply(endpoint: string, body: unknown): void {
+  reply(operation: Operation, body: unknown): void {
     const usage = (body as { usage?: Record<string, unknown> } | null)?.usage;
-    if (endpoint === "/responses") {
-      const images = countOf(usage?.images_processed);
-      if (images === null) this.complete = false;
-      else this.samImages += images;
-      return;
-    }
-    const input = countOf(usage?.prompt_tokens);
-    const output = countOf(usage?.completion_tokens);
-    if (input === null || output === null) this.complete = false;
-    this.museInputTokens += input ?? 0;
-    this.museOutputTokens += output ?? 0;
+    const reading = READERS[operation](usage, body);
+    if (!reading.complete) this.complete = false;
+    this.samImages += reading.samImages ?? 0;
+    this.museInputTokens += reading.museInputTokens ?? 0;
+    this.museOutputTokens += reading.museOutputTokens ?? 0;
+    this.webSearchQueries += reading.webSearchQueries ?? 0;
+    this.transcribeSeconds += reading.transcribeSeconds ?? 0;
+  }
+
+  /** Adds another meter's counts, such as a web search metered against its own daily cap. */
+  include(other: Meter): void {
+    const u = other.usage();
+    this.samImages += u.samImages;
+    this.museInputTokens += u.museInputTokens;
+    this.museOutputTokens += u.museOutputTokens;
+    this.webSearchQueries += u.webSearchQueries;
+    this.transcribeSeconds += u.transcribeSeconds;
+    if (!u.complete) this.complete = false;
   }
 
   usage(): MeteredUsage {
-    const { samImages, museInputTokens, museOutputTokens, complete } = this;
-    return { samImages, museInputTokens, museOutputTokens, complete };
+    const { samImages, museInputTokens, museOutputTokens, webSearchQueries, transcribeSeconds, complete } = this;
+    return { samImages, museInputTokens, museOutputTokens, webSearchQueries, transcribeSeconds, complete };
   }
 }
 
@@ -79,14 +143,24 @@ function retryWaitMs(res: Response): number {
   return Number.isFinite(at) ? Math.max(0, at - Date.now()) : DEFAULT_RETRY_WAIT_MS;
 }
 
+/** A JSON request body, or a multipart form (fetch writes its boundary). A FormData can be sent again on a retry. */
+type Payload = { json: unknown } | { form: FormData };
+
+function requestOf(payload: Payload): { headers: Record<string, string>; body: string | FormData } {
+  const auth = { Authorization: `Bearer ${apiKey()}` };
+  if ("form" in payload) return { headers: { ...auth, Accept: "application/json" }, body: payload.form };
+  return { headers: { ...auth, "Content-Type": "application/json" }, body: JSON.stringify(payload.json) };
+}
+
 /**
- * POSTs JSON with at most one retry, on 429, 5xx or a dropped connection. Every attempt and every
- * wait must fit before `deadline` (epoch ms); a Retry-After that does not fit fails the call rather
- * than retrying early. A timeout is not retried.
+ * POSTs with at most one retry, on 429, 5xx or a dropped connection, and returns the JSON reply. Every
+ * attempt and every wait must fit before `deadline` (epoch ms); a Retry-After that does not fit fails
+ * the call rather than retrying early. A timeout is not retried.
  */
 async function postJson(
   endpoint: string,
-  body: unknown,
+  operation: Operation,
+  payload: Payload,
   attemptTimeoutMs: number,
   deadline: number,
   meter: Meter,
@@ -98,8 +172,7 @@ async function postJson(
     try {
       res = await fetch(`${BASE_URL}${endpoint}`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${apiKey()}`, "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        ...requestOf(payload),
         signal: AbortSignal.timeout(Math.min(attemptTimeoutMs, remaining)),
       });
     } catch (err) {
@@ -113,7 +186,7 @@ async function postJson(
         meter.failedAttempt();
         throw new MetaApiError(endpoint, res.status);
       });
-      meter.reply(endpoint, reply);
+      meter.reply(operation, reply);
       return reply;
     }
     meter.failedAttempt();
@@ -128,26 +201,34 @@ async function postJson(
 
 /** One SAM 3.1 concept prompt on one image; returns the raw segmentation text. */
 export async function segment(imageDataUrl: string, phrase: string, deadline: number, meter: Meter): Promise<string> {
+  return (await segmentReply(imageDataUrl, phrase, deadline, meter)).text;
+}
+
+/** One SAM 3.1 concept prompt on one image; returns the segmentation text with Meta's status for the response. */
+export async function segmentReply(imageDataUrl: string, phrase: string, deadline: number, meter: Meter): Promise<SamReply> {
   const body = await postJson(
     "/responses",
+    "sam",
     {
-      model: "sam-3.1",
-      input: [
-        {
-          role: "user",
-          content: [
-            { type: "input_text", text: phrase },
-            { type: "input_image", image_url: imageDataUrl },
-          ],
-        },
-      ],
-      metadata: { mask_encoding: "one_bit" },
+      json: {
+        model: "sam-3.1",
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: phrase },
+              { type: "input_image", image_url: imageDataUrl },
+            ],
+          },
+        ],
+        metadata: { mask_encoding: "one_bit" },
+      },
     },
     20_000,
     deadline,
     meter,
   );
-  return outputTextOf(body as Parameters<typeof outputTextOf>[0]);
+  return samReplyOf(body);
 }
 
 interface ChatCompletion {
@@ -165,14 +246,17 @@ export async function chatJson(request: {
 }): Promise<unknown> {
   const body = (await postJson(
     "/chat/completions",
+    "spark-chat",
     {
-      model: "muse-spark-1.3",
-      messages: request.messages,
-      response_format: {
-        type: "json_schema",
-        json_schema: { name: request.schemaName, schema: request.schema, strict: true },
+      json: {
+        model: "muse-spark-1.3",
+        messages: request.messages,
+        response_format: {
+          type: "json_schema",
+          json_schema: { name: request.schemaName, schema: request.schema, strict: true },
+        },
+        max_completion_tokens: request.maxCompletionTokens,
       },
-      max_completion_tokens: request.maxCompletionTokens,
     },
     // 8,000 output tokens at the slowest measured rate (156 tokens/s, 27 draws) take about 51 s.
     70_000,
@@ -183,4 +267,35 @@ export async function chatJson(request: {
   if (choice?.finish_reason === "length") throw new OutputCapError();
   if (!choice?.message?.content) throw new MetaApiError("/chat/completions", 0);
   return JSON.parse(choice.message.content);
+}
+
+/** Muse Spark 1.3 on the Responses API (function tools, web_search); returns the raw reply. */
+export async function sparkResponse(
+  body: Record<string, unknown>,
+  attemptTimeoutMs: number,
+  deadline: number,
+  meter: Meter,
+): Promise<unknown> {
+  return postJson("/responses", "spark-responses", { json: { model: "muse-spark-1.3", ...body } }, attemptTimeoutMs, deadline, meter);
+}
+
+/**
+ * Muse Voice Transcribe on one complete clip, as the buffered JSON reply (dev.meta.ai/docs/api-reference/voice/transcribe
+ * and /voice/schemas, read 2026-10-30): a `request` part of settings as JSON and an `audio` part holding the WAV. From
+ * the docs only; no live call has been made. UNVERIFIED: the reply's `transcript` field and the endpoint's behaviour on
+ * a 16 kHz clip, beyond the docs' word that 16 kHz is accepted and resampled.
+ */
+export async function transcribe(
+  wav: Uint8Array<ArrayBuffer>,
+  opts: { languages: readonly string[]; deadline: number; meter: Meter },
+): Promise<string> {
+  const form = new FormData();
+  const settings = { model: "muse-voice-transcribe-1.0", audioEncoding: "WAV", mode: "PUSH_TO_TALK", languageBias: opts.languages };
+  form.append("request", new Blob([JSON.stringify(settings)], { type: "application/json" }));
+  form.append("audio", new File([wav], "note.wav", { type: "audio/wav" }));
+  // UNVERIFIED: how long a 30 s clip takes; 20 s per attempt is a guess with room for one retry inside the deadline.
+  const reply = await postJson("/asr/transcribe", "voice-transcribe", { form }, 20_000, opts.deadline, opts.meter);
+  const body = reply as { transcript?: unknown } | null;
+  if (typeof body?.transcript !== "string") throw new MetaApiError("/asr/transcribe", 0);
+  return body.transcript;
 }

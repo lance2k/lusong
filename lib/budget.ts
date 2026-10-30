@@ -1,13 +1,20 @@
 import { createHash, randomUUID } from "node:crypto";
 import { MUSE_MAX_COMPLETION_TOKENS } from "./readings";
 
-/** Meta's list prices (docs, 2026-10): SAM $2.50 per 1,000 images; Muse Spark $1.25 / $4.25 per 1M tokens. */
-const SAM_IMAGE_MICROS = 2_500;
-const MUSE_INPUT_MICROS_PER_TOKEN = 1.25;
-const MUSE_OUTPUT_MICROS_PER_TOKEN = 4.25;
+/**
+ * Meta's list prices (docs, 2026-10): SAM $2.50 per 1,000 images; Muse Spark $1.25 / $4.25 per 1M tokens; web search
+ * grounding "$2.50 per 1,000 search queries, in addition to the request's token cost"; Voice Transcribe $0.18 per hour
+ * of audio, "metered in whole seconds" and "rounded down to whole seconds" (dev.meta.ai/docs/pricing-rate-limits, read
+ * 2026-10-30). Cached input tokens are priced as full input: the docs give no cached rate.
+ */
+export const SAM_IMAGE_MICROS = 2_500;
+export const MUSE_INPUT_MICROS_PER_TOKEN = 1.25;
+export const MUSE_OUTPUT_MICROS_PER_TOKEN = 4.25;
+export const WEB_SEARCH_QUERY_MICROS = 2_500;
+export const TRANSCRIBE_MICROS_PER_SECOND = 180_000 / 3_600;
 
 /** lib/meta.ts makes at most this many attempts per call; lib/check.ts makes 4 SAM calls and 1 Muse call. */
-const ATTEMPTS_PER_CALL = 2;
+export const ATTEMPTS_PER_CALL = 2;
 const SAM_CALLS = 4;
 /** 1.5 × the 3,881 input tokens measured on a 1600×1600 photo with 12 objects, the largest the route
  *  accepts (one draw, 2026-10-28; 1600×1200 measured 2,968). */
@@ -21,11 +28,18 @@ export const RESERVE_MICROS =
       MUSE_INPUT_TOKEN_BOUND * MUSE_INPUT_MICROS_PER_TOKEN + MUSE_MAX_COMPLETION_TOKENS * MUSE_OUTPUT_MICROS_PER_TOKEN,
     );
 
+/** A photo report that may publish its photo adds one SAM call, for plates; the depth reader's person reply is reused. */
+export const PHOTO_REPORT_RESERVE_MICROS = RESERVE_MICROS + ATTEMPTS_PER_CALL * SAM_IMAGE_MICROS;
+
 /** What one check's Meta calls cost, as metered by lib/meta.ts. */
 export interface MeteredUsage {
   samImages: number;
   museInputTokens: number;
   museOutputTokens: number;
+  /** Every web_search_call item a reply carried, whether it searched or opened a page. */
+  webSearchQueries: number;
+  /** Whole seconds of audio Voice Transcribe processed. */
+  transcribeSeconds: number;
   /** False when any call was retried, failed, or came back without a usage block: a billed attempt may
    *  be missing from the counts, so the counts are a floor, not the cost. */
   complete: boolean;
@@ -35,7 +49,9 @@ export function costMicros(usage: MeteredUsage): number {
   return Math.ceil(
     usage.samImages * SAM_IMAGE_MICROS +
       usage.museInputTokens * MUSE_INPUT_MICROS_PER_TOKEN +
-      usage.museOutputTokens * MUSE_OUTPUT_MICROS_PER_TOKEN,
+      usage.museOutputTokens * MUSE_OUTPUT_MICROS_PER_TOKEN +
+      usage.webSearchQueries * WEB_SEARCH_QUERY_MICROS +
+      usage.transcribeSeconds * TRANSCRIBE_MICROS_PER_SECOND,
   );
 }
 
@@ -45,11 +61,12 @@ export type Admission = Admitted | { ok: false; reason: RefusalReason };
 
 export interface BudgetStore {
   /** Atomic: admits only if the IP's count stays within ipLimit and spend + reserve stays within the
-   *  budget, then records both plus the reservation under `id`. A refusal changes nothing. */
+   *  budget, then records both plus the reservation under `id`. A refusal changes nothing. A null
+   *  ipKey (a run no client asked for) skips the IP count entirely. */
   admit(a: {
     id: string;
     day: string;
-    ipKey: string;
+    ipKey: string | null;
     reserveMicros: number;
     budgetMicros: number;
     ipLimit: number;
@@ -60,7 +77,8 @@ export interface BudgetStore {
 }
 
 export interface Budget {
-  admit(ip: string, now: Date): Promise<Admission>;
+  /** A null ip is a scheduled run: it reserves against the daily budget and no address's limit. */
+  admit(ip: string | null, now: Date, reserveMicros?: number): Promise<Admission>;
   /** Never throws: a settle that fails leaves the whole reservation charged. */
   settle(admission: Admitted, usage: MeteredUsage, succeeded: boolean): Promise<void>;
 }
@@ -78,8 +96,13 @@ export function createBudget(options: { store: BudgetStore | null; budgetUsd: nu
   const { store, ipLimit } = options;
   const budgetMicros = Math.floor(options.budgetUsd * 1e6);
   return {
-    async admit(ip, now) {
+    async admit(ip, now, reserveMicros = RESERVE_MICROS) {
       if (!store || !Number.isFinite(budgetMicros) || budgetMicros <= 0) return { ok: false, reason: "unavailable" };
+      // A negative reservation would lower the day's spend, and Redis's INCRBY takes only integers.
+      if (!Number.isSafeInteger(reserveMicros) || reserveMicros <= 0) {
+        console.error(`refused a reservation of ${reserveMicros} µ$: it must be a positive whole number`);
+        return { ok: false, reason: "unavailable" };
+      }
       const day = utcDay(now);
       const id = randomUUID();
       let outcome: Awaited<ReturnType<BudgetStore["admit"]>>;
@@ -87,8 +110,8 @@ export function createBudget(options: { store: BudgetStore | null; budgetUsd: nu
         outcome = await store.admit({
           id,
           day,
-          ipKey: ipKeyFor(day, ip),
-          reserveMicros: RESERVE_MICROS,
+          ipKey: ip === null ? null : ipKeyFor(day, ip),
+          reserveMicros,
           budgetMicros,
           ipLimit,
         });
@@ -96,7 +119,7 @@ export function createBudget(options: { store: BudgetStore | null; budgetUsd: nu
         console.error("budget store unreachable on admit:", err instanceof Error ? err.message : err);
         return { ok: false, reason: "unavailable" };
       }
-      return outcome === "admitted" ? { ok: true, id, day, reservedMicros: RESERVE_MICROS } : { ok: false, reason: outcome };
+      return outcome === "admitted" ? { ok: true, id, day, reservedMicros: reserveMicros } : { ok: false, reason: outcome };
     },
 
     async settle(admission, usage, succeeded) {
@@ -115,22 +138,25 @@ export function createBudget(options: { store: BudgetStore | null; budgetUsd: nu
   };
 }
 
-const sharedMemoryStore = (() => {
-  let store: MemoryBudgetStore | null = null;
-  return () => (store ??= new MemoryBudgetStore());
-})();
+const sharedMemoryStores = new Map<string, MemoryBudgetStore>();
 
-function storeFromEnv(env: Record<string, string | undefined>): BudgetStore | null {
+/**
+ * The budget store from the environment, its keys under `prefix`; null when none is configured. A second ledger, such
+ * as the daily web search cap, uses the same database under its own prefix.
+ */
+export function budgetStoreFromEnv(env: Record<string, string | undefined>, prefix = "lusong"): BudgetStore | null {
   if (env.LUSONG_BUDGET_STORE === "memory") {
     const deployed = Boolean(env.VERCEL) || env.NODE_ENV === "production";
-    return deployed ? null : sharedMemoryStore();
+    if (deployed) return null;
+    if (!sharedMemoryStores.has(prefix)) sharedMemoryStores.set(prefix, new MemoryBudgetStore());
+    return sharedMemoryStores.get(prefix)!;
   }
   if (env.UPSTASH_REDIS_REST_URL && env.UPSTASH_REDIS_REST_TOKEN) {
-    return new UpstashBudgetStore(env.UPSTASH_REDIS_REST_URL, env.UPSTASH_REDIS_REST_TOKEN);
+    return new UpstashBudgetStore(env.UPSTASH_REDIS_REST_URL, env.UPSTASH_REDIS_REST_TOKEN, prefix);
   }
   /** The names Vercel's Upstash integration sets when a database is connected to the project. */
   if (env.KV_REST_API_URL && env.KV_REST_API_TOKEN) {
-    return new UpstashBudgetStore(env.KV_REST_API_URL, env.KV_REST_API_TOKEN);
+    return new UpstashBudgetStore(env.KV_REST_API_URL, env.KV_REST_API_TOKEN, prefix);
   }
   return null;
 }
@@ -140,7 +166,7 @@ export function budgetFromEnv(env: Record<string, string | undefined> = process.
   const budgetUsd = Number(env.DAILY_BUDGET_USD ?? "10");
   const ipLimit = Number(env.PER_IP_DAILY ?? "10");
   const readable = Number.isFinite(budgetUsd) && budgetUsd > 0 && Number.isInteger(ipLimit) && ipLimit > 0;
-  return createBudget({ store: readable ? storeFromEnv(env) : null, budgetUsd, ipLimit });
+  return createBudget({ store: readable ? budgetStoreFromEnv(env) : null, budgetUsd, ipLimit });
 }
 
 /** For local development and tests only: each server instance would keep its own ledger. */
@@ -151,12 +177,12 @@ export class MemoryBudgetStore implements BudgetStore {
 
   async admit(a: Parameters<BudgetStore["admit"]>[0]) {
     const spent = this.spent.get(a.day) ?? 0;
-    const ipKey = `${a.day}:${a.ipKey}`;
-    const ipCount = this.perIp.get(ipKey) ?? 0;
+    const ipKey = a.ipKey === null ? null : `${a.day}:${a.ipKey}`;
+    const ipCount = ipKey === null ? 0 : (this.perIp.get(ipKey) ?? 0);
     if (spent + a.reserveMicros > a.budgetMicros) return "budget" as const;
-    if (ipCount + 1 > a.ipLimit) return "ip" as const;
+    if (ipKey !== null && ipCount + 1 > a.ipLimit) return "ip" as const;
     this.spent.set(a.day, spent + a.reserveMicros);
-    this.perIp.set(ipKey, ipCount + 1);
+    if (ipKey !== null) this.perIp.set(ipKey, ipCount + 1);
     this.reservations.set(a.id, { day: a.day, reserved: a.reserveMicros });
     return "admitted" as const;
   }
@@ -170,17 +196,20 @@ export class MemoryBudgetStore implements BudgetStore {
   }
 }
 
+/** KEYS are spend, then the IP count unless the run has no address, then the reservation. */
 const ADMIT_SCRIPT = `
+local hasIp = #KEYS == 3
 local spent = tonumber(redis.call('GET', KEYS[1]) or '0')
-local count = tonumber(redis.call('GET', KEYS[2]) or '0')
 local reserve, budget, limit, ttl = tonumber(ARGV[1]), tonumber(ARGV[2]), tonumber(ARGV[3]), tonumber(ARGV[4])
 if spent + reserve > budget then return 'budget' end
-if count + 1 > limit then return 'ip' end
+if hasIp and tonumber(redis.call('GET', KEYS[2]) or '0') + 1 > limit then return 'ip' end
 redis.call('INCRBY', KEYS[1], reserve)
 redis.call('EXPIRE', KEYS[1], ttl)
-redis.call('INCR', KEYS[2])
-redis.call('EXPIRE', KEYS[2], ttl)
-redis.call('SET', KEYS[3], reserve .. ':' .. ARGV[5], 'EX', ttl)
+if hasIp then
+  redis.call('INCR', KEYS[2])
+  redis.call('EXPIRE', KEYS[2], ttl)
+end
+redis.call('SET', KEYS[#KEYS], reserve .. ':' .. ARGV[5], 'EX', ttl)
 return 'admitted'
 `;
 
@@ -222,9 +251,10 @@ export class UpstashBudgetStore implements BudgetStore {
   }
 
   async admit(a: Parameters<BudgetStore["admit"]>[0]) {
+    const ipKeys = a.ipKey === null ? [] : [`${this.prefix}:ip:${a.day}:${a.ipKey}`];
     const result = await this.evalScript(
       ADMIT_SCRIPT,
-      [`${this.prefix}:spent:${a.day}`, `${this.prefix}:ip:${a.day}:${a.ipKey}`, `${this.prefix}:res:${a.id}`],
+      [`${this.prefix}:spent:${a.day}`, ...ipKeys, `${this.prefix}:res:${a.id}`],
       [a.reserveMicros, a.budgetMicros, a.ipLimit, KEY_TTL_SECONDS, a.day],
     );
     if (result === "admitted" || result === "budget" || result === "ip") return result;
