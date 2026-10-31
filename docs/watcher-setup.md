@@ -1,9 +1,9 @@
 # Setting up the watcher (issue #10)
 
-The watcher messages a rider on Telegram when their window opens and whenever their commute answer changes. The code
-is built and tested with a fake channel. Nothing has ever been sent to Telegram from it. These steps are for the
-owner, who has to create the bot. Every value below is a placeholder; real values go only into Vercel and the
-scheduler, never into this repo.
+The watcher messages a rider on Telegram when their window opens and whenever their commute answer changes. It is
+live on production; the one-message test passed on 2026-10-31 at 04:26 PHT (1 run). These steps are what the owner
+did to set it up, and repeat it for a new bot. Every value below is a placeholder; real values go only into Vercel
+and the scheduler, never into this repo.
 
 Why Telegram and an outside scheduler: see the comment on issue #10 (Messenger's 24-hour window, and Vercel Hobby
 cron running once a day). Correction to the Messenger half: Meta's Utility Messages are meant for sending outside that
@@ -69,12 +69,16 @@ out of zsh history if `HIST_IGNORE_SPACE` is set.
 `setWebhook` should answer `{"ok":true,...}`. `getWebhookInfo` should show the URL, and no `last_error_message` once
 a message has been sent to the bot.
 
-## 5. The scheduler: QStash, every 10 minutes
+## 5. The scheduler: GitHub Actions, every 10 minutes
 
-In use: GitHub Actions, `.github/workflows/watch-tick.yml`, every 10 minutes, with `WATCH_TICK_SECRET` as a repository
+In use: GitHub Actions, `.github/workflows/watch-tick.yml`, every 10 minutes at minutes 3, 13, … 53, with `WATCH_TICK_SECRET` as a repository
 secret (`gh secret set WATCH_TICK_SECRET`, value from stdin). GitHub can start a scheduled run late or skip one under
 load (GitHub's docs on the `schedule` event), so a rider's message can arrive later than the 10 minutes. "Run workflow"
 on the Actions tab runs a tick by hand.
+
+**Open, 2026-10-31 09:43 PHT:** GitHub had started 0 scheduled runs, 5 h 22 min after the schedule merged, though the
+workflow is `active`. Moving the cron off the round minutes and disabling then re-enabling the workflow changed nothing.
+Until a scheduled run appears, a tick happens only by hand. QStash, below, is the way round it.
 
 The alternative: an Upstash QStash schedule. It can fire every minute or less often ("The maximum schedule resolution
 is 1 minute", QStash's create-a-schedule API page), but the Upstash account behind this project was made through
