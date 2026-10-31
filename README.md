@@ -43,8 +43,10 @@ Pick a trip (a preset one such as Banilad → IT Park, or your own two points on
   is too few photos to trust, so photos stay hidden for now, and a report shows its pin and reading.
 - **A watcher** re-runs the check every 10 minutes during a window you pick (6–8 a.m., say) and sends a Telegram
   message when the window opens and whenever the answer changes. Switching it off deletes the trip and its history.
-  It is live on Telegram through `@lusong_cebu_bot`. A GitHub Actions job runs the 10-minute tick, because Vercel's
-  free plan runs scheduled jobs once a day; `docs/watcher-setup.md` has the setup.
+  It is deployed on Telegram through `@lusong_cebu_bot`, and one message has gone out on production (2026-10-31, from
+  a tick started by hand). The 10-minute tick is a GitHub Actions schedule, because Vercel's free plan runs scheduled
+  jobs once a day, and GitHub has not started it yet, so for now the watcher doesn't run by itself.
+  `docs/watcher-setup.md` has the setup.
 - **The demo trips** are recorded routes with sample reports. Every sample says it is a sample and where the photo was
   really taken (Cavite, Manila or Shah Alam in Malaysia, from Lusong's labelled test photos), so it is never
   mistaken for a report from Cebu.
