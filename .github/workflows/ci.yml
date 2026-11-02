@@ -69,9 +69,11 @@ jobs:
           done
           echo "the Upstash stand-in never answered PING" >&2
           exit 1
-      - name: Install libfaketime
-        if: env.CLOCK_SHIFT != ''
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libfaketime
+      # Pillow for lib/jpeg.test.ts's decode checks, which skip without it; libfaketime only for a moved clock.
+      - name: Install Pillow and libfaketime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq python3-pil ${CLOCK_SHIFT:+libfaketime}
       - name: Test
         run: |
           if [ -z "$CLOCK_SHIFT" ]; then exec pnpm test; fi
