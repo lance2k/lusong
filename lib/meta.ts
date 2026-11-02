@@ -235,8 +235,9 @@ interface ChatCompletion {
   choices?: { finish_reason?: string; message?: { content?: string | null } }[];
 }
 
-/** Muse Spark 1.3 chat completion constrained to a JSON schema; returns the parsed object. */
+/** A Muse Spark chat completion (1.3 unless `model` says otherwise) constrained to a JSON schema; returns the parsed object. */
 export async function chatJson(request: {
+  model?: "muse-spark-1.3" | "muse-spark-1.2";
   messages: unknown[];
   schemaName: string;
   schema: object;
@@ -249,7 +250,7 @@ export async function chatJson(request: {
     "spark-chat",
     {
       json: {
-        model: "muse-spark-1.3",
+        model: request.model ?? "muse-spark-1.3",
         messages: request.messages,
         response_format: {
           type: "json_schema",
@@ -266,7 +267,12 @@ export async function chatJson(request: {
   const choice = body.choices?.[0];
   if (choice?.finish_reason === "length") throw new OutputCapError();
   if (!choice?.message?.content) throw new MetaApiError("/chat/completions", 0);
-  return JSON.parse(choice.message.content);
+  try {
+    return JSON.parse(choice.message.content);
+  } catch {
+    // A parse error's message quotes the reply, which can hold a voice note's words: none of it is passed on.
+    throw new MetaApiError("/chat/completions", 0);
+  }
 }
 
 /** Muse Spark 1.3 on the Responses API (function tools, web_search); returns the raw reply. */
