@@ -131,8 +131,13 @@ export interface InvestigationInput {
 export const LOOP_TURN_CAP = 3;
 /** The probe's 3,000 was enough for a tool call and for a one-sentence answer (2 draws). */
 export const LOOP_MAX_OUTPUT_TOKENS = 3_000;
-/** A call gets at most this long, and never past the deadline. The probe's slowest function turn took 9.8 s (1 draw). */
-export const LOOP_ATTEMPT_MS = 15_000;
+/**
+ * A call gets at most this long, and never past the deadline. The turn after the tool results took 13.8–18.0 s live
+ * (3 draws, 2026-11-03), and the old 15 s cap timed it out on 2 of 2 draws, so the pick was dropped.
+ */
+export const LOOP_ATTEMPT_MS = 30_000;
+/** The slowest turn measured live (2026-11-03): LOOP_ATTEMPT_MS keeps 1.5× this. */
+export const SLOWEST_TURN_MEASURED_MS = 18_029;
 
 /** A reply calling more tools than this, or an investigation past the total, ends without a pick. */
 export const TOOL_CALLS_PER_TURN = 3;
