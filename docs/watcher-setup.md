@@ -69,31 +69,35 @@ out of zsh history if `HIST_IGNORE_SPACE` is set.
 `setWebhook` should answer `{"ok":true,...}`. `getWebhookInfo` should show the URL, and no `last_error_message` once
 a message has been sent to the bot.
 
-## 5. The scheduler: GitHub Actions, every 10 minutes
+## 5. The scheduler: QStash every 10 minutes, GitHub Actions as a backup
 
-In use: GitHub Actions, `.github/workflows/watch-tick.yml`, every 10 minutes at minutes 3, 13, … 53, with `WATCH_TICK_SECRET` as a repository
+In use since 2026-11-02 20:42 PHT: an Upstash QStash schedule, `lusong-watch-tick` (free plan, US region, 1,000
+messages a day), set up as below. Its first tick was delivered at 20:50 PHT and production answered 200 (1 tick).
+
+Still on as a backup: GitHub Actions, `.github/workflows/watch-tick.yml`, every 10 minutes at minutes 3, 13, … 53, with `WATCH_TICK_SECRET` as a repository
 secret (`gh secret set WATCH_TICK_SECRET`, value from stdin). GitHub can start a scheduled run late or skip one under
 load (GitHub's docs on the `schedule` event), so a rider's message can arrive later than the 10 minutes. "Run workflow"
 on the Actions tab runs a tick by hand.
 
 **Open, measured 2026-11-02 19:23 PHT:** GitHub's first scheduled run came 2026-10-31 13:53 PHT, 9 h 32 min after the
 schedule merged. By 2026-11-02 13:48 PHT there were 11, 3.0 to 7.1 hours apart (median 5.1), all successful, against
-the 10 minutes asked for. A 2-hour window gets one check at most. QStash, below, is the way round it.
+the 10 minutes asked for. A 2-hour window gets one check at most, which is why QStash now runs the tick. A tick from
+each is harmless: a watcher is checked at most once in 9 minutes.
 
-The alternative: an Upstash QStash schedule. It can fire every minute or less often ("The maximum schedule resolution
-is 1 minute", QStash's create-a-schedule API page), but the Upstash account behind this project was made through
-Vercel's integration, so its console needs a sign-in through Vercel first.
+QStash can fire every minute or less often ("The maximum schedule resolution is 1 minute", QStash's create-a-schedule
+API page). The Upstash account behind this project was made through Vercel's integration, so QStash is installed from
+Vercel (Integrations, Upstash, Upstash QStash/Workflow, Free) and its console is opened with "Open in Upstash". Its
+token is `QSTASH_TOKEN` in `.env.local` only; it is not on Vercel. The schedule was made through QStash's API
+(`POST /v2/schedules/<destination>` with `Upstash-Schedule-Id: lusong-watch-tick`), which the console's Schedules tab
+also shows:
 
-In the Upstash console, open QStash, then Schedules, then create one:
-
-- Destination: `https://<preview-host>/api/watch/tick`
+- Destination: `https://lusong-mocha.vercel.app/api/watch/tick`
 - Method: `POST`
 - Cron: `*/10 * * * *` (QStash reads cron in UTC by default; the watcher reads its windows in PHT whatever the
   scheduler's zone is, so UTC is fine)
 - Header: `Upstash-Forward-Authorization: Bearer <WATCH_TICK_SECRET>`, so QStash sends `Authorization: Bearer …` to
-  Lusong. QStash forwards any `Upstash-Forward-*` header (QStash's publishing docs).
-  UNVERIFIED: that it forwards `Authorization` this way; the docs' example uses a custom header name. If step 6's
-  tick log shows 401s, check this first.
+  Lusong. QStash forwards any `Upstash-Forward-*` header (QStash's publishing docs). It does forward
+  `Authorization`: the first tick got 200, where the route answers 401 without the secret.
 - Retries: 0. A missed tick is followed by another one 10 minutes later anyway.
 
 Each tick checks up to 20 watchers that are in their window and haven't been checked in the last 9 minutes, and it
