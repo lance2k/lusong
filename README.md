@@ -8,7 +8,8 @@ reads how deep the water is on the MMDA flood gauge, with the waterline drawn on
 **Try it:** https://lusong-mocha.vercel.app (10 checks per address per day; when the day's budget runs out it
 shows sample results).
 
-Built with Meta's SAM 3.1 and Muse Spark 1.3 through the Meta Model API.
+Built with Meta's SAM 3.1 and Muse Spark through the Meta Model API: Muse Spark 1.3 reads photos and runs the
+investigation, and Muse Spark 1.2 hears Bisaya voice notes.
 
 ## Why
 
@@ -34,6 +35,8 @@ Pick a trip (a preset one such as Banilad → IT Park, or your own two points on
   near a route) and its own web search for road closures in Cebu today. It returns which evidence matters, as ids.
   Lusong writes every sentence on the page from those ids, so the model can't change the answer or put its own words
   in front of the rider. A closure it finds blocks a way only when it is dated today and placed on that way.
+  Each of its turns gets up to 30 seconds inside the check's 80-second deadline. When it doesn't answer in time, the
+  page says it couldn't pick the evidence, and the rules' answer stands.
 - **Voice notes:** someone at the water can record up to 30 seconds in Bisaya, Tagalog or English, recorded in the
   browser as 16 kHz WAV. For Tagalog and English, Meta's Voice Transcribe turns it into words (written from Meta's
   docs; not yet tried live), and Muse Spark turns the words into a fixed-choice claim (a place, a depth, passable or
@@ -41,15 +44,17 @@ Pick a trip (a preset one such as Banilad → IT Park, or your own two points on
   the words and the claim. Tested live on one 10 s Bisaya clip: it heard the place, knee-deep and not passable, and
   10 s of silence was refused. Neither the audio nor the words are kept or shown, and a voice note can warn but never
   clear.
-- **Blurred photos:** a report's photo is shown to others only after SAM 3.1 has found and pixelated every person and
-  licence plate in it. SAM found all 9 plates labelled on the 5 test photos that show plates, on both of 2 runs. That
-  is too few photos to trust, so photos stay hidden for now, and a report shows its pin and reading.
+- **Reported photos stay hidden.** A report shows its pin and its reading, never the photo. The code to show a photo
+  only after SAM 3.1 has found and pixelated every person and licence plate in it is written but switched off:
+  `PLATE_DETECTION_TRUSTED` is `false` in `lib/photo-publish.ts`, and production has no blob store to keep a photo
+  in. SAM found all 9 plates labelled on the 5 test photos that show plates, on both of 2 runs. That is too few
+  photos to show strangers' pictures on.
 - **A watcher** re-runs the check every 10 minutes during a window you pick (6–8 a.m., say) and sends a Telegram
   message when the window opens and whenever the answer changes. Switching it off deletes the trip and its history.
   It is deployed on Telegram through `@lusong_cebu_bot`, and one message has gone out on production (2026-10-31, from
-  a tick started by hand). The 10-minute tick is a GitHub Actions schedule, because Vercel's free plan runs scheduled
-  jobs once a day. An Upstash QStash schedule runs it every 10 minutes (since 2026-11-02; its first tick got 200).
-  A GitHub Actions schedule stays on as a backup, though GitHub started it only every 3 to 7 hours.
+  a tick started by hand). An Upstash QStash schedule sends the tick every 10 minutes, because Vercel's free plan
+  runs scheduled jobs once a day: all 27 ticks it logged from 2026-11-02 20:50 to 2026-11-03 01:10 PHT got 200. A
+  GitHub Actions schedule stays on as a backup, though GitHub started it only every 3 to 7 hours.
   `docs/watcher-setup.md` has the setup.
 - **The demo trips** are recorded routes with sample reports. Every sample says it is a sample and where the photo was
   really taken (Cavite, Manila or Shah Alam in Malaysia, from Lusong's labelled test photos), so it is never
@@ -254,6 +259,16 @@ track). Everything in this repository was written during the event; the commit h
 - 2026-10-31 06:29 PHT `a211104` test: the Upstash store takes a clock, so report tests no longer fail once their fixed date is older than the TTL
 - 2026-10-31 06:30 PHT `494d9f8` ci: the watcher's tick runs off the round minutes, since no scheduled run had started 2 h after the schedule merged
 - 2026-10-31 06:37 PHT `55a115e` test: a save prunes index entries older than its clock minus the expiry and keeps the one exactly at it
+- 2026-10-31 06:38 PHT `ad628a9` docs: the watcher is live on Telegram with a GitHub Actions tick; commit list brought up to date
+- 2026-10-31 09:43 PHT `cf6b399` docs: the watcher's schedule has not fired yet, so it doesn't run by itself
+- 2026-11-02 19:24 PHT `e0f34ce` docs: GitHub runs the watcher's tick every 3 to 7 hours, not every 10 minutes (11 runs measured)
+- 2026-11-02 19:37 PHT `0ab707b` ci: lint, typecheck and the full suite with the Upstash stand-in on every PR, nightly with the clock 2 days ahead; pnpm typecheck; pnpm spend-today reads the production ledger read-only
+- 2026-11-02 19:42 PHT `ad578a9` fix: spend-today picks the two UTC budget days that overlap today in Manila, not yesterday and today in UTC; SCAN keys deduplicated
+- 2026-11-02 19:52 PHT `af79585` ci: install Pillow so lib/jpeg.test.ts's two decode checks run instead of skipping
+- 2026-11-02 20:51 PHT `f1d0b5a` docs: QStash runs the watcher's tick every 10 minutes; GitHub Actions stays as a backup
+- 2026-11-02 23:36 PHT `0bb7102` fix: a deadline is late only once the clock reaches it, not when its timer fires 1 ms early (#18) (#20)
+- 2026-11-03 00:16 PHT `988ce34` feat: Bisaya voice notes go to Muse Spark 1.2 as audio, since Voice Transcribe doesn't list Cebuano (#9) (#21)
+- 2026-11-03 00:56 PHT `53ca979` fix: Muse Spark's later turns get 30 s, not 15 s, so the commute check's pick is no longer dropped by its own time cap (#22)
 <!-- commits:end -->
 
 ## How it works
