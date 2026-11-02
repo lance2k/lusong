@@ -76,9 +76,9 @@ secret (`gh secret set WATCH_TICK_SECRET`, value from stdin). GitHub can start a
 load (GitHub's docs on the `schedule` event), so a rider's message can arrive later than the 10 minutes. "Run workflow"
 on the Actions tab runs a tick by hand.
 
-**Open, 2026-10-31 09:43 PHT:** GitHub had started 0 scheduled runs, 5 h 22 min after the schedule merged, though the
-workflow is `active`. Moving the cron off the round minutes and disabling then re-enabling the workflow changed nothing.
-Until a scheduled run appears, a tick happens only by hand. QStash, below, is the way round it.
+**Open, measured 2026-11-02 19:23 PHT:** GitHub's first scheduled run came 2026-10-31 13:53 PHT, 9 h 32 min after the
+schedule merged. By 2026-11-02 13:48 PHT there were 11, 3.0 to 7.1 hours apart (median 5.1), all successful, against
+the 10 minutes asked for. A 2-hour window gets one check at most. QStash, below, is the way round it.
 
 The alternative: an Upstash QStash schedule. It can fire every minute or less often ("The maximum schedule resolution
 is 1 minute", QStash's create-a-schedule API page), but the Upstash account behind this project was made through
