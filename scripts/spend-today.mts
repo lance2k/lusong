@@ -51,7 +51,8 @@ async function scan(pattern: string): Promise<string[]> {
     keys.push(...batch);
     cursor = next;
   } while (cursor !== "0");
-  return keys.sort();
+  // SCAN may return a key more than once.
+  return [...new Set(keys)].sort();
 }
 
 async function mget(keys: string[]): Promise<(string | null)[]> {
@@ -67,12 +68,20 @@ function phtWindow(utcDay: string): string {
   return `${fmt(start)} to ${fmt(end)} PHT`;
 }
 
+/** The Manila date D runs from 08:00 PHT on D-1's UTC day to 08:00 PHT on D's, so it touches UTC days D-1 and D. */
+function budgetDaysOf(phtDate: string): [string, string] {
+  const previous = new Date(Date.parse(`${phtDate}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+  return [previous, phtDate];
+}
+
 async function main() {
-  const now = new Date();
-  const today = now.toISOString().slice(0, 10);
-  const yesterday = new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10);
+  // SPEND_TODAY_NOW (an ISO time) exists for scripts/spend-today.test.ts.
+  const now = process.env.SPEND_TODAY_NOW ? new Date(process.env.SPEND_TODAY_NOW) : new Date();
   const phtNow = new Date(now.getTime() + PHT_OFFSET_MS).toISOString().slice(0, 16).replace("T", " ");
-  console.log(`now ${now.toISOString().slice(0, 16).replace("T", " ")} UTC (${phtNow} PHT); budget days ${yesterday} and ${today} (UTC)`);
+  const phtDate = phtNow.slice(0, 10);
+  const days = budgetDaysOf(phtDate);
+  console.log(`now ${now.toISOString().slice(0, 16).replace("T", " ")} UTC (${phtNow} PHT)`);
+  console.log(`PHT day ${phtDate} touches budget days ${days[0]} and ${days[1]} (UTC); each total below is a whole UTC day`);
 
   for (const ledger of LEDGERS) {
     // Every day key the ledger still holds (they expire after 2 days): if the key format drifted from lib/budget.ts,
@@ -90,12 +99,13 @@ async function main() {
     }
 
     console.log(`\n${ledger.label}: cap ${usd(ledger.capUsd * 1e6)} per UTC day; ${spentKeys.length} day key(s) held`);
-    for (const day of [yesterday, today]) {
+    for (const day of days) {
       const key = `${ledger.prefix}:spent:${day}`;
       const index = spent.get(key);
       const micros = index === undefined ? 0 : Number(spentValues[index] ?? 0);
       const held = open.get(day);
-      const openNote = held ? `, of which ${usd(held.micros)} is held by ${held.count} unsettled reservation(s)` : "";
+      // Read apart from the total, so a check admitted or settled in between can make the two disagree.
+      const openNote = held ? `; open reservations ${held.count} holding ${usd(held.micros)}` : "";
       const absent = index === undefined ? " (no key: nothing admitted that day)" : "";
       console.log(`  ${key}  ${usd(micros)}${absent}${openNote}  [${phtWindow(day)}]`);
     }
