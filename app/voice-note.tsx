@@ -26,7 +26,7 @@ function Heard({ report, duplicate }: { report: VoiceReportView; duplicate: bool
     <div className={`space-y-2 rounded-2xl border px-5 py-4 ${report.counts && report.role === "block" ? TONES.block : TONES.other}`} data-testid="voice-reading">
       <p className="text-sm font-medium uppercase tracking-wide opacity-75">Lusong heard your voice note</p>
       <p className="text-lg font-semibold">{report.heard}</p>
-      {report.saidPlace && <p className="text-[15px]">You named: {report.saidPlace}</p>}
+      {report.saidPlace && <p className="text-[15px]">The place Lusong heard: {report.saidPlace}</p>}
       <p className="text-[15px]">
         {report.place ? `At ${report.place}` : "At your location"}, received {report.received}.
       </p>

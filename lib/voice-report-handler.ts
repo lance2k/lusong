@@ -11,23 +11,36 @@ import { inMetroCebu } from "./metro-cebu";
 import { reportStoreFromEnv, toReport, type ReportStore, type Saved, type StoredVoiceReport } from "./report-store";
 import { durationWords, type Timing } from "./report-handler";
 import type { ValhallaGate } from "./router";
-import { voiceLanguageFrom } from "./voice-language";
-import { readVoiceClaim, VOICE_CLAIM_INPUT_TOKEN_BOUND, VOICE_CLAIM_MAX_COMPLETION_TOKENS, type VoiceClaim } from "./voice-claim";
+import { PICK_A_LANGUAGE, voiceLanguageFrom } from "./voice-language";
+import {
+  AUDIO_CLAIM_INPUT_TOKEN_BOUND,
+  AUDIO_CLAIM_MAX_COMPLETION_TOKENS,
+  readVoiceClaim,
+  readVoiceClaimFromAudio,
+  VOICE_CLAIM_INPUT_TOKEN_BOUND,
+  VOICE_CLAIM_MAX_COMPLETION_TOKENS,
+  type VoiceClaim,
+} from "./voice-claim";
 import { MAX_VOICE_FILE_BYTES, MAX_VOICE_MS, parseVoiceWav, wavFromPcm } from "./wav";
 
 /** Voice Transcribe's language hint (dev.meta.ai/docs/speech-to-text: a list of language names). */
 const TRANSCRIBE_LANGUAGES = ["Tagalog", "English"] as const;
 
-/** lib/meta.ts makes at most this many attempts per call; a voice report makes one transcribe and one Spark call. */
+/**
+ * lib/meta.ts makes at most this many attempts per call. A Tagalog or English report makes one transcribe and one Spark
+ * call; a Bisaya one makes one Spark call on the audio.
+ */
 const ATTEMPTS_PER_CALL = 2;
 
-/** The most one voice report can cost with every retry used, in micro-dollars: 30 s of audio twice, and two claim reads at their caps. */
-export const VOICE_RESERVE_MICROS =
+const sparkMicros = (inputTokens: number, outputTokens: number) =>
+  ATTEMPTS_PER_CALL * Math.ceil(inputTokens * MUSE_INPUT_MICROS_PER_TOKEN + outputTokens * MUSE_OUTPUT_MICROS_PER_TOKEN);
+
+/** The most one voice report can cost with every retry used, in micro-dollars, on whichever path costs more. */
+export const VOICE_RESERVE_MICROS = Math.max(
   ATTEMPTS_PER_CALL * Math.ceil((MAX_VOICE_MS / 1000) * TRANSCRIBE_MICROS_PER_SECOND) +
-  ATTEMPTS_PER_CALL *
-    Math.ceil(
-      VOICE_CLAIM_INPUT_TOKEN_BOUND * MUSE_INPUT_MICROS_PER_TOKEN + VOICE_CLAIM_MAX_COMPLETION_TOKENS * MUSE_OUTPUT_MICROS_PER_TOKEN,
-    );
+    sparkMicros(VOICE_CLAIM_INPUT_TOKEN_BOUND, VOICE_CLAIM_MAX_COMPLETION_TOKENS),
+  sparkMicros(AUDIO_CLAIM_INPUT_TOKEN_BOUND, AUDIO_CLAIM_MAX_COMPLETION_TOKENS),
+);
 
 /** The photo route's timing, with `minReadMs` held back for each of the two calls: transcribe, then the claim. */
 export type VoiceTiming = Timing;
@@ -133,9 +146,9 @@ export function makeVoiceReportHandler(deps: {
     const at = pinFrom(form);
     if (!at) return fail(400, "Lusong needs your phone's location to place the report.");
     if (!inMetroCebu(at)) return fail(400, "Lusong takes reports from streets in Metro Cebu only.");
-    // Bisaya is refused here too while it is out: voiceLanguageFrom only knows the languages the page offers.
+    // A language the page doesn't offer, Bisaya included while it is switched off, is refused here.
     const language = voiceLanguageFrom(form.get("language"));
-    if (!language) return fail(400, "Pick Tagalog or English for your voice note, then record it.");
+    if (!language) return fail(400, PICK_A_LANGUAGE);
     const audio = form.get("audio");
     if (!(audio instanceof File)) return fail(400, "No voice note was attached.");
     if (audio.size > MAX_VOICE_FILE_BYTES) return fail(413, TOO_LONG);
@@ -205,27 +218,42 @@ export function makeVoiceReportHandler(deps: {
         succeeded = true;
         return fail(503, OUT_OF_TIME);
       }
-      let words: string;
-      try {
-        words = await transcribe(wavFromPcm(clip.pcm), { languages: TRANSCRIBE_LANGUAGES, deadline: transcribeBy, meter: run.meter });
-      } catch (err) {
-        console.error("voice transcribe failed:", err instanceof MetaApiError ? err.message : err);
-        await release(token, releaseBy);
-        return fail(502, "The transcribing service didn't answer. Try again in a minute.");
-      }
-      if (words.trim() === "") {
+      const noWords = async () => {
         succeeded = true;
         await release(token, releaseBy);
         return fail(422, "Lusong couldn't hear any words in that note. Record it again closer to the phone.");
-      }
-
-      let said: VoiceClaim;
-      try {
-        said = await readVoiceClaim(words, { language, meter: run.meter, deadline: finishBy });
-      } catch (err) {
+      };
+      const claimFailed = async (err: unknown) => {
         console.error("voice claim failed:", err instanceof MetaApiError ? err.message : err);
         await release(token, releaseBy);
         return fail(502, "Lusong couldn't make out the report. Try again in a minute.");
+      };
+
+      let said: VoiceClaim;
+      if (language === "ceb") {
+        let heard: Awaited<ReturnType<typeof readVoiceClaimFromAudio>>;
+        try {
+          heard = await readVoiceClaimFromAudio(wavFromPcm(clip.pcm), { meter: run.meter, deadline: finishBy });
+        } catch (err) {
+          return await claimFailed(err);
+        }
+        if (heard.transcript.trim() === "") return await noWords();
+        said = heard.claim;
+      } else {
+        let words: string;
+        try {
+          words = await transcribe(wavFromPcm(clip.pcm), { languages: TRANSCRIBE_LANGUAGES, deadline: transcribeBy, meter: run.meter });
+        } catch (err) {
+          console.error("voice transcribe failed:", err instanceof MetaApiError ? err.message : err);
+          await release(token, releaseBy);
+          return fail(502, "The transcribing service didn't answer. Try again in a minute.");
+        }
+        if (words.trim() === "") return await noWords();
+        try {
+          said = await readVoiceClaim(words, { language, meter: run.meter, deadline: finishBy });
+        } catch (err) {
+          return await claimFailed(err);
+        }
       }
       succeeded = true;
 

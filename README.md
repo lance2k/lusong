@@ -34,10 +34,13 @@ Pick a trip (a preset one such as Banilad → IT Park, or your own two points on
   near a route) and its own web search for road closures in Cebu today. It returns which evidence matters, as ids.
   Lusong writes every sentence on the page from those ids, so the model can't change the answer or put its own words
   in front of the rider. A closure it finds blocks a way only when it is dated today and placed on that way.
-- **Voice notes:** someone at the water can record up to 30 seconds in Tagalog or English, recorded in the browser
-  as 16 kHz WAV. Meta's Voice Transcribe turns it into words (written from Meta's docs; not yet tried live), and Muse Spark turns the words into a fixed-choice
-  claim (a place, a depth, passable or not). Neither the audio nor the words are kept or shown, and a voice note
-  can warn but never clear. Bisaya is off until it is tested on a real clip.
+- **Voice notes:** someone at the water can record up to 30 seconds in Bisaya, Tagalog or English, recorded in the
+  browser as 16 kHz WAV. For Tagalog and English, Meta's Voice Transcribe turns it into words (written from Meta's
+  docs; not yet tried live), and Muse Spark turns the words into a fixed-choice claim (a place, a depth, passable or
+  not). Voice Transcribe doesn't list Cebuano, so a Bisaya note goes to Muse Spark 1.2 as audio, and one call returns
+  the words and the claim. Tested live on one 10 s Bisaya clip: it heard the place, knee-deep and not passable, and
+  10 s of silence was refused. Neither the audio nor the words are kept or shown, and a voice note can warn but never
+  clear.
 - **Blurred photos:** a report's photo is shown to others only after SAM 3.1 has found and pixelated every person and
   licence plate in it. SAM found all 9 plates labelled on the 5 test photos that show plates, on both of 2 runs. That
   is too few photos to trust, so photos stay hidden for now, and a report shows its pin and reading.
