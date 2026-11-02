@@ -45,7 +45,8 @@ Pick a trip (a preset one such as Banilad → IT Park, or your own two points on
   message when the window opens and whenever the answer changes. Switching it off deletes the trip and its history.
   It is deployed on Telegram through `@lusong_cebu_bot`, and one message has gone out on production (2026-10-31, from
   a tick started by hand). The 10-minute tick is a GitHub Actions schedule, because Vercel's free plan runs scheduled
-  jobs once a day, and GitHub has not started it yet, so for now the watcher doesn't run by itself.
+  jobs once a day. GitHub starts it far less often than asked: 11 scheduled runs from 2026-10-31 13:53 to 2026-11-02
+  13:48 PHT, 3.0 to 7.1 hours apart, so a morning window may get one check or none.
   `docs/watcher-setup.md` has the setup.
 - **The demo trips** are recorded routes with sample reports. Every sample says it is a sample and where the photo was
   really taken (Cavite, Manila or Shah Alam in Malaysia, from Lusong's labelled test photos), so it is never
