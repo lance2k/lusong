@@ -1,0 +1,90 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # Nightly, with the test process's clock moved 2 days ahead: a test that stamps data at a fixed date while the code
+  # under test reads the real clock passes at merge and fails once that date goes stale (15 Upstash tests on
+  # 2026-10-30, fixed in PR #14). GitHub may start a scheduled run hours late; that only moves the clock further.
+  schedule:
+    - cron: "17 19 * * *"
+  workflow_dispatch:
+    inputs:
+      clock_shift:
+        description: libfaketime offset for the test step, e.g. +2d; empty runs on the real clock
+        default: "+2d"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: ${{ (github.event_name == 'schedule' || inputs.clock_shift != '') && 'lint, typecheck, test (clock ahead)' || 'lint, typecheck, test' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CLOCK_SHIFT: ${{ github.event_name == 'schedule' && '+2d' || inputs.clock_shift || '' }}
+      LUSONG_TEST_UPSTASH_URL: http://127.0.0.1:8079
+      # Not a secret: it guards only the throwaway Upstash stand-in below, which lives for this job.
+      LUSONG_TEST_UPSTASH_TOKEN: ci-only-throwaway-token
+    services:
+      # The same stand-in as the local lusong-test-srh / lusong-test-redis containers.
+      redis:
+        image: redis:7.4-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
+      srh:
+        image: hiett/serverless-redis-http:latest
+        ports:
+          - 8079:80
+        env:
+          SRH_MODE: env
+          SRH_TOKEN: ci-only-throwaway-token
+          SRH_CONNECTION_STRING: redis://redis:6379
+    steps:
+      - uses: actions/checkout@v7
+      # pnpm's version comes from package.json's packageManager.
+      - uses: pnpm/action-setup@v6
+      # The repo pins no Node version; 24 is the Vercel project's "Node.js Version" setting.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - name: Wait for the Upstash stand-in
+        run: |
+          for _ in $(seq 30); do
+            if curl -sf -H "Authorization: Bearer $LUSONG_TEST_UPSTASH_TOKEN" -H "Content-Type: application/json" -d '["PING"]' "$LUSONG_TEST_UPSTASH_URL" | grep -q PONG; then exit 0; fi
+            sleep 2
+          done
+          echo "the Upstash stand-in never answered PING" >&2
+          exit 1
+      # Pillow for lib/jpeg.test.ts's decode checks, which skip without it; libfaketime only for a moved clock.
+      - name: Install Pillow and libfaketime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq python3-pil ${CLOCK_SHIFT:+libfaketime}
+      - name: Test
+        run: |
+          if [ -z "$CLOCK_SHIFT" ]; then exec pnpm test; fi
+          # Only this step's processes get the moved clock; the cache upload after the job keeps the real one.
+          export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/faketime/libfaketimeMT.so.1 FAKETIME="$CLOCK_SHIFT"
+          # Timers and timeouts run on the monotonic clock; only wall-clock time moves.
+          export FAKETIME_DONT_FAKE_MONOTONIC=1
+          # A shift that silently did nothing would pass every night, so prove it took first.
+          node -e '
+            const ahead = (Date.now() - Number(process.argv[1]) * 1000) / 3600e3;
+            console.log(`test clock ${new Date().toISOString()}, ${ahead.toFixed(1)} h ahead of the runner`);
+            if (Math.abs(ahead) < 1) process.exit(1);
+          ' "$(env -u LD_PRELOAD date +%s)"
+          pnpm test

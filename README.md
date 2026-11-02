@@ -357,7 +357,11 @@ printf 'MODEL_API_KEY=…\nLUSONG_BUDGET_STORE=memory\n' > .env.local
 pnpm dev
 ```
 
-`pnpm test` runs the unit tests against saved SAM responses; they make no API calls.
+`pnpm test` runs the unit tests against saved SAM responses; they make no API calls. `pnpm typecheck`
+generates Next's route types (a fresh checkout has none, so `tsc` alone cannot find `LayoutProps`) and
+runs `tsc`. CI (`.github/workflows/ci.yml`) runs lint, typecheck and the whole suite, the Upstash tests
+included, on every pull request and push to main, and again each night with the test clock moved two days
+ahead, which fails any test that stamps data at a fixed date while the code reads the real clock.
 
 ### Spending limits
 
@@ -377,6 +381,12 @@ checks, so the daily total can pass the budget only by that overrun on the check
 | `PER_IP_DAILY` | `10` | Checks per client address per UTC day. |
 | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` (or `KV_REST_API_URL`, `KV_REST_API_TOKEN`, which Vercel's Upstash integration sets) | none | The shared ledger. Its keys all start with `lusong:`, so it can share a database. Without them every check is refused. |
 | `LUSONG_BUDGET_STORE=memory` | unset | An in-process ledger for local development. Refused when `VERCEL` is set or `NODE_ENV=production`. |
+
+`pnpm spend-today` prints what the production ledger holds for the two UTC budget days that overlap
+today in Manila, with any reservations not yet settled. It reads `KV_REST_API_URL` and
+`KV_REST_API_READ_ONLY_TOKEN` and prints neither. `vercel env pull` writes both as empty strings, because
+the Upstash integration stores them as sensitive (2026-11-02), so put them in a git-ignored file such as
+`.env.production.local` by hand and run `ENVFILE=.env.production.local withenv pnpm spend-today`.
 
 The ledger's Lua scripts run against real Redis behind
 [serverless-redis-http](https://github.com/hiett/serverless-redis-http), which speaks Upstash's REST API:

@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest run"
+    "typecheck": "next typegen && tsc --noEmit",
+    "test": "vitest run",
+    "spend-today": "node scripts/spend-today.mts"
   },
   "dependencies": {
     "@meta-sam/parser": "0.1.0",
