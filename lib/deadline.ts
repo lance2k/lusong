@@ -2,7 +2,16 @@
 export async function beforeDeadline<T>(work: Promise<T>, deadline: number): Promise<T | "late"> {
   if (deadline === Infinity) return work;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const late = new Promise<"late">((resolve) => (timer = setTimeout(() => resolve("late"), Math.max(0, deadline - Date.now()))));
+  // A timer can fire up to 1 ms before Date.now() reaches its target, and callers check the deadline against Date.now(),
+  // so "late" waits until the clock agrees (#18).
+  const late = new Promise<"late">((resolve) => {
+    const wait = () => {
+      const left = deadline - Date.now();
+      if (left <= 0) resolve("late");
+      else timer = setTimeout(wait, left);
+    };
+    wait();
+  });
   try {
     return await Promise.race([work, late]);
   } finally {
