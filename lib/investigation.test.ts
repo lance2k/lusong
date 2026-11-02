@@ -10,7 +10,9 @@ import {
   ROUTE_AROUND_MIN_MS,
   PROMPT_MAX_BYTES,
   LOOP_MAX_OUTPUT_TOKENS,
+  LOOP_ATTEMPT_MS,
   LOOP_TURN_CAP,
+  SLOWEST_TURN_MEASURED_MS,
   TOOL_CALLS_PER_TURN,
   TOOL_CALLS_TOTAL,
   TOOL_RESULT_MAX_BYTES,
@@ -18,6 +20,7 @@ import {
   EVIDENCE_MAX_PICKS,
   type AroundResult, type InvestigationSources, type WebEvidence } from "./investigation";
 import { admit } from "./admission";
+import { COMMUTE_DEADLINE_MS } from "./commute-handler";
 import { createBudget, MemoryBudgetStore, type BudgetStore } from "./budget";
 import { Meter } from "./meta";
 import { decodePolyline6 } from "./router";
@@ -450,6 +453,13 @@ describe("route_around: a way around the model proposes is judged by the same ru
     fakeMeta({ turns: [proposeAround([MODEL_SPOT])] });
 
     expect(await investigate(inputOf(sources))).toEqual({ ok: false, failed: "reports" });
+  });
+});
+
+describe("each model turn's time cap", () => {
+  it("leaves 1.5× the slowest turn measured live, and still ends inside the commute check's deadline", () => {
+    expect(LOOP_ATTEMPT_MS).toBeGreaterThanOrEqual(1.5 * SLOWEST_TURN_MEASURED_MS);
+    expect(LOOP_ATTEMPT_MS).toBeLessThan(COMMUTE_DEADLINE_MS);
   });
 });
 
