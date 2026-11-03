@@ -30,6 +30,8 @@ export type TypedTripAction =
   | { type: "reply"; ticket: number; reply: TripTextReply }
   | { type: "pick"; end: "from" | "to"; index: number }
   | { type: "dismiss" }
+  /** The text changed: what was read, or is being read, belongs to the old text. */
+  | { type: "edit" }
   | { type: "used" };
 
 export const initialTypedTrip: TypedTripState = { ticket: 0, view: { step: "idle" } };
@@ -54,6 +56,8 @@ export function typedTripReducer(state: TypedTripState, action: TypedTripAction)
       if (view.step !== "choose" || !Number.isInteger(action.index) || action.index < 0 || action.index >= view[action.end].length) return state;
       return { ...state, view: { ...view, picked: { ...view.picked, [action.end]: action.index } } };
     }
+    case "edit":
+      return state.view.step === "idle" ? state : { ticket: state.ticket + 1, view: { step: "idle" } };
     case "dismiss":
     case "used":
       return { ticket: state.ticket + 1, view: { step: "idle" } };

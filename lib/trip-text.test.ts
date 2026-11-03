@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { countStoreFromEnv, MemoryCountStore, UpstashCountStore, addressLimitKey, createAddressLimit } from "./address-limit";
 import { createBudget, ipKeyFor, MemoryBudgetStore, RESERVE_MICROS, type Budget } from "./budget";
@@ -16,7 +17,7 @@ import {
   type ReadTrip,
   type TripReading,
 } from "./trip-text";
-import { makeTripTextHandler, TRIP_TEXT_LIMIT_PREFIX } from "./trip-text-handler";
+import { makeTripTextHandler, TRIP_TEXT_LIMIT_PREFIX, TRIP_TEXT_TIMING } from "./trip-text-handler";
 import { TRIP_TEXT_PER_IP_DAILY } from "./trip-text-words";
 import { tripTextReplyOf } from "../app/typed-trip";
 
@@ -399,5 +400,85 @@ describe.skipIf(!upstashUrl)("the per-address limit on Upstash", () => {
     const ttl = (await redis(["TTL", key])) as number;
     expect(ttl).toBeGreaterThan(172_000);
     await redis(["DEL", key]);
+  });
+});
+
+describe("the route's one deadline (S5-5)", () => {
+  // Scaled down from TRIP_TEXT_TIMING: 400 ms in all, the model only with 200 + 130 ms left.
+  const timing = { totalMs: 400, bodyMs: 100, readMs: 200, afterReadMs: 130, replyMs: 20 };
+  const delay = <T>(ms: number, value: T) => new Promise<T>((resolve) => setTimeout(() => resolve(value), ms));
+
+  function handlerWith(slow: { limitMs?: number; admitMs?: number; readMs?: number; gateMs?: number }) {
+    const inner = createBudget({ store: new MemoryBudgetStore(), budgetUsd: 10, ipLimit: 10 });
+    const settled: boolean[] = [];
+    const budget: Budget = {
+      admit: async (ip, at, micros) => delay(slow.admitMs ?? 0, await inner.admit(ip, at, micros)),
+      settle: async (a, usage, ok) => {
+        settled.push(ok);
+        await inner.settle(a, usage, ok);
+      },
+    };
+    const limit = { take: async () => delay(slow.limitMs ?? 0, "ok" as const) };
+    const read = vi.fn(async (_t: string, { meter }: { meter: Meter }) => {
+      await delay(slow.readMs ?? 0, null);
+      meter.reply("spark-chat", { usage: { prompt_tokens: 1, completion_tokens: 1 } });
+      return { from: "Talamban", to: "IT Park", leaveAt: null } as TripReading;
+    });
+    const places = (): PlacesDeps => ({ ...placesWith(photonFetch(PHOTON).fetch), gate: { acquire: () => delay(slow.gateMs ?? 0, "ok" as const) } });
+    return { handler: makeTripTextHandler({ budget: () => budget, limit: () => limit, places, read, timing }), read, settled };
+  }
+
+  async function timed(h: ReturnType<typeof handlerWith>) {
+    const started = Date.now();
+    const res = await h.handler(post({ text: TEXT }));
+    return { ms: Date.now() - started, body: await res.json() };
+  }
+
+  beforeEach(() => vi.spyOn(console, "error").mockImplementation(() => {}));
+  afterEach(() => vi.restoreAllMocks());
+
+  it("with nothing slow, answers well inside the limit", async () => {
+    const r = await timed(handlerWith({}));
+    expect(r.body.status).toBe("ok");
+    expect(r.ms).toBeLessThan(timing.totalMs);
+  });
+
+  it("doesn't start the model when the limit and the budget took the time it needs, and refunds the reservation", async () => {
+    const h = handlerWith({ limitMs: 60, admitMs: 60 });
+    const r = await timed(h);
+    expect(r.body).toEqual({ status: "failed", reason: "unavailable" });
+    expect(h.read).not.toHaveBeenCalled();
+    expect(h.settled).toEqual([true]);
+    expect(r.ms).toBeLessThan(timing.totalMs);
+  });
+
+  it("a model that overruns its share is a model failure, inside the limit, and keeps the reservation", async () => {
+    const h = handlerWith({ readMs: 1_000 });
+    const r = await timed(h);
+    expect(r.body).toEqual({ status: "failed", reason: "model" });
+    expect(h.settled).toEqual([false]);
+    expect(r.ms).toBeLessThan(timing.totalMs);
+  });
+
+  it("a place search that hangs ends at the deadline as the search message", async () => {
+    const h = handlerWith({ readMs: 150, gateMs: 5_000 });
+    const r = await timed(h);
+    expect(r.body).toEqual({ status: "failed", reason: "search" });
+    expect(r.ms).toBeLessThan(timing.totalMs);
+  });
+
+  it("every slow part at once still answers inside the limit", async () => {
+    const r = await timed(handlerWith({ limitMs: 30, admitMs: 30, readMs: 5_000, gateMs: 5_000 }));
+    expect(r.body.status).toBe("failed");
+    expect(r.ms).toBeLessThan(timing.totalMs);
+  });
+
+  it("the real timing fits the route's maxDuration with room, and the model's share fits after the waits before it", async () => {
+    // vitest has no "@/" alias, so the route's setting is read from its source.
+    const maxDuration = Number(/export const maxDuration = (\d+);/.exec(readFileSync("app/api/trip-text/route.ts", "utf8"))![1]);
+    expect(TRIP_TEXT_TIMING.totalMs + 5_000).toBeLessThanOrEqual(maxDuration * 1000);
+    expect(TRIP_TEXT_TIMING.readMs + TRIP_TEXT_TIMING.afterReadMs).toBeLessThan(TRIP_TEXT_TIMING.totalMs);
+    // Photon's gate (3 s) and request (4 s) and the settle's store call (5 s) fit in what follows the model.
+    expect(TRIP_TEXT_TIMING.afterReadMs).toBeGreaterThanOrEqual(3_000 + 4_000 + 5_000 + TRIP_TEXT_TIMING.replyMs);
   });
 });

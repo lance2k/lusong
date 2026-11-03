@@ -128,7 +128,10 @@ export function TypedTripBox({ onUse, onFocusBox }: { onUse: (trip: ChosenTrip) 
     <TypedTripView
       state={state}
       text={text}
-      onText={setText}
+      onText={(t) => {
+        setText(t);
+        send({ type: "edit" });
+      }}
       onSend={read}
       send={send}
       onFocusBox={onFocusBox}

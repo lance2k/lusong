@@ -46,6 +46,25 @@ describe("the typed box's state (S5)", () => {
     expect(run([{ type: "pick", end: "to", index: -1 }], s)).toBe(s);
   });
 
+  it("editing during a request drops its late reply: Use this trip is not offered for the old text (S5-4)", () => {
+    const reading = run([{ type: "send" }]);
+    const edited = run([{ type: "edit" }, { type: "reply", ticket: reading.ticket, reply: OK }], reading);
+    expect(edited.view).toEqual({ step: "idle" });
+    expect(chosenTrip(edited)).toBeNull();
+    expect(render(edited)).not.toContain(USE_THIS_TRIP);
+  });
+
+  it("editing after the candidates appear withdraws them: Use this trip is not offered for the old text (S5-4)", () => {
+    const picked = run([{ type: "send" }, { type: "reply", ticket: 1, reply: OK }, { type: "pick", end: "from", index: 0 }]);
+    expect(chosenTrip(picked)).not.toBeNull();
+    const edited = run([{ type: "edit" }], picked);
+    expect(edited.view).toEqual({ step: "idle" });
+    expect(chosenTrip(edited)).toBeNull();
+    expect(render(edited)).not.toContain(USE_THIS_TRIP);
+    // A reply to the send before the edit, arriving now, changes nothing.
+    expect(run([{ type: "reply", ticket: picked.ticket, reply: OK }], edited)).toEqual(edited);
+  });
+
   it("nothing is saved or checked before Use this trip", async () => {
     const storage: TripStorage = { getItem: vi.fn(() => null), setItem: vi.fn(), removeItem: vi.fn() };
     const store = createTripStore(storage, null);
