@@ -21,7 +21,8 @@ export interface ClosuresState {
 export function useClosures(enabled: boolean): ClosuresState {
   const [reply, setReply] = useState<ClosuresReply | null>(null);
   const [loading, setLoading] = useState(false);
-  const [now, setNow] = useState(() => Date.now());
+  // 0 until the first reply: the page is prerendered, and no mark shows before a reply sets the clock.
+  const [now, setNow] = useState(0);
 
   useEffect(() => {
     if (!enabled) return;

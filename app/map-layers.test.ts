@@ -128,10 +128,12 @@ describe("PAGASA areas on the map", () => {
 });
 
 describe("the legend's other rows", () => {
-  it("road closures are shown but can't be switched on yet", () => {
-    const row = legendRows(reply(), null).find((r) => r.id === "closures")!;
-    expect(row.available).toBe(false);
-    expect(row.lines).toEqual(["Coming soon"]);
+  it("road closures can be switched, start on, and carry the lines they are given", () => {
+    expect(DEFAULT_LAYERS.closures).toBe(true);
+    const lines = ["No web-sweep reports right now", "A sweep report shows for 12 hours after its page was posted. Unconfirmed by Lusong."];
+    const row = legendRows(reply(), null, undefined, lines).find((r) => r.id === "closures")!;
+    expect(row.available).toBe(true);
+    expect(row.lines).toEqual(lines);
   });
 
   it("rain now can be switched on, starts off, and names Open-Meteo, not RainViewer", () => {
