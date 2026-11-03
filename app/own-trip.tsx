@@ -6,7 +6,6 @@ import type { Place } from "../lib/built-in-places";
 import { TRIP_AREA_NAME } from "../lib/trip-bound";
 import { PlaceSearch } from "./place-search";
 import { createTripStore, pickTrip, startTrip, tapTrip, type TripDraft } from "./trip";
-import { WatcherPanel } from "./watcher-panel";
 
 function phone(): Storage | null {
   try {
@@ -55,7 +54,20 @@ export interface OwnTrip {
 }
 
 /** `changed` runs whenever a tap, a clear or another tab changes the trip, so an answer for the old one isn't left showing. */
-export function useOwnTrip(changed: () => void): OwnTrip {
+export function outsideLine(): string {
+  return `That spot is outside ${TRIP_AREA_NAME}. Lusong checks trips in ${TRIP_AREA_NAME} only, where PAGASA's flood advisories are placed.`;
+}
+
+export const CLEAR_FAILED_LINE =
+  "This phone wouldn't remove your trip, so it is still saved here. Try again, or clear this site's data in your browser.";
+
+export interface OwnTripEvents {
+  /** A tap or pick outside the trip bound, which changed nothing. */
+  outside?: () => void;
+  clearFailed?: () => void;
+}
+
+export function useOwnTrip(changed: () => void, events: OwnTripEvents = {}): OwnTrip {
   // The server has no phone storage, so it renders no trip and the saved one appears once the page is running.
   const saved = useSyncExternalStore(subscribe, savedTrip, () => null);
   const [pending, setPending] = useState<TripDraft | null>(null);
@@ -67,8 +79,10 @@ export function useOwnTrip(changed: () => void): OwnTrip {
   const [clearFailed, setClearFailed] = useState(false);
   const [touched, setTouched] = useState(false);
   const latestChanged = useRef(changed);
+  const latestEvents = useRef(events);
   useEffect(() => {
     latestChanged.current = changed;
+    latestEvents.current = events;
   });
   useEffect(() => tripStore().subscribe(() => latestChanged.current()), []);
   const draft: TripDraft = pending ?? startTrip(saved);
@@ -76,7 +90,10 @@ export function useOwnTrip(changed: () => void): OwnTrip {
   function apply(next: { draft: TripDraft; outside: boolean }): boolean {
     setOutside(next.outside);
     setClearFailed(false);
-    if (next.outside) return false;
+    if (next.outside) {
+      latestEvents.current.outside?.();
+      return false;
+    }
     if (next.draft.step === "set") {
       setPending(null);
       setKept(tripStore().save(next.draft.trip));
@@ -108,6 +125,7 @@ export function useOwnTrip(changed: () => void): OwnTrip {
   function clear() {
     if (!tripStore().clear()) {
       setClearFailed(true);
+      latestEvents.current.clearFailed?.();
       return;
     }
     setClearFailed(false);
@@ -125,7 +143,7 @@ export function useOwnTrip(changed: () => void): OwnTrip {
   return { draft, outside, kept, clearFailed, labels, bias, setBias, pick, tap, clear, touched };
 }
 
-export function OwnTripPanel({ own }: { own: OwnTrip }) {
+export function OwnTripPanel({ own, onFocusBox, focusSignal }: { own: OwnTrip; onFocusBox?: () => void; focusSignal?: number }) {
   const { draft, labels } = own;
   const hasFrom = draft.step === "set" || draft.step === "work";
   const hasTo = draft.step === "set" || (draft.step === "home" && Boolean(draft.work));
@@ -140,12 +158,15 @@ export function OwnTripPanel({ own }: { own: OwnTrip }) {
           myLocation
           bias={own.bias}
           onLocated={own.setBias}
+          onFocusBox={onFocusBox}
+          focusSignal={focusSignal}
         />
         <PlaceSearch
           label="To (work)"
           chosen={labels.to ?? (hasTo ? savedLabel : null)}
           onPick={(p) => own.pick("to", p)}
           bias={own.bias}
+          onFocusBox={onFocusBox}
         />
       </div>
       <div className="space-y-2" aria-live="polite">
@@ -155,26 +176,24 @@ export function OwnTripPanel({ own }: { own: OwnTrip }) {
         {draft.step === "set" && (
           <>
             <p className="font-medium">Your trip is saved on this phone.</p>
-            <p className="text-zinc-600 dark:text-zinc-400">
+            <p className="text-ink-2">
               It leaves the phone only inside a check, and Lusong&apos;s server doesn&apos;t keep it unless you switch on the
               watcher below. Place names you type are sent to Lusong&apos;s server and to Photon, komoot&apos;s OpenStreetMap
               search, to find the place; Lusong doesn&apos;t store them. To change the trip, search again or tap a new home on the map.
             </p>
             {!own.kept && (
-              <p className="text-amber-800 dark:text-amber-300">This phone wouldn&apos;t store it, so it lasts until you close the page.</p>
+              <p className="text-warn-ink">This phone wouldn&apos;t store it, so it lasts until you close the page.</p>
             )}
           </>
         )}
         {own.clearFailed && (
-          <p role="status" className="font-medium text-amber-800 dark:text-amber-300">
-            This phone wouldn&apos;t remove your trip, so it is still saved here. Try again, or clear this site&apos;s data in
-            your browser.
+          <p role="status" className="font-medium text-warn-ink">
+            {CLEAR_FAILED_LINE}
           </p>
         )}
         {own.outside && (
-          <p role="status" className="font-medium text-amber-800 dark:text-amber-300">
-            That spot is outside {TRIP_AREA_NAME}. Lusong checks trips in {TRIP_AREA_NAME} only, where PAGASA&apos;s flood
-            advisories are placed.
+          <p role="status" className="font-medium text-warn-ink">
+            {outsideLine()}
           </p>
         )}
       </div>
@@ -182,12 +201,11 @@ export function OwnTripPanel({ own }: { own: OwnTrip }) {
         <button
           type="button"
           onClick={own.clear}
-          className="min-h-11 rounded-full border border-zinc-300 px-4 text-sm font-medium dark:border-zinc-700"
+          className="min-h-11 rounded-chip border border-line bg-surface px-4 text-sm font-medium text-ink"
         >
           Clear my trip
         </button>
       )}
-      <WatcherPanel trip={draft.step === "set" ? draft.trip : null} />
     </div>
   );
 }
