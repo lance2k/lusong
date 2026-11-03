@@ -1,3 +1,4 @@
+import { countStoreFromEnv, type CountStore } from "./address-limit";
 import { TRIP_BOUND } from "./trip-bound";
 
 export const RAIN_CREDIT = "Rain now: model estimate, Open-Meteo (CC BY 4.0)";
@@ -11,9 +12,8 @@ export const MAX_BOX_DEG = 3;
 export const CACHE_TTL_MS = 15 * 60_000;
 export const CACHE_MAX_ENTRIES = 2_000;
 export const CALLS_PER_HOUR = 300;
+export const CALLS_KEY_PREFIX = "lusong:rain:calls:v1:";
 export const FETCH_TIMEOUT_MS = 6_000;
-
-const HOUR_MS = 3_600_000;
 
 export type RainStatus = "ok" | "paused" | "refused" | "down";
 
@@ -137,7 +137,16 @@ export function openMeteoUrl(cells: Cell[]): string {
 export interface RainDeps {
   fetch: typeof fetch;
   now: () => number;
+  /**
+   * The hourly call count, shared by every server process (the same database as the budget). Null or unreachable means
+   * no call is made: the cap has to hold across instances, so it fails closed.
+   */
+  calls: CountStore | null;
 }
+
+/** One count per UTC hour; it outlives its hour so a slow clock can't reopen it. */
+export const callsKey = (now: number) => `${CALLS_KEY_PREFIX}${new Date(now).toISOString().slice(0, 13)}`;
+const CALLS_KEY_TTL_SECONDS = 7_200;
 
 interface CacheEntry extends ParsedPoint {
   fetchedAt: number;
@@ -146,7 +155,7 @@ interface CacheEntry extends ParsedPoint {
 export interface RainService {
   rain(rawBbox: string | null): Promise<RainReply>;
   /** For tests and probes. */
-  stats(): { cached: number; callsLastHour: number };
+  stats(): { cached: number };
 }
 
 const reply = (status: RainStatus, points: RainPoint[] = [], modelTime: string | null = null): RainReply => ({
@@ -158,7 +167,6 @@ const reply = (status: RainStatus, points: RainPoint[] = [], modelTime: string |
 
 export function createRain(deps: RainDeps): RainService {
   const cache = new Map<string, CacheEntry>();
-  let callTimes: number[] = [];
 
   function liveEntry(k: string, now: number): CacheEntry | null {
     const e = cache.get(k);
@@ -184,9 +192,14 @@ export function createRain(deps: RainDeps): RainService {
     }
   }
 
-  function callsLastHour(now: number): number {
-    callTimes = callTimes.filter((t) => now - t < HOUR_MS);
-    return callTimes.length;
+  async function takeCall(now: number): Promise<boolean> {
+    if (!deps.calls) return false;
+    try {
+      return await deps.calls.take(callsKey(now), CALLS_PER_HOUR, CALLS_KEY_TTL_SECONDS);
+    } catch (err) {
+      console.error("rain call count unreachable:", err instanceof Error ? err.message : err);
+      return false;
+    }
   }
 
   async function rain(rawBbox: string | null): Promise<RainReply> {
@@ -205,8 +218,8 @@ export function createRain(deps: RainDeps): RainService {
     }
 
     if (missing.length > 0) {
-      if (callsLastHour(now) >= CALLS_PER_HOUR) return reply("paused");
-      callTimes.push(now);
+      // Taken before the call, so a failed call counts against the hour too.
+      if (!(await takeCall(now))) return reply("paused");
       let parsed: ParsedPoint[] | null = null;
       try {
         const res = await deps.fetch(openMeteoUrl(missing), {
@@ -237,14 +250,14 @@ export function createRain(deps: RainDeps): RainService {
 
   return {
     rain,
-    stats: () => ({ cached: cache.size, callsLastHour: callsLastHour(deps.now()) }),
+    stats: () => ({ cached: cache.size }),
   };
 }
 
 let shared: RainService | null = null;
 
-/** One service per server process: its cache and hourly count are what keep Open-Meteo's free tier safe. */
+/** One service per server process for its cache; the hourly count lives in the shared database. */
 export function sharedRain(): RainService {
-  shared ??= createRain({ fetch: (input, init) => fetch(input, init), now: () => Date.now() });
+  shared ??= createRain({ fetch: (input, init) => fetch(input, init), now: () => Date.now(), calls: countStoreFromEnv() });
   return shared;
 }

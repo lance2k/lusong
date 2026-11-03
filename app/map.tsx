@@ -244,7 +244,8 @@ export default function TripMap({
     const g = groups.current;
     if (!g) return;
     const { ends, route, detour, pins, areas }: Pick<TripMapProps, "ends" | "route" | "detour" | "pins"> & { areas: AreaShape[] } = JSON.parse(drawKey);
-    for (const group of Object.values(g)) group.clearLayers();
+    // Rain has its own effect below, keyed by its own data; clearing it here would leave it blank until rain changed.
+    for (const id of ["areas", "routes", "ends", "reports"] as const) g[id].clearLayers();
     markers.current.clear();
     for (const area of areas) {
       L.polygon(area.ring, { className: area.className, weight: 1.5, interactive: true })

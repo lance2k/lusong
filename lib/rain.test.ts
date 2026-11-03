@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import type { CountStore } from "./address-limit";
 import {
   CACHE_MAX_ENTRIES,
   CACHE_TTL_MS,
@@ -47,8 +48,22 @@ function box(i: number, wide = false): string {
   return [lat, lon, lat + size, lon + size].map((v) => v.toFixed(2)).join(",");
 }
 
-function service(f: ReturnType<typeof fakeFetch>, clock = { t: T0 }) {
-  return { clock, rain: createRain({ fetch: f as unknown as typeof fetch, now: () => clock.t }) };
+/** A count shared like the database's: two services given the same one share the hour's cap. */
+function sharedCounts() {
+  const counts = new Map<string, number>();
+  const store: CountStore = {
+    async take(key, limit) {
+      const n = counts.get(key) ?? 0;
+      if (n + 1 > limit) return false;
+      counts.set(key, n + 1);
+      return true;
+    },
+  };
+  return { store, total: () => [...counts.values()].reduce((a, b) => a + b, 0) };
+}
+
+function service(f: ReturnType<typeof fakeFetch>, clock = { t: T0 }, counts = sharedCounts()) {
+  return { clock, counts, rain: createRain({ fetch: f as unknown as typeof fetch, now: () => clock.t, calls: counts.store }) };
 }
 
 describe("bbox parsing", () => {
@@ -241,9 +256,41 @@ describe("the rain service", () => {
 
   it("counts a failed call against the hour", async () => {
     const f = vi.fn(async () => new Response("no", { status: 500 }));
-    const { rain } = service(f as unknown as ReturnType<typeof fakeFetch>);
+    const { rain, counts } = service(f as unknown as ReturnType<typeof fakeFetch>);
     await rain.rain(METRO_MANILA);
-    expect(rain.stats().callsLastHour).toBe(1);
+    expect(counts.total()).toBe(1);
+  });
+
+  it("shares the hour's cap across server processes, and a new process doesn't reset it", async () => {
+    const f = fakeFetch(0);
+    const clock = { t: T0 };
+    const counts = sharedCounts();
+    const a = service(f, clock, counts).rain;
+    const b = service(f, clock, counts).rain;
+    for (let i = 0; i < CALLS_PER_HOUR; i++) {
+      clock.t += 1_000;
+      expect((await (i % 2 ? a : b).rain(box(i))).status).toBe("ok");
+    }
+    const fresh = service(f, clock, counts).rain;
+    expect((await fresh.rain("20,120,20.1,120.1")).status).toBe("paused");
+    expect(f).toHaveBeenCalledTimes(CALLS_PER_HOUR);
+  });
+
+  it("makes no call when the shared count is missing or unreachable", async () => {
+    const f = fakeFetch();
+    const none = createRain({ fetch: f as unknown as typeof fetch, now: () => T0, calls: null });
+    expect((await none.rain(METRO_MANILA)).status).toBe("paused");
+    const failing: CountStore = {
+      take: async () => {
+        throw new Error("Upstash HTTP 503");
+      },
+    };
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const broken = createRain({ fetch: f as unknown as typeof fetch, now: () => T0, calls: failing });
+    expect((await broken.rain(METRO_MANILA)).status).toBe("paused");
+    expect(err).toHaveBeenCalledWith("rain call count unreachable:", "Upstash HTTP 503");
+    err.mockRestore();
+    expect(f).not.toHaveBeenCalled();
   });
 
   it("says down when Open-Meteo errors, times out, or answers nonsense, and caches nothing", async () => {
@@ -265,12 +312,12 @@ describe("the rain service", () => {
 
   it("refuses without calling Open-Meteo for a bad, wide or foreign box", async () => {
     const f = fakeFetch();
-    const { rain } = service(f);
+    const { rain, counts } = service(f);
     for (const bbox of [null, "nope", "12,120,15.5,121", "35.5,139.5,35.9,139.9"]) {
       expect(await rain.rain(bbox)).toEqual({ status: "refused", points: [], modelTime: null, credit: RAIN_CREDIT });
     }
     expect(f).not.toHaveBeenCalled();
-    expect(rain.stats().callsLastHour).toBe(0);
+    expect(counts.total()).toBe(0);
   });
 
   it("reports the oldest model time among the points", async () => {

@@ -13,9 +13,23 @@ async function get(bbox?: string) {
 describe("GET /api/rain", () => {
   beforeEach(() => {
     vi.resetModules();
+    // The hourly call count is the database's; locally, the in-memory stand-in the budget uses too.
+    for (const k of ["UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN", "KV_REST_API_URL", "KV_REST_API_TOKEN", "VERCEL"]) vi.stubEnv(k, "");
+    vi.stubEnv("LUSONG_BUDGET_STORE", "memory");
   });
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("answers 503 paused, without calling Open-Meteo, when no shared call count is configured", async () => {
+    vi.stubEnv("LUSONG_BUDGET_STORE", "");
+    const f = vi.fn();
+    vi.stubGlobal("fetch", f);
+    const res = await get("14.5,120.9,14.7,121.1");
+    expect(res.status).toBe(503);
+    expect((await res.json()).status).toBe("paused");
+    expect(f).not.toHaveBeenCalled();
   });
 
   it("answers 200 with the reply shape and a five-minute public cache", async () => {
