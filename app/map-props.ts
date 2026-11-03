@@ -30,7 +30,9 @@ export function tripMapProps(input: { demo: { from: Point; to: Point } | null; d
             { at: draft.trip.home, label: "Home" },
             { at: draft.trip.work, label: "Work" },
           ]
-        : [];
+        : draft.work
+          ? [{ at: draft.work, label: "Work" }]
+          : [];
   const frame = result ? [...result.route.line, ...(result.detour?.line ?? [])] : null;
   return {
     ends,

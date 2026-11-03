@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clearTrip, createTripStore, loadTrip, saveTrip, startTrip, tapTrip, type TripStorage } from "./trip";
+import { clearTrip, createTripStore, loadTrip, pickTrip, saveTrip, startTrip, tapTrip, type TripStorage } from "./trip";
 
 const BANILAD = { lat: 10.346, lon: 123.911 };
 const IT_PARK = { lat: 10.3307, lon: 123.9058 };
@@ -139,5 +139,34 @@ describe("the same trip open in two tabs", () => {
     otherTab(events, () => saveTrip(phone, { home: IT_PARK, work: BANILAD }));
     expect(store.get()).toEqual({ home: IT_PARK, work: BANILAD });
     expect(told).toBe(1);
+  });
+});
+
+describe("picking your trip in the From and To boxes", () => {
+  it("From then To sets the trip, and To then From does too", () => {
+    const fromFirst = pickTrip(startTrip(null), "from", BANILAD);
+    expect(fromFirst).toEqual({ draft: { step: "work", home: BANILAD }, outside: false });
+    expect(pickTrip(fromFirst.draft, "to", IT_PARK).draft).toEqual({ step: "set", trip: { home: BANILAD, work: IT_PARK } });
+    const toFirst = pickTrip(startTrip(null), "to", IT_PARK);
+    expect(toFirst).toEqual({ draft: { step: "home", work: IT_PARK }, outside: false });
+    expect(pickTrip(toFirst.draft, "from", BANILAD).draft).toEqual({ step: "set", trip: { home: BANILAD, work: IT_PARK } });
+  });
+
+  it("changing one end of a set trip keeps the other", () => {
+    const set = startTrip({ home: BANILAD, work: IT_PARK });
+    const mabolo = { lat: 10.3143, lon: 123.9147 };
+    expect(pickTrip(set, "from", mabolo).draft).toEqual({ step: "set", trip: { home: mabolo, work: IT_PARK } });
+    expect(pickTrip(set, "to", mabolo).draft).toEqual({ step: "set", trip: { home: BANILAD, work: mabolo } });
+  });
+
+  it("a place outside the trip bound changes nothing and says so", () => {
+    const manila = { lat: 14.5547, lon: 121.0244 };
+    const set = startTrip({ home: BANILAD, work: IT_PARK });
+    expect(pickTrip(set, "to", manila)).toEqual({ draft: set, outside: true });
+  });
+
+  it("a map tap after only To was picked fills From", () => {
+    const toFirst = pickTrip(startTrip(null), "to", IT_PARK).draft;
+    expect(tapTrip(toFirst, BANILAD).draft).toEqual({ step: "set", trip: { home: BANILAD, work: IT_PARK } });
   });
 });
