@@ -16,6 +16,7 @@
     "@vercel/blob": "2.3.0",
     "leaflet": "1.9.4",
     "next": "16.4.3",
+    "ogg-opus-decoder": "1.7.5",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "sharp": "0.35.5"
