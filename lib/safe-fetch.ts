@@ -10,11 +10,11 @@ import { USER_AGENT } from "./advisory";
  * Fetches a page the sweep's model named, without letting it reach anything but a public HTTPS host on the allowlist
  * (disposition S4P-4). Every address a name resolves to is checked, the whole host is refused if any is private, and the
  * connection is handed the address that was checked, so a second resolution can't swap it (DNS rebinding). The hostname
- * still drives SNI and the certificate check. Each redirect is a new request through the same checks; one deadline and
- * one decoded-byte limit cover the whole chain.
+ * still drives SNI and the certificate check. A redirect is refused, one deadline and one decoded-byte limit cover the
+ * fetch, and every way out destroys the request and the response.
  */
 
-export const SAFE_FETCH_LIMITS = { deadlineMs: 8_000, maxBytes: 512 * 1024, maxRedirects: 3 };
+export const SAFE_FETCH_LIMITS = { deadlineMs: 8_000, maxBytes: 512 * 1024 };
 
 export type Resolver = (host: string) => Promise<LookupAddress[]>;
 
@@ -165,83 +165,78 @@ function decoded(res: IncomingMessage): Readable {
   throw new Refused(`content-encoding ${encoding}`);
 }
 
-/** GET with every check above. Never throws; a refusal says why. */
+/**
+ * GET with every check above. Never throws; a refusal says why. A redirect is refused, never followed (S4D-3): the
+ * robots check and the attribution then always describe the one page fetched.
+ */
 export async function safeFetch(rawUrl: string, deps: SafeFetchDeps): Promise<SafeFetchResult> {
   const limits = { ...SAFE_FETCH_LIMITS, ...deps.limits };
   const lookup = guardedLookup(deps.resolver ?? systemResolver);
   const transport: Transport = deps.transport ?? ((options, onResponse) => httpsRequest(options, onResponse));
-  const deadline = Date.now() + limits.deadlineMs;
-  let bytes = 0;
-  let current = rawUrl;
   try {
-    for (let hop = 0; ; hop++) {
-      const url = checkUrl(current, deps.allowHost);
-      const outcome = await new Promise<{ redirect: string } | { status: number; contentType: string; body: string }>((resolve, reject) => {
-        const left = deadline - Date.now();
-        if (left <= 0) return reject(new Refused("out of time"));
-        let settled = false;
-        const finish = (fn: () => void) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          fn();
-        };
-        const req = transport(
-          {
-            protocol: "https:",
-            hostname: url.hostname,
-            port: 443,
-            path: `${url.pathname}${url.search}`,
-            method: "GET",
-            servername: url.hostname,
-            lookup: lookup as RequestOptions["lookup"],
-            headers: { "User-Agent": USER_AGENT, Accept: "text/html,application/xhtml+xml,text/plain;q=0.8", "Accept-Encoding": "gzip, deflate, br" },
-          },
-          (res) => {
+    const url = checkUrl(rawUrl, deps.allowHost);
+    const outcome = await new Promise<{ status: number; contentType: string; body: string }>((resolve, reject) => {
+      let settled = false;
+      let response: IncomingMessage | null = null;
+      // Every way out ends the request and the response, so nothing is left reading after the fetch has answered.
+      const finish = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        fn();
+      };
+      const stop = (err: unknown) =>
+        finish(() => {
+          req.destroy();
+          response?.destroy();
+          reject(err);
+        });
+      const req = transport(
+        {
+          protocol: "https:",
+          hostname: url.hostname,
+          port: 443,
+          path: `${url.pathname}${url.search}`,
+          method: "GET",
+          servername: url.hostname,
+          lookup: lookup as RequestOptions["lookup"],
+          headers: { "User-Agent": USER_AGENT, Accept: "text/html,application/xhtml+xml,text/plain;q=0.8", "Accept-Encoding": "gzip, deflate, br" },
+        },
+        (res) => {
+          try {
+            response = res;
             const status = res.statusCode ?? 0;
-            const location = res.headers.location;
-            if (status >= 300 && status < 400 && typeof location === "string") {
-              res.resume();
-              return finish(() => resolve({ redirect: new URL(location, url).href }));
-            }
-            let stream: Readable;
-            try {
-              stream = decoded(res);
-            } catch (err) {
-              req.destroy();
-              return finish(() => reject(err));
-            }
+            if (status >= 300 && status < 400) return stop(new Refused("redirected"));
+            const stream = decoded(res);
             const chunks: Buffer[] = [];
+            let bytes = 0;
             stream.on("data", (chunk: Buffer) => {
               bytes += chunk.length;
               if (bytes > limits.maxBytes) {
-                req.destroy();
                 stream.destroy();
-                finish(() => reject(new Refused(`larger than ${limits.maxBytes} bytes`)));
-                return;
+                return stop(new Refused(`larger than ${limits.maxBytes} bytes`));
               }
               chunks.push(chunk);
             });
-            stream.on("end", () =>
-              finish(() => resolve({ status, contentType: String(res.headers["content-type"] ?? ""), body: new TextDecoder().decode(Buffer.concat(chunks)) })),
-            );
-            stream.on("error", (err) => finish(() => reject(err)));
-          },
-        );
-        const timer = setTimeout(() => {
-          req.destroy(new Refused("out of time"));
-          finish(() => reject(new Refused("out of time")));
-        }, left);
-        req.on("error", (err) => finish(() => reject(err)));
-        req.end();
-      });
-      if ("redirect" in outcome) {
-        if (hop >= limits.maxRedirects) throw new Refused(`more than ${limits.maxRedirects} redirects`);
-        current = outcome.redirect;
-        continue;
-      }
-      return { ok: true, url: url.href, ...outcome };
-    }
+            stream.on("end", () => {
+              try {
+                const body = new TextDecoder().decode(Buffer.concat(chunks));
+                finish(() => resolve({ status, contentType: String(res.headers["content-type"] ?? ""), body }));
+              } catch (err) {
+                stop(err);
+              }
+            });
+            stream.on("error", stop);
+          } catch (err) {
+            stop(err);
+          }
+        },
+      );
+      const timer = setTimeout(() => stop(new Refused("out of time")), limits.deadlineMs);
+      req.on("error", stop);
+      req.end();
+    });
+    return { ok: true, url: url.href, ...outcome };
   } catch (err) {
     return { ok: false, why: err instanceof Refused ? err.message : err instanceof Error ? `${err.name}: ${err.message}` : "failed" };
   }

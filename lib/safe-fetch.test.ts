@@ -14,11 +14,16 @@ type Reply = { status?: number; headers?: Record<string, string>; body?: string 
 function network(pages: Record<string, Reply>) {
   const connectedTo: string[] = [];
   const asked: string[] = [];
+  const responses: IncomingMessage[] = [];
+  const requests: { destroyed: boolean }[] = [];
   const transport: Transport = (options, onResponse) => {
     const req = new EventEmitter() as EventEmitter & { end(): void; destroy(err?: Error): void };
     let destroyed = false;
+    const state = { destroyed: false };
+    requests.push(state);
     req.destroy = () => {
       destroyed = true;
+      state.destroyed = true;
     };
     req.end = () => {
       const lookup = options.lookup as unknown as (h: string, o: { all: boolean }, cb: (err: Error | null, a: { address: string }[]) => void) => void;
@@ -39,12 +44,13 @@ function network(pages: Record<string, Reply>) {
           })(),
         ) as unknown as IncomingMessage;
         Object.assign(res, { statusCode: reply.status ?? 200, headers: reply.headers ?? { "content-type": "text/html" } });
+        responses.push(res);
         onResponse(res);
       });
     };
     return req;
   };
-  return { transport, connectedTo, asked };
+  return { transport, connectedTo, asked, responses, requests };
 }
 
 const publicDns: Resolver = async () => [{ address: "203.0.114.10", family: 4 }];
@@ -140,30 +146,53 @@ describe("safeFetch (S4P-4, ledger #5)", () => {
     expect(net.asked).toEqual([]);
   });
 
-  it("follows a redirect on the allowlist, and refuses one off it", async () => {
+  it("refuses every redirect without a second request, whatever its Location says (S4D-3)", async () => {
     const net = network({
       "a.gov.ph/old": { status: 301, headers: { location: "https://b.gov.ph/new" } },
       "b.gov.ph/new": { body: "here" },
       "a.gov.ph/out": { status: 302, headers: { location: "https://metadata.internal/latest" } },
-      "a.gov.ph/plain": { status: 302, headers: { location: "http://b.gov.ph/new" } },
+      "a.gov.ph/none": { status: 307 },
     });
     const deps = { allowHost: allowGov, resolver: publicDns, transport: net.transport };
-    expect(await safeFetch("https://a.gov.ph/old", deps)).toMatchObject({ ok: true, url: "https://b.gov.ph/new", body: "here" });
-    expect(await safeFetch("https://a.gov.ph/out", deps)).toEqual({ ok: false, why: "metadata.internal is not on the allowlist" });
-    expect(await safeFetch("https://a.gov.ph/plain", deps)).toEqual({ ok: false, why: "not HTTPS" });
+    for (const path of ["old", "out", "none"]) expect(await safeFetch(`https://a.gov.ph/${path}`, deps)).toEqual({ ok: false, why: "redirected" });
+    expect(net.asked).toEqual(["a.gov.ph/old", "a.gov.ph/out", "a.gov.ph/none"]);
   });
 
-  it("re-checks each redirect's address: an allowed name that resolves privately is refused", async () => {
-    const net = network({ "a.gov.ph/": { status: 302, headers: { location: "https://inside.gov.ph/" } }, "inside.gov.ph/": { body: "secret" } });
-    const resolver: Resolver = async (host) => (host === "inside.gov.ph" ? [{ address: "10.0.0.1", family: 4 }] : [{ address: "203.0.114.10", family: 4 }]);
-    expect(await safeFetch("https://a.gov.ph/", { allowHost: allowGov, resolver, transport: net.transport })).toEqual({ ok: false, why: "inside.gov.ph resolves to a private address" });
-    expect(net.asked).toEqual(["a.gov.ph/"]);
+  it("a malformed Location is a refused fetch, never an uncaught exception (S4D-4)", async () => {
+    const uncaught: unknown[] = [];
+    const record = (err: unknown) => uncaught.push(err);
+    process.on("uncaughtException", record);
+    try {
+      const net = network({ "a.gov.ph/bad": { status: 302, headers: { location: "https://[" } } });
+      expect(await safeFetch("https://a.gov.ph/bad", { allowHost: allowGov, resolver: publicDns, transport: net.transport })).toEqual({ ok: false, why: "redirected" });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    } finally {
+      process.off("uncaughtException", record);
+    }
+    expect(uncaught).toEqual([]);
   });
 
-  it("stops after 3 redirects", async () => {
-    const net = network(Object.fromEntries([0, 1, 2, 3, 4].map((i) => [`a.gov.ph/${i}`, { status: 302, headers: { location: `/${i + 1}` } }])));
-    expect(await safeFetch("https://a.gov.ph/0", { allowHost: allowGov, resolver: publicDns, transport: net.transport })).toEqual({ ok: false, why: "more than 3 redirects" });
-    expect(net.asked).toHaveLength(4);
+  it("a response callback that throws resolves {ok:false} (S4D-4)", async () => {
+    const net = network({ "a.gov.ph/": { body: "x" } });
+    const throwing: Transport = (options, onResponse) =>
+      net.transport(options, (res) => {
+        Object.defineProperty(res, "headers", {
+          get() {
+            throw new TypeError("bad headers");
+          },
+        });
+        onResponse(res);
+      });
+    expect(await safeFetch("https://a.gov.ph/", { allowHost: allowGov, resolver: publicDns, transport: throwing })).toEqual({ ok: false, why: "TypeError: bad headers" });
+  });
+
+  it("an unread redirect body is destroyed, request and response, not drained (S4D-4)", async () => {
+    const endless = Array.from({ length: 1_000 }, () => Buffer.alloc(64 * 1024, "r"));
+    const net = network({ "a.gov.ph/loop": { status: 302, headers: { location: "/loop" }, chunks: endless } });
+    expect(await safeFetch("https://a.gov.ph/loop", { allowHost: allowGov, resolver: publicDns, transport: net.transport })).toEqual({ ok: false, why: "redirected" });
+    expect(net.responses).toHaveLength(1);
+    expect(net.responses[0].destroyed).toBe(true);
+    expect(net.requests.map((r) => r.destroyed)).toEqual([true]);
   });
 
   it("refuses an oversize page, counting decoded bytes: a small gzip that inflates past 512 KB too", async () => {

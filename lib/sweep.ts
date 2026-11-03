@@ -396,6 +396,7 @@ async function admitAll(deps: SweepDeps, limits: SweepLimits, deadline: number, 
         } else {
           summary.refused += 1;
           outcome = `refused: ${result.why}`;
+          console.info(`sweep: candidate ${i} refused: ${result.why}`);
         }
       } catch (err) {
         console.error("sweep: admission failed:", err instanceof Error ? err.message : err);
