@@ -153,7 +153,11 @@ export default function TripMap({
     m.on("click", (e: L.LeafletMouseEvent) => tap.current?.({ lat: e.latlng.lat, lon: e.latlng.lng }));
     groups.current = { areas: L.layerGroup(), routes: L.layerGroup(), ends: L.layerGroup().addTo(m), reports: L.layerGroup() };
     map.current = m;
+    // The box can be laid out after Leaflet first measures it (the stylesheet arrives with the map's own chunk).
+    const resized = new ResizeObserver(() => m.invalidateSize());
+    resized.observe(box.current!);
     return () => {
+      resized.disconnect();
       m.remove();
       map.current = null;
       groups.current = null;
@@ -199,6 +203,7 @@ export default function TripMap({
   useEffect(() => {
     const points: Point[] | null = JSON.parse(frameKey);
     if (!map.current) return;
+    map.current.invalidateSize();
     if (!points) map.current.setView(latLng(PHILIPPINES_VIEW.centre), PHILIPPINES_VIEW.zoom);
     // A single end would otherwise zoom to the street's last tile level.
     else

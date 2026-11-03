@@ -17,13 +17,13 @@ type State =
   | { step: "failed"; message: string };
 
 const TONES = {
-  block: "border-red-300 bg-red-50 text-red-900 dark:border-red-900 dark:bg-red-950 dark:text-red-100",
-  other: "border-zinc-300 bg-zinc-50 text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100",
+  block: "border-wait bg-wait/10 text-ink",
+  other: "border-line bg-surface text-ink",
 };
 
 function Heard({ report, duplicate }: { report: VoiceReportView; duplicate: boolean }) {
   return (
-    <div className={`space-y-2 rounded-2xl border px-5 py-4 ${report.counts && report.role === "block" ? TONES.block : TONES.other}`} data-testid="voice-reading">
+    <div className={`space-y-2 rounded-card border-2 px-5 py-4 ${report.counts && report.role === "block" ? TONES.block : TONES.other}`} data-testid="voice-reading">
       <p className="text-sm font-medium uppercase tracking-wide opacity-75">Lusong heard your voice note</p>
       <p className="text-lg font-semibold">{report.heard}</p>
       {report.saidPlace && <p className="text-[15px]">The place Lusong heard: {report.saidPlace}</p>}
@@ -121,25 +121,25 @@ export default function VoiceNote() {
   return (
     <div className="space-y-3">
       <fieldset disabled={state.step === "recording" || working} className="space-y-2">
-        <legend className="text-[15px] font-medium text-zinc-800 dark:text-zinc-200">Which language will you speak?</legend>
+        <legend className="text-[15px] font-medium text-ink">Which language will you speak?</legend>
         <div className="flex gap-3">
           {VOICE_LANGUAGES.map((l) => (
             <label
               key={l.value}
-              className="flex flex-1 items-center gap-2 rounded-xl border border-zinc-300 px-4 py-3 text-[15px] has-[:checked]:border-sky-600 has-[:checked]:bg-sky-50 dark:border-zinc-700 dark:has-[:checked]:bg-sky-950"
+              className="flex min-h-11 flex-1 items-center gap-2 rounded-control border border-line bg-surface px-4 py-3 text-[15px] has-[:checked]:border-brand has-[:checked]:bg-brand/10"
             >
               <input type="radio" name="voice-language" value={l.value} checked={language === l.value} onChange={() => setLanguage(l.value)} />
               {l.label}
             </label>
           ))}
         </div>
-        {!BISAYA_VOICE_ENABLED && <p className="text-sm text-zinc-600 dark:text-zinc-400">Bisaya voice notes aren&apos;t supported yet.</p>}
+        {!BISAYA_VOICE_ENABLED && <p className="text-sm text-ink-2">Bisaya voice notes aren&apos;t supported yet.</p>}
       </fieldset>
       {state.step === "recording" ? (
         <button
           type="button"
           onClick={() => void finish()}
-          className="flex w-full items-center justify-between gap-3 rounded-2xl bg-red-600 px-5 py-4 text-lg font-semibold text-white shadow-sm transition hover:bg-red-700"
+          className="flex min-h-14 w-full items-center justify-between gap-3 rounded-control bg-wait px-5 text-lg font-semibold text-on-wait shadow-sm transition hover:brightness-110"
         >
           <span>Stop and send</span>
           <span className="tabular-nums" aria-live="polite" aria-label={`${secondsLeft} seconds left`}>
@@ -151,22 +151,22 @@ export default function VoiceNote() {
           type="button"
           disabled={working || !language}
           onClick={() => void record()}
-          className="w-full rounded-2xl border-2 border-sky-600 px-5 py-4 text-lg font-semibold text-sky-700 transition hover:bg-sky-50 disabled:opacity-60 dark:text-sky-300 dark:hover:bg-sky-950"
+          className="min-h-14 w-full rounded-control border-2 border-brand px-5 text-lg font-semibold text-brand transition hover:bg-brand/10 disabled:opacity-60"
         >
           {state.step === "locating" ? "Finding where you are…" : state.step === "sending" ? "Listening to your note…" : "Record a voice note (up to 30 s)"}
         </button>
       )}
       {state.step === "idle" && (
-        <p className="text-[15px] leading-snug text-zinc-600 dark:text-zinc-400">
+        <p className="text-[15px] leading-snug text-ink-2">
           Pick the language, then say the street and how deep the water is. A voice note can warn others a street is not
           passable, never that it is clear. It is sent to Meta&apos;s Model API (Muse Voice Transcribe and Muse Spark) to be
           read; Lusong keeps the place you name and what you said about the water, not the recording or the rest of what you said.
         </p>
       )}
-      {state.step === "recording" && <p className="text-center text-zinc-600 dark:text-zinc-400">Recording… it stops by itself at 30 seconds.</p>}
+      {state.step === "recording" && <p className="text-center text-ink-2">Recording… it stops by itself at 30 seconds.</p>}
       {state.step === "done" && <Heard report={state.report} duplicate={state.duplicate} />}
       {state.step === "failed" && (
-        <p className="rounded-2xl border border-red-300 bg-red-50 px-5 py-4 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+        <p className="rounded-card border border-wait bg-wait/10 px-5 py-4 font-medium text-ink">
           {state.message}
         </p>
       )}

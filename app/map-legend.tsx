@@ -1,13 +1,16 @@
 import { CREDITS_LINE, SAMPLES_LINE, TILES_LINE } from "./credits";
 import type { LayerId, LayerToggles, LegendRow } from "./map-layers";
 
+const ROUTE_SWATCH = <span aria-hidden className="block h-1.5 w-8 rounded bg-brand" />;
+const BOTH_ROUTES_SWATCH = (
+  <span aria-hidden className="flex w-8 flex-col gap-1">
+    <span className="block h-1.5 rounded bg-brand/50" />
+    <span className="block border-t-4 border-dashed border-another" />
+  </span>
+);
+
 const SWATCHES: Record<LegendRow["id"], React.ReactNode> = {
-  routes: (
-    <span aria-hidden className="flex w-8 flex-col gap-1">
-      <span className="block h-1.5 rounded bg-brand" />
-      <span className="block border-t-4 border-dashed border-another" />
-    </span>
-  ),
+  routes: ROUTE_SWATCH,
   reports: (
     <span aria-hidden className="flex w-8 gap-1">
       <span className="block h-3 w-3 rounded-full bg-wait" />
@@ -50,7 +53,7 @@ export function MapLegend({
                 disabled={!row.available}
                 onChange={() => toggle && onToggle(row.id as LayerId)}
               />
-              <span className="mt-0.5 shrink-0">{SWATCHES[row.id]}</span>
+              <span className="mt-0.5 shrink-0">{row.id === "routes" && row.label !== "Route" ? BOTH_ROUTES_SWATCH : SWATCHES[row.id]}</span>
               <span className="min-w-0 space-y-0.5">
                 <label htmlFor={inputId} className="block font-semibold">
                   {row.label}

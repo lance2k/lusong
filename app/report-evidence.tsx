@@ -38,9 +38,9 @@ export function ReportEvidence({ r, onShow }: { r: PageReport; onShow?: () => vo
   return (
     <li className="space-y-1 px-4 py-3">
       <p className="flex flex-wrap items-center gap-2">
-        {r.sample && <span className="rounded bg-zinc-200 px-1.5 py-0.5 text-xs font-semibold uppercase dark:bg-zinc-700">Sample</span>}
+        {r.sample && <span className="rounded bg-ink/10 px-1.5 py-0.5 text-xs font-semibold uppercase">Sample</span>}
         <span className="font-medium">{r.place}</span>
-        <span className="text-zinc-500">{r.age}</span>
+        <span className="text-ink-2">{r.age}</span>
       </p>
       {r.photoUrl && (
         // A blob-store URL of unknown size: next/image would need the store's host configured before it exists.
@@ -49,11 +49,11 @@ export function ReportEvidence({ r, onShow }: { r: PageReport; onShow?: () => vo
       )}
       {r.depth && <p>Water {r.depth}.</p>}
       {r.passability && <p>{r.passability}.</p>}
-      <p className="text-zinc-600 dark:text-zinc-400">{status}</p>
+      <p className="text-ink-2">{status}</p>
       {r.sample && (
-        <p className="text-sm text-zinc-500">
+        <p className="text-sm text-ink-2">
           Sample, not a report from this street. Where the photo was really taken: {r.origin}. {r.credit}.{" "}
-          <a className="text-sky-700 underline dark:text-sky-400" href={r.sourceUrl ?? undefined}>
+          <a className="text-brand underline" href={r.sourceUrl ?? undefined}>
             See the photo
           </a>
         </p>

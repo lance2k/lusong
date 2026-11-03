@@ -37,6 +37,8 @@ const VIEW_TITLES: Record<SheetView, string> = {
   about: "About Lusong",
   legend: "Map layers",
 };
+const WHERE_HEADING = "where-heading";
+const VIEW_HEADING = "view-heading";
 const VIEW_DETENT: Record<SheetView, Detent> = { report: "half", check: "full", watch: "half", about: "half", legend: "half" };
 
 const locationListeners = new Set<() => void>();
@@ -82,7 +84,6 @@ function Shell() {
   const [focusPin, setFocusPin] = useState<{ id: string; n: number } | null>(null);
   const [focusSignal, setFocusSignal] = useState(0);
   const body = useRef<HTMLDivElement>(null);
-  const whereHeading = useRef<HTMLHeadingElement>(null);
   const viewHeading = useRef<HTMLHeadingElement>(null);
   const opener = useRef<HTMLElement | null>(null);
   const shownView = useRef<SheetView | null>(null);
@@ -99,7 +100,7 @@ function Shell() {
   useEffect(() => {
     if (sheetView) viewHeading.current?.focus();
     else if (shownView.current) {
-      const back = opener.current && document.contains(opener.current) ? opener.current : whereHeading.current;
+      const back = opener.current && document.contains(opener.current) ? opener.current : document.getElementById(WHERE_HEADING);
       back?.focus();
       opener.current = null;
     }
@@ -207,11 +208,11 @@ function Shell() {
         </button>
       )}
 
-      <Sheet detent={desktop ? "full" : detent} onDetent={setDetent} labelledBy={sheetView ? "view-heading" : "where-heading"}>
+      <Sheet detent={desktop ? "full" : detent} onDetent={setDetent} labelledBy={sheetView ? VIEW_HEADING : WHERE_HEADING}>
         <SheetBody ref={body}>
           {sheetView && (
             <div>
-              <SheetHeader id="view-heading" ref={viewHeading} title={VIEW_TITLES[sheetView]} onBack={closeView} />
+              <SheetHeader id={VIEW_HEADING} ref={viewHeading} title={VIEW_TITLES[sheetView]} onBack={closeView} />
               {sheetView === "report" && <ReportView />}
               {sheetView === "check" && <CheckView />}
               {sheetView === "watch" && <WatchView trip={savedTrip} />}
@@ -224,7 +225,7 @@ function Shell() {
           {/* Kept mounted under a view, so a half-typed place or a running check survives a trip to Report and back. */}
           <div hidden={sheetView !== null} className="space-y-5 pt-1">
             <WhereTo
-              headingId="where-heading"
+              headingId={WHERE_HEADING}
               inputs={state.inputs}
               change={change}
               own={own}
