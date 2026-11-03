@@ -29,9 +29,10 @@ const callWatch: WatchCall = async (body) => {
   return { status: res.status, body: await res.json().catch(() => null) };
 };
 
-const button = "min-h-11 rounded-full border border-zinc-300 px-4 text-sm font-medium disabled:opacity-60 dark:border-zinc-700";
+const button = "min-h-11 rounded-chip border border-line bg-surface px-4 text-sm font-medium text-ink disabled:opacity-60";
+const timeBox = "ml-2 min-h-11 rounded-control border border-line bg-surface px-2 text-ink";
 
-/** The watcher's switch, under the rider's own trip: on for a PHT window, linked to Telegram, and off. */
+/** The watcher's switch for the rider's own trip: on for a PHT window, linked to Telegram, and off. With no trip set yet, it only says what the watcher does. */
 export function WatcherPanel({ trip }: { trip: Trip | null }) {
   const watcher = useSyncExternalStore(subscribe, savedWatcher, () => null);
   const [hours, setHours] = useState<WindowInput>({ start: "06:00", end: "08:00" });
@@ -62,8 +63,6 @@ export function WatcherPanel({ trip }: { trip: Trip | null }) {
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [token]);
-
-  if (!watcher && !trip) return null;
 
   async function act(work: () => Promise<void>) {
     setBusy(true);
@@ -107,47 +106,51 @@ export function WatcherPanel({ trip }: { trip: Trip | null }) {
     });
 
   return (
-    <div className="space-y-2 rounded-2xl border border-zinc-200 p-4 dark:border-zinc-800">
-      <p className="font-medium">Watcher on Telegram</p>
+    <div className="space-y-3 text-[15px]">
       {!watcher && (
         <>
-          <p className="text-zinc-600 dark:text-zinc-400">
+          <p className="text-ink-2">
             Lusong checks this trip every 10 minutes in your window and messages you when the window opens and whenever the
             answer changes. It checks as if you hadn&apos;t tapped &ldquo;raining here&rdquo;. Lusong also messages you once
             for each PAGASA advisory, road closure or disaster-office post it finds that touches or passes near your trip,
             and for nationwide ones, whatever the window.
             It tries to send; it can&apos;t promise you receive it.
           </p>
+          {trip && (
+          <>
           <div className="flex flex-wrap items-end gap-3">
-            <label className="text-sm">
+            <label className="text-label text-ink-2">
               From (PHT)
               <input
                 type="time"
                 step={600}
                 value={hours.start}
                 onChange={(e) => setHours({ ...hours, start: e.target.value })}
-                className="ml-2 min-h-11 rounded-lg border border-zinc-300 px-2 dark:border-zinc-700 dark:bg-zinc-900"
+                className={timeBox}
               />
             </label>
-            <label className="text-sm">
+            <label className="text-label text-ink-2">
               to
               <input
                 type="time"
                 step={600}
                 value={hours.end}
                 onChange={(e) => setHours({ ...hours, end: e.target.value })}
-                className="ml-2 min-h-11 rounded-lg border border-zinc-300 px-2 dark:border-zinc-700 dark:bg-zinc-900"
+                className={timeBox}
               />
             </label>
           </div>
           <button type="button" disabled={busy} onClick={switchOn} className={button}>
             Switch the watcher on
           </button>
+          </>
+          )}
         </>
       )}
       {watcher && (
         <>
-          <p>
+          <p className="inline-flex items-center gap-2 rounded-chip border border-line bg-surface px-3 py-1 font-medium">
+            <span aria-hidden className={`inline-block h-2.5 w-2.5 rounded-full ${status === "linked" ? "bg-go" : "bg-unknown"}`} />
             {status === "linked"
               ? `On: Lusong messages you on Telegram between ${watcher.window.start} and ${watcher.window.end} PHT.`
               : `On for ${watcher.window.start} to ${watcher.window.end} PHT, once you link Telegram.`}
@@ -162,11 +165,11 @@ export function WatcherPanel({ trip }: { trip: Trip | null }) {
               <button type="button" disabled={busy} onClick={() => relink(watcher)} className={button}>
                 Get a new Telegram link
               </button>
-              <p className="text-sm text-zinc-500">A link works once, for 15 minutes.</p>
+              <p className="text-sm text-ink-2">A link works once, for 15 minutes.</p>
             </div>
           )}
           {!watchesTrip(watcher, trip) && (
-            <p className="text-amber-800 dark:text-amber-300">
+            <p className="text-warn-ink">
               It is watching the trip you had when you switched it on. To watch this one, switch it off and on again.
             </p>
           )}
@@ -176,11 +179,11 @@ export function WatcherPanel({ trip }: { trip: Trip | null }) {
         </>
       )}
       {message && (
-        <p role="status" className="font-medium text-amber-800 dark:text-amber-300">
+        <p role="status" className="font-medium text-warn-ink">
           {message}
         </p>
       )}
-      <p className="text-sm text-zinc-500">
+      <p className="text-small text-ink-2">
         While it is on, Lusong&apos;s server keeps your trip&apos;s home and work points, your window and your Telegram chat.
         Switching it off deletes them; so does 30 days without opening Lusong.
       </p>

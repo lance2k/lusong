@@ -8,6 +8,7 @@ import { COMMUTE_RESERVE_MICROS, type ScheduledCheck } from "./commute-handler";
 import { readBody } from "./deadline";
 import { inServerTripBound } from "./province-index";
 import { endsTooFarApart } from "./router";
+import type { TelegramReports } from "./telegram-reports";
 import { LINK_CODE_TTL_MS, watchStoreFromEnv, type WatchRecord, type WatchStore, type WatchTrip } from "./watch-store";
 import { runTick, switchOff, type TickSummary } from "./watch-tick";
 import { hhmm, parseWindow } from "./watch-window";
@@ -152,7 +153,13 @@ interface TelegramUpdate {
  * (setWebhook's secret_token); every other call is refused. Any 2XX ends Telegram's retries, so only a store failure is
  * answered with an error, to have the update sent again.
  */
-export function makeTelegramWebhook(deps: { secret: () => string | undefined; store: () => WatchStore | null; channel: () => Channel | null }) {
+export function makeTelegramWebhook(deps: {
+  secret: () => string | undefined;
+  store: () => WatchStore | null;
+  channel: () => Channel | null;
+  /** Photo and voice reports (lib/telegram-reports.ts); without it, only /start is answered. */
+  reports?: () => TelegramReports | null;
+}) {
   return async function POST(request: Request): Promise<Response> {
     const secret = deps.secret();
     if (!secret) return fail(503, NOT_SET_UP);
@@ -168,6 +175,8 @@ export function makeTelegramWebhook(deps: { secret: () => string | undefined; st
     } catch {
       update = null;
     }
+    const reported = await deps.reports?.()?.handle(update);
+    if (reported) return reported;
     const message = update?.message;
     const chatId = message?.chat?.id;
     const start = typeof message?.text === "string" ? START.exec(message.text) : null;
