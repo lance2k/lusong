@@ -1,13 +1,12 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
-import { builtInMatches, MAX_QUERY, MIN_QUERY, placeQuery, type Place, type PlacesStatus } from "../lib/built-in-places";
-import { inTripBound, TRIP_AREA_NAME, TRIP_BOUND } from "../lib/trip-bound";
+import { useEffect, useId, useReducer, useRef, useState } from "react";
+import { MAX_QUERY, MIN_QUERY, type Place, type PlacesStatus } from "../lib/built-in-places";
+import { inTripBound, TRIP_AREA_NAME } from "../lib/trip-bound";
 import { phoneLocation } from "./phone-location";
+import { boxReducer, initialBox, isOpen, searchFor, shownValue, type Lookup } from "./place-box";
 
 const DEBOUNCE_MS = 300;
-
-type Lookup = { status: "idle" | "searching" | PlacesStatus; places: Place[] };
 
 const STATUS_LINE: Partial<Record<Lookup["status"], string>> = {
   busy: "Place search is busy right now. Pick a suggested place, or tap the map.",
@@ -29,22 +28,22 @@ export interface PlaceSearchProps {
 export function PlaceSearch({ label, chosen, onPick, myLocation, bias, onLocated }: PlaceSearchProps) {
   const id = useId();
   const listId = `${id}-list`;
-  const [text, setText] = useState("");
-  const [editing, setEditing] = useState(false);
-  const [lookup, setLookup] = useState<Lookup>({ status: "idle", places: [] });
-  const [active, setActive] = useState(-1);
+  const [box, send] = useReducer(boxReducer, initialBox);
   const [note, setNote] = useState<string | null>(null);
   const [locating, setLocating] = useState(false);
-  const inflight = useRef<AbortController | null>(null);
-
+  const input = useRef<HTMLInputElement>(null);
+  const query = searchFor(box);
+  const fallback = useRef(box.lookup.places);
   useEffect(() => {
-    if (!editing) return;
-    const q = placeQuery(text);
-    if (!q) return;
+    fallback.current = box.lookup.places;
+  });
+
+  // A newer query aborts the older request, so a slow reply never replaces a newer one.
+  useEffect(() => {
+    if (!query) return;
     const controller = new AbortController();
     const timer = setTimeout(async () => {
-      inflight.current = controller;
-      const params = new URLSearchParams({ q });
+      const params = new URLSearchParams({ q: query });
       if (bias) {
         params.set("lat", String(bias.lat));
         params.set("lon", String(bias.lon));
@@ -53,31 +52,20 @@ export function PlaceSearch({ label, chosen, onPick, myLocation, bias, onLocated
         const res = await fetch(`/api/places?${params}`, { signal: controller.signal });
         const body = (await res.json()) as { status?: PlacesStatus; places?: Place[] };
         if (controller.signal.aborted) return;
-        setLookup({ status: body.status ?? "down", places: Array.isArray(body.places) ? body.places : [] });
+        send({ type: "results", lookup: { status: body.status ?? "down", places: Array.isArray(body.places) ? body.places : [] } });
       } catch {
         if (controller.signal.aborted) return;
-        setLookup((prev) => ({ status: "down", places: prev.places }));
+        send({ type: "results", lookup: { status: "down", places: fallback.current } });
       }
     }, DEBOUNCE_MS);
     return () => {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [text, editing, bias]);
-
-  function type(value: string) {
-    setText(value);
-    setActive(-1);
-    const q = placeQuery(value);
-    // Built-in places show at once; Photon's arrive after the pause.
-    setLookup(q ? { status: "searching", places: builtInMatches(q, TRIP_BOUND) } : { status: "idle", places: [] });
-  }
+  }, [query, bias]);
 
   function pick(place: Place) {
-    inflight.current?.abort();
-    setEditing(false);
-    setText("");
-    setLookup({ status: "idle", places: [] });
+    send({ type: "picked" });
     setNote(null);
     onPick(place);
   }
@@ -100,24 +88,20 @@ export function PlaceSearch({ label, chosen, onPick, myLocation, bias, onLocated
     }
   }
 
-  const open = editing && lookup.places.length > 0;
-  const q = placeQuery(text);
-  const empty = editing && q && lookup.status === "ok" && lookup.places.length === 0;
-  const statusLine = editing ? STATUS_LINE[lookup.status] : undefined;
+  const open = isOpen(box);
+  const { lookup, active } = box;
+  const empty = query && lookup.status === "ok" && lookup.places.length === 0;
+  const statusLine = box.editing ? STATUS_LINE[lookup.status] : undefined;
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "ArrowDown" && open) {
+    if ((e.key === "ArrowDown" || e.key === "ArrowUp") && open) {
       e.preventDefault();
-      setActive((i) => (i + 1) % lookup.places.length);
-    } else if (e.key === "ArrowUp" && open) {
-      e.preventDefault();
-      setActive((i) => (i <= 0 ? lookup.places.length - 1 : i - 1));
+      send({ type: "move", by: e.key === "ArrowDown" ? 1 : -1 });
     } else if (e.key === "Enter" && open && active >= 0) {
       e.preventDefault();
       pick(lookup.places[active]);
     } else if (e.key === "Escape") {
-      setEditing(false);
-      setText("");
+      send({ type: "escape" });
     }
   }
 
@@ -129,6 +113,7 @@ export function PlaceSearch({ label, chosen, onPick, myLocation, bias, onLocated
       <div className="mt-1 flex gap-2">
         <input
           id={`${id}-input`}
+          ref={input}
           type="text"
           role="combobox"
           aria-expanded={open}
@@ -136,15 +121,17 @@ export function PlaceSearch({ label, chosen, onPick, myLocation, bias, onLocated
           aria-autocomplete="list"
           aria-activedescendant={open && active >= 0 ? `${id}-opt-${active}` : undefined}
           autoComplete="off"
+          spellCheck={false}
           maxLength={MAX_QUERY}
           placeholder={chosen ?? `Search a place in ${TRIP_AREA_NAME}`}
-          value={editing ? text : (chosen ?? "")}
-          onFocus={() => {
-            setEditing(true);
-            type("");
-          }}
-          onBlur={() => setTimeout(() => setEditing(false), 150)}
-          onChange={(e) => type(e.target.value)}
+          value={shownValue(box, chosen)}
+          onFocus={() => send({ type: "focus" })}
+          onBlur={() =>
+            setTimeout(() => {
+              if (document.activeElement !== input.current) send({ type: "blur" });
+            }, 150)
+          }
+          onChange={(e) => send({ type: "type", value: e.target.value })}
           onKeyDown={onKeyDown}
           className="min-h-11 w-full rounded-xl border border-zinc-300 bg-white px-3 text-base dark:border-zinc-700 dark:bg-zinc-900"
         />
@@ -184,8 +171,8 @@ export function PlaceSearch({ label, chosen, onPick, myLocation, bias, onLocated
         ))}
       </ul>
       <p className="mt-1 text-sm text-zinc-500" aria-live="polite">
-        {editing && text.length > 0 && text.trim().length < MIN_QUERY && `Type at least ${MIN_QUERY} letters.`}
-        {lookup.status === "searching" && editing && q && "Searching…"}
+        {box.editing && box.text.length > 0 && box.text.trim().length < MIN_QUERY && `Type at least ${MIN_QUERY} letters.`}
+        {lookup.status === "searching" && query && "Searching…"}
         {empty && `No place by that name in ${TRIP_AREA_NAME}. Try another name, or tap the map.`}
         {statusLine}
         {note}

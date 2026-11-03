@@ -17,7 +17,7 @@ import {
 import type { Meter } from "./meta";
 import { fetchRoute, ROUTE_WORST_MS, type Route, type RouteResult, type ValhallaGate } from "./router";
 import { beforeDeadline, readBody } from "./deadline";
-import { inMetroCebu } from "./metro-cebu";
+import { inTripBound } from "./trip-bound";
 import { reportStoreFromEnv, toReport, type ReportStore } from "./report-store";
 import { DEMO_TRIPS, sampleReports, scenariosFor, type DemoTripId, type SampleReport, type ScenarioId } from "./samples";
 import {
@@ -181,7 +181,7 @@ function pointFrom(value: unknown): Point | null {
   if (typeof value !== "object" || value === null) return null;
   const { lat, lon } = value as Record<string, unknown>;
   if (typeof lat !== "number" || typeof lon !== "number" || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-  return inMetroCebu({ lat, lon }) ? { lat, lon } : null;
+  return inTripBound({ lat, lon }) ? { lat, lon } : null;
 }
 
 function parseReal(body: unknown): RealRequest | null {

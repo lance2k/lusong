@@ -4,9 +4,9 @@ import {
   BUILT_IN_PLACES,
   builtInMatches,
   makePhotonGate,
-  MemoryCounterStore,
+  MemoryWaitQueue,
+  UpstashWaitQueue,
   PHOTON_QUEUE_KEY,
-  PHOTON_SLOT_KEY,
   photonUrl,
   PlaceCache,
   placeQuery,
@@ -112,7 +112,7 @@ describe("the request to Photon", () => {
 describe("the shared Photon queue", () => {
   it("lets one caller a second through across instances", async () => {
     const slots = new MemorySlotStore();
-    const queue = new MemoryCounterStore();
+    const queue = new MemoryWaitQueue();
     const a = makePhotonGate(slots, queue, { waitMs: 3_000, pollMs: 50 });
     const b = makePhotonGate(slots, queue, { waitMs: 3_000, pollMs: 50 });
     const t0 = performance.now();
@@ -122,33 +122,59 @@ describe("the shared Photon queue", () => {
   });
 
   it("answers busy at once when 20 callers already wait", async () => {
-    const queue = new MemoryCounterStore();
-    await queue.add(PHOTON_QUEUE_KEY, 20, 10_000);
+    const queue = new MemoryWaitQueue();
+    const now = Date.now();
+    for (let i = 0; i < 20; i++) await queue.join(PHOTON_QUEUE_KEY, `w${i}`, now, now + 60_000);
     const claim = vi.fn(async () => true);
-    const gate = makePhotonGate({ claim }, queue);
-    expect(await gate.acquire()).toBe("busy");
+    expect(await makePhotonGate({ claim }, queue).acquire()).toBe("busy");
     expect(claim).not.toHaveBeenCalled();
-    expect(await queue.add(PHOTON_QUEUE_KEY, 0, 10_000)).toBe(20);
+    expect(await queue.join(PHOTON_QUEUE_KEY, "probe", Date.now(), Date.now() + 1)).toBe(21);
   });
 
-  it("gives up after its wait and frees its place in the queue", async () => {
+  it("an abandoned waiter's place frees at its own expiry, however much traffic keeps arriving", async () => {
+    const queue = new MemoryWaitQueue();
+    const t = Date.now();
+    for (let i = 0; i < 20; i++) await queue.join(PHOTON_QUEUE_KEY, `dead${i}`, t, t + 200);
     const slots = new MemorySlotStore();
-    await slots.claim(PHOTON_SLOT_KEY, 60_000);
-    const queue = new MemoryCounterStore();
-    const gate = makePhotonGate(slots, queue, { waitMs: 300, pollMs: 50 });
-    const t0 = performance.now();
+    const gate = makePhotonGate(slots, queue, { waitMs: 100, pollMs: 20 });
     expect(await gate.acquire()).toBe("busy");
-    expect(performance.now() - t0).toBeLessThan(1_000);
+    await new Promise((r) => setTimeout(r, 120));
+    expect(await gate.acquire()).toBe("busy");
+    await new Promise((r) => setTimeout(r, 100));
+    expect(await gate.acquire()).toBe("ok");
+  });
+
+  it("a waiter that is let through or gives up leaves the queue", async () => {
+    const queue = new MemoryWaitQueue();
+    const slots = new MemorySlotStore();
+    expect(await makePhotonGate(slots, queue, { waitMs: 300, pollMs: 50 }).acquire()).toBe("ok");
+    expect(await makePhotonGate(slots, queue, { waitMs: 300, pollMs: 50 }).acquire()).toBe("busy");
     await new Promise((r) => setTimeout(r, 0));
-    expect(await queue.add(PHOTON_QUEUE_KEY, 0, 10_000)).toBe(0);
+    expect(await queue.join(PHOTON_QUEUE_KEY, "probe", Date.now(), Date.now() + 1)).toBe(1);
+  });
+
+  it("answers within its wait when joining the queue stalls", async () => {
+    const stalled = { join: () => new Promise<number>(() => {}), leave: async () => {} };
+    const t0 = performance.now();
+    expect(await makePhotonGate(new MemorySlotStore(), stalled, { waitMs: 300 }).acquire()).toBe("busy");
+    expect(performance.now() - t0).toBeLessThan(500);
+  });
+
+  it("answers within its wait when the slot store stalls, and never uses a late grant", async () => {
+    const stalled = { claim: () => new Promise<boolean>(() => {}) };
+    const t0 = performance.now();
+    expect(await makePhotonGate(stalled, new MemoryWaitQueue(), { waitMs: 300, pollMs: 50 }).acquire()).toBe("busy");
+    expect(performance.now() - t0).toBeLessThan(500);
+    const late = { claim: () => new Promise<boolean>((r) => setTimeout(() => r(true), 400)) };
+    expect(await makePhotonGate(late, new MemoryWaitQueue(), { waitMs: 300, pollMs: 50 }).acquire()).toBe("busy");
   });
 
   it("is unavailable without its stores, or when they fail", async () => {
-    expect(await makePhotonGate(null, new MemoryCounterStore()).acquire()).toBe("unavailable");
-    const broken = { add: async () => Promise.reject(new Error("down")) };
+    expect(await makePhotonGate(null, new MemoryWaitQueue()).acquire()).toBe("unavailable");
+    const broken = { join: async () => Promise.reject(new Error("down")), leave: async () => {} };
     expect(await makePhotonGate(new MemorySlotStore(), broken).acquire()).toBe("unavailable");
     const brokenSlots = { claim: async () => Promise.reject(new Error("down")) };
-    expect(await makePhotonGate(brokenSlots, new MemoryCounterStore()).acquire()).toBe("unavailable");
+    expect(await makePhotonGate(brokenSlots, new MemoryWaitQueue()).acquire()).toBe("unavailable");
   });
 });
 
@@ -219,5 +245,18 @@ describe("searching", () => {
     });
     expect(broken).toEqual({ status: "down", places: [expect.objectContaining({ id: "built-in:talisay-city-hall" })] });
     expect(cache.size).toBe(0);
+  });
+});
+
+describe.skipIf(!process.env.LUSONG_TEST_UPSTASH_URL)("the wait queue on Upstash", () => {
+  it("counts live waiters, drops expired ones, and lets one leave", async () => {
+    const q = new UpstashWaitQueue(process.env.LUSONG_TEST_UPSTASH_URL!, process.env.LUSONG_TEST_UPSTASH_TOKEN ?? "");
+    const key = `lusong-test:${crypto.randomUUID()}:waiters`;
+    const now = Date.now();
+    expect(await q.join(key, "a", now, now + 100)).toBe(1);
+    expect(await q.join(key, "b", now, now + 60_000)).toBe(2);
+    expect(await q.join(key, "c", now + 200, now + 60_000)).toBe(2);
+    await q.leave(key, "b");
+    expect(await q.join(key, "d", now + 200, now + 60_000)).toBe(2);
   });
 });

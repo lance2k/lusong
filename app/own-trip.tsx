@@ -26,6 +26,15 @@ function tripStore() {
 const subscribe = (listener: () => void) => tripStore().subscribe(listener);
 const savedTrip = () => tripStore().get();
 
+interface Named {
+  name: string;
+  at: Point;
+}
+
+function nameFor(named: Named | null, at: Point | undefined): string | null {
+  return named && at && named.at.lat === at.lat && named.at.lon === at.lon ? named.name : null;
+}
+
 export interface OwnTrip {
   draft: TripDraft;
   /** The last tap or pick was outside the trip bound. */
@@ -48,7 +57,8 @@ export function useOwnTrip(changed: () => void): OwnTrip {
   // The server has no phone storage, so it renders no trip and the saved one appears once the page is running.
   const saved = useSyncExternalStore(subscribe, savedTrip, () => null);
   const [pending, setPending] = useState<TripDraft | null>(null);
-  const [labels, setLabels] = useState<{ from: string | null; to: string | null }>({ from: null, to: null });
+  // Each name is kept with the point it names, so a trip changed in another tab never shows this tab's old names.
+  const [named, setNamed] = useState<{ from: Named | null; to: Named | null }>({ from: null, to: null });
   const [bias, setBias] = useState<{ lat: number; lon: number } | null>(null);
   const [outside, setOutside] = useState(false);
   const [kept, setKept] = useState(true);
@@ -78,16 +88,16 @@ export function useOwnTrip(changed: () => void): OwnTrip {
     const startsNew = draft.step === "set" || (draft.step === "home" && !draft.work);
     const fillsFrom = draft.step === "home" && Boolean(draft.work);
     if (!apply(tapTrip(draft, at))) return;
-    const tapped = "Point tapped on the map";
-    if (startsNew) setLabels({ from: tapped, to: null });
-    else if (fillsFrom) setLabels((l) => ({ ...l, from: tapped }));
-    else setLabels((l) => ({ ...l, to: tapped }));
+    const tapped = { name: "Point tapped on the map", at };
+    if (startsNew) setNamed({ from: tapped, to: null });
+    else if (fillsFrom) setNamed((l) => ({ ...l, from: tapped }));
+    else setNamed((l) => ({ ...l, to: tapped }));
   }
 
   function pick(end: "from" | "to", place: Place) {
     if (!apply(pickTrip(draft, end, place))) return;
     const name = place.area ? `${place.name}, ${place.area}` : place.name;
-    setLabels((l) => ({ ...l, [end]: name }));
+    setNamed((l) => ({ ...l, [end]: { name, at: { lat: place.lat, lon: place.lon } } }));
   }
 
   function clear() {
@@ -97,12 +107,15 @@ export function useOwnTrip(changed: () => void): OwnTrip {
     }
     setClearFailed(false);
     setPending(null);
-    setLabels({ from: null, to: null });
+    setNamed({ from: null, to: null });
     setOutside(false);
     setKept(true);
     changed();
   }
 
+  const home = draft.step === "set" ? draft.trip.home : draft.step === "work" ? draft.home : undefined;
+  const work = draft.step === "set" ? draft.trip.work : draft.step === "home" ? draft.work : undefined;
+  const labels = { from: nameFor(named.from, home), to: nameFor(named.to, work) };
   return { draft, outside, kept, clearFailed, labels, bias, setBias, pick, tap, clear };
 }
 
@@ -138,8 +151,8 @@ export function OwnTripPanel({ own }: { own: OwnTrip }) {
             <p className="font-medium">Your trip is saved on this phone.</p>
             <p className="text-zinc-600 dark:text-zinc-400">
               It leaves the phone only inside a check, and Lusong&apos;s server doesn&apos;t keep it unless you switch on the
-              watcher below. Place names you type go to Lusong&apos;s server and to Photon, an OpenStreetMap search, to find
-              the place; neither keeps them for Lusong. To change the trip, search again or tap a new home on the map.
+              watcher below. Place names you type are sent to Lusong&apos;s server and to Photon, komoot&apos;s OpenStreetMap
+              search, to find the place; Lusong doesn&apos;t store them. To change the trip, search again or tap a new home on the map.
             </p>
             {!own.kept && (
               <p className="text-amber-800 dark:text-amber-300">This phone wouldn&apos;t store it, so it lasts until you close the page.</p>

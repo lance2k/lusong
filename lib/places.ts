@@ -81,67 +81,90 @@ export function placesFromPhoton(body: unknown, bound: Bound): Place[] {
   return out;
 }
 
-/** INCRBY with a sliding expiry, so a caller that dies before decrementing frees its place within ttlMs. */
-export interface CounterStore {
-  add(key: string, delta: number, ttlMs: number): Promise<number>;
+/**
+ * The callers waiting for Photon, each under its own id and expiry, so a caller that dies or whose leave is lost frees
+ * its place when its own expiry passes, however much other traffic arrives.
+ */
+export interface WaitQueue {
+  /** Drops expired waiters, adds this one until `until`, and returns how many are waiting, this one included. */
+  join(key: string, id: string, now: number, until: number): Promise<number>;
+  leave(key: string, id: string): Promise<void>;
 }
 
-export class MemoryCounterStore implements CounterStore {
-  private values = new Map<string, { n: number; until: number }>();
+export class MemoryWaitQueue implements WaitQueue {
+  private waiting = new Map<string, Map<string, number>>();
 
-  async add(key: string, delta: number, ttlMs: number) {
-    const now = Date.now();
-    const cur = this.values.get(key);
-    const n = (cur && cur.until > now ? cur.n : 0) + delta;
-    this.values.set(key, { n, until: now + ttlMs });
-    return n;
+  async join(key: string, id: string, now: number, until: number) {
+    const q = this.waiting.get(key) ?? new Map<string, number>();
+    for (const [other, expires] of q) if (expires <= now) q.delete(other);
+    q.set(id, until);
+    this.waiting.set(key, q);
+    return q.size;
+  }
+
+  async leave(key: string, id: string) {
+    this.waiting.get(key)?.delete(id);
   }
 }
 
-const COUNTER_SCRIPT = "local n = redis.call('INCRBY', KEYS[1], ARGV[1]); redis.call('PEXPIRE', KEYS[1], ARGV[2]); return n";
+const JOIN_SCRIPT =
+  "redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1]); redis.call('ZADD', KEYS[1], ARGV[2], ARGV[3]); " +
+  "redis.call('PEXPIRE', KEYS[1], ARGV[4]); return redis.call('ZCARD', KEYS[1])";
 
-export class UpstashCounterStore implements CounterStore {
+export class UpstashWaitQueue implements WaitQueue {
   constructor(
     private readonly url: string,
     private readonly token: string,
   ) {}
 
-  async add(key: string, delta: number, ttlMs: number) {
+  private async call(command: string[], timeoutMs: number): Promise<unknown> {
     const res = await fetch(this.url, {
       method: "POST",
       headers: { Authorization: `Bearer ${this.token}`, "Content-Type": "application/json" },
-      body: JSON.stringify(["EVAL", COUNTER_SCRIPT, "1", key, String(delta), String(ttlMs)]),
-      signal: AbortSignal.timeout(2_000),
+      body: JSON.stringify(command),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     const body = (await res.json().catch(() => null)) as { result?: unknown; error?: string } | null;
-    if (!res.ok || !body || body.error !== undefined || typeof body.result !== "number") throw new Error(`Upstash HTTP ${res.status}`);
+    if (!res.ok || !body || body.error !== undefined) throw new Error(`Upstash HTTP ${res.status}`);
     return body.result;
+  }
+
+  async join(key: string, id: string, now: number, until: number) {
+    const keyTtl = String(Math.max(1, until - now));
+    const n = await this.call(["EVAL", JOIN_SCRIPT, "1", key, String(now), String(until), id, keyTtl], 1_000);
+    if (typeof n !== "number") throw new Error("Upstash: unexpected reply");
+    return n;
+  }
+
+  async leave(key: string, id: string) {
+    await this.call(["ZREM", key, id], 2_000);
   }
 }
 
-const sharedMemoryCounter = (() => {
-  let store: MemoryCounterStore | null = null;
-  return () => (store ??= new MemoryCounterStore());
+const sharedMemoryQueue = (() => {
+  let store: MemoryWaitQueue | null = null;
+  return () => (store ??= new MemoryWaitQueue());
 })();
 
-export function counterStoreFromEnv(env: Record<string, string | undefined> = process.env): CounterStore | null {
+export function waitQueueFromEnv(env: Record<string, string | undefined> = process.env): WaitQueue | null {
   if (env.LUSONG_BUDGET_STORE === "memory") {
     const deployed = Boolean(env.VERCEL) || env.NODE_ENV === "production";
-    return deployed ? null : sharedMemoryCounter();
+    return deployed ? null : sharedMemoryQueue();
   }
-  if (env.UPSTASH_REDIS_REST_URL && env.UPSTASH_REDIS_REST_TOKEN) return new UpstashCounterStore(env.UPSTASH_REDIS_REST_URL, env.UPSTASH_REDIS_REST_TOKEN);
-  if (env.KV_REST_API_URL && env.KV_REST_API_TOKEN) return new UpstashCounterStore(env.KV_REST_API_URL, env.KV_REST_API_TOKEN);
+  if (env.UPSTASH_REDIS_REST_URL && env.UPSTASH_REDIS_REST_TOKEN) return new UpstashWaitQueue(env.UPSTASH_REDIS_REST_URL, env.UPSTASH_REDIS_REST_TOKEN);
+  if (env.KV_REST_API_URL && env.KV_REST_API_TOKEN) return new UpstashWaitQueue(env.KV_REST_API_URL, env.KV_REST_API_TOKEN);
   return null;
 }
 
 /** One key for every Lusong instance, so Photon sees at most one Lusong request a second. */
 export const PHOTON_SLOT_KEY = "lusong:photon:slot";
 export const PHOTON_SLOT_MS = 1_000 + MAX_ACK_MS;
-export const PHOTON_QUEUE_KEY = "lusong:photon:waiting";
+export const PHOTON_QUEUE_KEY = "lusong:photon:waiters";
 export const PHOTON_QUEUE_MAX = 20;
 export const PHOTON_WAIT_MS = 3_000;
 const PHOTON_POLL_MS = 250;
-const QUEUE_TTL_MS = 10_000;
+/** A waiter's place lasts past the longest wait, so a live waiter is never pruned. */
+const WAITER_TTL_MS = PHOTON_WAIT_MS + 2_000;
 
 export type GateOutcome = "ok" | "busy" | "unavailable";
 
@@ -149,41 +172,67 @@ export interface PhotonGate {
   acquire(): Promise<GateOutcome>;
 }
 
+const TIMED_OUT = Symbol("timed out");
+
+/** The store call's result, or TIMED_OUT once `ms` passes; a call still running after that is left to finish alone. */
+function within<T>(ms: number, call: () => Promise<T>): Promise<T | typeof TIMED_OUT> {
+  if (ms <= 0) return Promise.resolve(TIMED_OUT);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    call().finally(() => clearTimeout(timer)),
+    new Promise<typeof TIMED_OUT>((resolve) => {
+      timer = setTimeout(() => resolve(TIMED_OUT), ms);
+    }),
+  ]);
+}
+
+/**
+ * Resolves within `waitMs` of the call: "ok" when this caller may send one request now, "busy" when the queue is full
+ * or the wait ran out, "unavailable" when a store is missing or failing. Every store call is bounded by the time left,
+ * and a grant that comes back after the deadline or slower than MAX_ACK_MS is not used.
+ */
 export function makePhotonGate(
   slots: SlotStore | null,
-  queue: CounterStore | null,
-  opts: { waitMs?: number; pollMs?: number; maxWaiting?: number } = {},
+  queue: WaitQueue | null,
+  opts: { waitMs?: number; pollMs?: number; maxWaiting?: number; id?: () => string } = {},
 ): PhotonGate {
   const waitMs = opts.waitMs ?? PHOTON_WAIT_MS;
   const pollMs = opts.pollMs ?? PHOTON_POLL_MS;
   const maxWaiting = opts.maxWaiting ?? PHOTON_QUEUE_MAX;
+  const newId = opts.id ?? (() => crypto.randomUUID());
   return {
     async acquire() {
       if (!slots || !queue) return "unavailable";
-      let waiting: number;
+      const started = Date.now();
+      const giveUpAt = started + waitMs;
+      const id = newId();
+      let joined: number | typeof TIMED_OUT;
       try {
-        waiting = await queue.add(PHOTON_QUEUE_KEY, 1, QUEUE_TTL_MS);
+        joined = await within(giveUpAt - Date.now(), () => queue.join(PHOTON_QUEUE_KEY, id, started, started + WAITER_TTL_MS));
       } catch (err) {
         console.error("Photon queue store unreachable:", err instanceof Error ? err.message : err);
         return "unavailable";
       }
       try {
-        if (waiting > maxWaiting) return "busy";
-        const giveUpAt = Date.now() + waitMs;
+        if (joined === TIMED_OUT) return "busy";
+        if (joined > maxWaiting) return "busy";
         for (;;) {
+          const asked = Date.now();
+          let granted: boolean | typeof TIMED_OUT;
           try {
-            const asked = Date.now();
-            const granted = await slots.claim(PHOTON_SLOT_KEY, PHOTON_SLOT_MS);
-            if (granted && Date.now() - asked <= MAX_ACK_MS) return "ok";
+            granted = await within(Math.min(giveUpAt - asked, MAX_ACK_MS), () => slots.claim(PHOTON_SLOT_KEY, PHOTON_SLOT_MS));
           } catch (err) {
             console.error("Photon slot store unreachable:", err instanceof Error ? err.message : err);
             return "unavailable";
           }
-          if (Date.now() + pollMs > giveUpAt) return "busy";
+          const now = Date.now();
+          if (granted === true && now - asked <= MAX_ACK_MS && now <= giveUpAt) return "ok";
+          if (now + pollMs > giveUpAt) return "busy";
           await new Promise((resolve) => setTimeout(resolve, pollMs));
         }
       } finally {
-        queue.add(PHOTON_QUEUE_KEY, -1, QUEUE_TTL_MS).catch(() => {});
+        // A leave that fails or never arrives is covered by this waiter's own expiry.
+        queue.leave(PHOTON_QUEUE_KEY, id).catch(() => {});
       }
     },
   };
@@ -265,7 +314,7 @@ const sharedCache = new PlaceCache();
 export function placesDepsFromEnv(env: Record<string, string | undefined> = process.env): PlacesDeps {
   return {
     fetch: (input, init) => fetch(input, init),
-    gate: makePhotonGate(slotStoreFromEnv(env), counterStoreFromEnv(env)),
+    gate: makePhotonGate(slotStoreFromEnv(env), waitQueueFromEnv(env)),
     cache: sharedCache,
     bound: TRIP_BOUND,
   };

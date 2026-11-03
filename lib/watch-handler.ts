@@ -6,7 +6,7 @@ import { channelFromEnv, type Channel } from "./channel";
 import { clientIp } from "./check-handler";
 import { COMMUTE_RESERVE_MICROS, type ScheduledCheck } from "./commute-handler";
 import { readBody } from "./deadline";
-import { inMetroCebu } from "./metro-cebu";
+import { inTripBound } from "./trip-bound";
 import { LINK_CODE_TTL_MS, watchStoreFromEnv, type WatchRecord, type WatchStore, type WatchTrip } from "./watch-store";
 import { runTick, switchOff, type TickSummary } from "./watch-tick";
 import { hhmm, parseWindow } from "./watch-window";
@@ -42,7 +42,7 @@ function pointFrom(value: unknown): Point | null {
   if (typeof value !== "object" || value === null) return null;
   const { lat, lon } = value as Record<string, unknown>;
   if (typeof lat !== "number" || typeof lon !== "number" || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-  return inMetroCebu({ lat, lon }) ? { lat, lon } : null;
+  return inTripBound({ lat, lon }) ? { lat, lon } : null;
 }
 
 type WatchRequest =
