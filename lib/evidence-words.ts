@@ -50,8 +50,8 @@ function reportSentence(r: Report & { sample?: boolean }, now: Date): string {
 }
 
 function advisorySentence(advisory: AdvisoryReading): string {
-  if (advisory.state === "active") return `PAGASA's flood advisory for Cebu is active until ${phtTime(advisory.advisory.expires)}.`;
-  if (advisory.state === "none") return "PAGASA has no flood advisory for Cebu right now.";
+  if (advisory.state === "active") return `PAGASA's flood advisory for this trip is active until ${phtTime(advisory.advisory.expires)}.`;
+  if (advisory.state === "none") return "PAGASA has no flood advisory for this trip right now.";
   return "Lusong couldn't read PAGASA's flood advisory, so it counts one as active.";
 }
 

@@ -216,7 +216,7 @@ function capitalise(text: string): string {
 
 function rainWords(advisory: AdvisoryState, rainingHere: boolean): string {
   const tap = "you said it's raining here";
-  if (advisory === "active") return `PAGASA's flood advisory for Cebu is active${rainingHere ? ` and ${tap}` : ""}`;
+  if (advisory === "active") return `PAGASA's flood advisory for this trip is active${rainingHere ? ` and ${tap}` : ""}`;
   if (advisory === "unreadable") {
     return `Lusong couldn't read PAGASA's flood advisory, so it counts one as active${rainingHere ? `, and ${tap}` : ""}`;
   }
@@ -258,8 +258,8 @@ export function decideAnswer(input: {
   if (plain.state === "passable") {
     answer = "go";
     if (raining) reason = `${rain}, and reports along your whole way show no flood water.`;
-    else if (plain.on.length === 0) reason = "No flood advisory for Cebu, no rain tap, and nothing reported on your way.";
-    else reason = "No flood advisory for Cebu, no rain tap, and the reports on your way show no flood water.";
+    else if (plain.on.length === 0) reason = "No flood advisory for this trip, no rain tap, and nothing reported on your way.";
+    else reason = "No flood advisory for this trip, no rain tap, and the reports on your way show no flood water.";
   } else if (plain.state === "blocked" && passableDetour) {
     answer = "go_another_way";
     chosen = passableDetour;

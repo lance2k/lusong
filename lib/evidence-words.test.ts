@@ -57,7 +57,7 @@ describe("Lusong's own words for the evidence Muse Spark picked (review 🔴1)",
     ["p3", "A report 10 min ago on Banilad Road has a photo Lusong couldn't measure the water in."],
     ["v1", "A voice report 10 min ago on Banilad says the road is not passable."],
     ["v2", "A voice report 10 min ago on Banilad says nothing Lusong could read about the water."],
-    ["advisory", "PAGASA's flood advisory for Cebu is active until 30 Oct, 5:27 a.m. PHT."],
+    ["advisory", "PAGASA's flood advisory for this trip is active until 30 Oct, 5:27 a.m. PHT."],
     ["rain_tap", "You didn't tap “raining here”."],
     ["plain", "A report on your usual way blocks it."],
     ["detour", "Nothing reported blocks the other way."],
@@ -71,7 +71,7 @@ describe("Lusong's own words for the evidence Muse Spark picked (review 🔴1)",
   });
 
   it.each([
-    [{ state: "none" } as AdvisoryReading, "PAGASA has no flood advisory for Cebu right now."],
+    [{ state: "none" } as AdvisoryReading, "PAGASA has no flood advisory for this trip right now."],
     [{ state: "unreadable" } as AdvisoryReading, "Lusong couldn't read PAGASA's flood advisory, so it counts one as active."],
   ])("the advisory when it is %o", (advisory, sentence) => {
     expect(evidenceSentences(["advisory"], facts({ advisory }))).toEqual([sentence]);

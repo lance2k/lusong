@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Lusong: ride now, or wait?",
   description:
-    "A commute check for Cebu motorbike riders from PAGASA's flood advisory and reports along the route, and a depth check for one photo of a flooded street.",
+    "A commute check for motorbike riders in the Philippines from PAGASA's flood advisory and reports along the route, and a depth check for one photo of a flooded street.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

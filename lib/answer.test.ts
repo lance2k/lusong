@@ -345,7 +345,7 @@ describe("each route is judged the same way; the answer comes from the plain rou
 describe("the reason and the thin-evidence note", () => {
   it("rain with no reports says why in plain words", () => {
     expect(answerFor([], { advisory: "active" }).reason).toBe(
-      "PAGASA's flood advisory for Cebu is active, and nobody has reported your way.",
+      "PAGASA's flood advisory for this trip is active, and nobody has reported your way.",
     );
     expect(answerFor([], { advisory: "unreadable" }).reason).toContain("couldn't read PAGASA's flood advisory");
     expect(answerFor([], { rainingHere: true }).reason).toBe("You said it's raining here, and nobody has reported your way.");
