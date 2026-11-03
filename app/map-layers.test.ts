@@ -9,6 +9,7 @@ import {
   fitPadding,
   legendRows,
   MAP_OPTIONS,
+  movesTheMap,
   pinSpec,
   routeStyles,
   textBlock,
@@ -246,5 +247,23 @@ describe("area tooltips are text, never HTML (duck round 1, finding 2)", () => {
     const source = readFileSync(new URL("./map.tsx", import.meta.url), "utf8");
     expect(source).toMatch(/bindTooltip\(textBlock\(area\.tooltip, document\)/);
     expect(source).not.toMatch(/area\.tooltip\.join/);
+  });
+});
+
+describe("what counts as the rider moving the map (S3D-7)", () => {
+  const key = (k: string, mods: Partial<Record<"altKey" | "ctrlKey" | "metaKey", boolean>> = {}) => ({ key: k, altKey: false, ctrlKey: false, metaKey: false, ...mods });
+
+  it("Tab and other keys that move nothing keep the map refitting; arrow-key panning and +/- zoom stop it", () => {
+    for (const k of ["Tab", "Shift", "Enter", "Escape", " ", "a"]) expect(movesTheMap(key(k)), k).toBe(false);
+    for (const k of ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "+", "=", "-", "_"]) expect(movesTheMap(key(k)), k).toBe(true);
+    // Leaflet ignores its keys under a modifier (a browser zoom, a shortcut), so the map didn't move.
+    expect(movesTheMap(key("ArrowLeft", { ctrlKey: true }))).toBe(false);
+    expect(movesTheMap(key("-", { metaKey: true }))).toBe(false);
+  });
+
+  it("the map's keydown goes through that test rather than counting every key", () => {
+    const source = readFileSync(new URL("./map.tsx", import.meta.url), "utf8");
+    expect(source).toMatch(/addEventListener\("keydown", keyed\)/);
+    expect(source).toMatch(/const keyed = \(e: KeyboardEvent\) => \{\s*if \(movesTheMap\(e\)\) moved\(\);/);
   });
 });

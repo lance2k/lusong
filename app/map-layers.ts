@@ -13,6 +13,14 @@ export const MAP_OPTIONS = { attributionControl: false, zoomControl: false, scro
 export const ATTRIBUTION_CONTROL = { position: "topright" } as const;
 export const ZOOM_CONTROL = { position: "bottomright" } as const;
 
+/** The keys Leaflet's keyboard handler pans or zooms with; it ignores them under Alt, Ctrl or Meta, and so does this. */
+const MAP_KEYS = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "+", "=", "-", "_"]);
+
+/** Whether a key pressed on the map moved it, so it stops refitting. Tabbing through the map moves nothing. */
+export function movesTheMap(e: Pick<KeyboardEvent, "key" | "altKey" | "ctrlKey" | "metaKey">): boolean {
+  return !e.altKey && !e.ctrlKey && !e.metaKey && MAP_KEYS.has(e.key);
+}
+
 export const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 export const TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 

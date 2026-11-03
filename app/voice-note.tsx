@@ -7,7 +7,8 @@ import type { VoiceReportView } from "../lib/voice-report-handler";
 import { MAX_VOICE_MS } from "../lib/wav";
 import { phoneLocation } from "./phone-location";
 import { RECORDING_STOPPED_LINE, voiceOutcomeLine } from "./report-outcome";
-import { startRecording, voiceNoteForm, type Recording } from "./voice-recorder";
+import { startRecording, voiceNoteForm } from "./voice-recorder";
+import { voiceSession } from "./voice-session";
 
 type State =
   | { step: "idle" }
@@ -53,62 +54,53 @@ export default function VoiceNote({ shown = true, notify }: { shown?: boolean; n
   const [now, setNow] = useState(0);
   /** Nothing is picked for the rider: the language is theirs to declare, and Lusong goes by it. */
   const [language, setLanguage] = useState<VoiceLanguage | null>(null);
-  const recording = useRef<Recording | null>(null);
+  const [session] = useState(() => voiceSession((signal) => startRecording({ signal })));
   /** Set synchronously, so a second tap can't start a second recording or a second paid read. */
   const busy = useRef(false);
   /** The language picked when recording started: the one the note is sent with. */
   const recordedIn = useRef<VoiceLanguage | null>(null);
 
-  /** Aborted when the page goes away, so a recording still starting then is let go as soon as it is. */
-  const mounted = useRef<AbortController | null>(null);
-
-  useEffect(() => {
-    const page = new AbortController();
-    mounted.current = page;
-    return () => {
-      page.abort();
-      recording.current?.cancel();
-    };
-  }, []);
+  useEffect(() => () => void session.leave(), [session]);
 
   function settle(next: Extract<State, { step: "done" | "failed" }>) {
     setState(next);
     if (!seen.current.shown) seen.current.notify?.(voiceOutcomeLine(next.step === "done" ? { report: next.report } : { message: next.message }));
   }
 
+  // Leaving lets go of a microphone still being set up, and drops a recording under way and says so. A note already
+  // being sent is left to land.
+  useEffect(() => {
+    if (shown || !session.leave()) return;
+    busy.current = false;
+    seen.current.notify?.(RECORDING_STOPPED_LINE);
+    // Not cleared on a quick return: the button must not stay on "Stop and send" with nothing recording.
+    setTimeout(() => setState({ step: "idle" }), 0);
+  }, [shown, session]);
+
   useEffect(() => {
     if (state.step !== "recording") return;
-    // Leaving mid-recording drops the note and says so.
-    if (!shown) {
-      const drop = setTimeout(() => {
-        const rec = recording.current;
-        recording.current = null;
-        rec?.cancel();
-        busy.current = false;
-        seen.current.notify?.(RECORDING_STOPPED_LINE);
-        setState({ step: "idle" });
-      }, 0);
-      return () => clearTimeout(drop);
-    }
     const tick = setInterval(() => setNow(Date.now()), 200);
     const hardStop = setTimeout(() => void latestFinish.current(), MAX_VOICE_MS);
     return () => {
       clearInterval(tick);
       clearTimeout(hardStop);
     };
-  }, [state.step, shown]);
+  }, [state.step]);
 
   async function record() {
     if (busy.current || !language) return;
     busy.current = true;
     recordedIn.current = language;
-    const page = mounted.current;
+    let rec;
     try {
-      recording.current = await startRecording({ signal: page?.signal });
+      rec = await session.start();
     } catch {
       busy.current = false;
-      if (page?.signal.aborted) return;
       setState({ step: "failed", message: "Lusong needs the microphone to record a voice note. Allow it and tap record again." });
+      return;
+    }
+    if (!rec) {
+      busy.current = false;
       return;
     }
     const startedAt = Date.now();
@@ -117,10 +109,10 @@ export default function VoiceNote({ shown = true, notify }: { shown?: boolean; n
   }
 
   async function finish() {
-    const rec = recording.current;
     const language = recordedIn.current;
-    if (!rec || !language) return;
-    recording.current = null;
+    if (!language) return;
+    const rec = session.take();
+    if (!rec) return;
     try {
       const audio = await rec.stop();
       setState({ step: "locating" });

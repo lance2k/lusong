@@ -9,6 +9,7 @@ import {
   ALL_LAYERS,
   ATTRIBUTION_CONTROL,
   MAP_OPTIONS,
+  movesTheMap,
   pinSpec,
   routeStyles,
   TILE_ATTRIBUTION,
@@ -185,13 +186,16 @@ export default function TripMap({
     const moved = () => {
       userMoved.current = true;
     };
+    const keyed = (e: KeyboardEvent) => {
+      if (movesTheMap(e)) moved();
+    };
     const pinched = (e: TouchEvent) => {
       if (e.touches.length > 1) moved();
     };
     m.on("dragstart", moved);
     el.addEventListener("wheel", moved, { passive: true });
     el.addEventListener("dblclick", moved);
-    el.addEventListener("keydown", moved);
+    el.addEventListener("keydown", keyed);
     el.addEventListener("touchstart", pinched, { passive: true });
     el.querySelector(".leaflet-control-zoom")?.addEventListener("pointerdown", moved);
     // A new size (a rotated phone, a resized window, the stylesheet arriving late) refits, unless the rider has moved the map.
@@ -209,7 +213,7 @@ export default function TripMap({
       resized.disconnect();
       el.removeEventListener("wheel", moved);
       el.removeEventListener("dblclick", moved);
-      el.removeEventListener("keydown", moved);
+      el.removeEventListener("keydown", keyed);
       el.removeEventListener("touchstart", pinched);
       m.remove();
       map.current = null;
