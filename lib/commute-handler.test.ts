@@ -31,7 +31,7 @@ import { MAX_ROUTE_KM } from "./router";
 
 const read = (path: string) => readFileSync(path, "utf8");
 /** Every Cebu demo and real trip below lies in Cebu province, so its one search area. */
-const CEBU_AREA = { code: "702200000", name: "Cebu" };
+const CEBU_AREA = { code: "0702200000", name: "Cebu" };
 const WEB_SEARCH_LEASE_KEY = webSearchLeaseKey(CEBU_AREA);
 const ROUTES: Record<string, string> = {
   "10.346,123.911": read("test/fixtures/valhalla/banilad-itpark-plain.json"),
@@ -1076,7 +1076,7 @@ describe("Muse Spark in the demo check (#7)", () => {
     const onRoute = JSON.stringify({
       closures: [{ place: "Gov. M. Cuenco Ave", lat: spot.lat, lon: spot.lon, url: "https://example.ph/cuenco", date: "2026-10-29", kind: "flooded", summary: words, note: words }],
     });
-    fakeMeta({ search: [searchReply(onRoute)], turns: [textReply("resp_1", pickOf("go_another_way", ["web-702200000-0"]))] });
+    fakeMeta({ search: [searchReply(onRoute)], turns: [textReply("resp_1", pickOf("go_another_way", ["web-0702200000-0"]))] });
     const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), new MemoryReportStore(), museOn());
 
     const text = await (await handler(demo("banilad-itpark", "none"))).text();
@@ -1929,8 +1929,10 @@ describe("nationwide trips (S1)", () => {
     });
 
     it("ends 101 km apart are refused before routing and before admission; 99 km apart are routed", async () => {
-      const far = { lat: BANILAD.lat + 101.5 / 111.195, lon: BANILAD.lon };
-      const near = { lat: BANILAD.lat + 99 / 111.195, lon: BANILAD.lon };
+      // South-west down Cebu island: due north of Banilad at this distance is open sea, outside every province.
+      const far = { lat: 9.5983, lon: 123.3788 };
+      const near = { lat: 9.6167, lon: 123.3919 };
+      expect(distanceM(BANILAD, near)).toBeLessThan(100_000);
       expect(distanceM(BANILAD, far)).toBeGreaterThan(101_000);
       expect(distanceM(BANILAD, far)).toBeLessThan(102_000);
       const budget = openBudget();

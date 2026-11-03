@@ -791,7 +791,7 @@ describe("settling an investigation through the shared admission", () => {
     return { budget: createBudget({ store, budgetUsd: 10, ipLimit: 10 }), charged };
   }
 
-  const CEBU_AREA = { code: "702200000", name: "Cebu" };
+  const CEBU_AREA = { code: "0702200000", name: "Cebu" };
 
   async function check(meta: Parameters<typeof fakeMeta>[0], plan?: WebPlan) {
     const { budget, charged } = recordingBudget();

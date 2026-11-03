@@ -1,4 +1,5 @@
 import type { Point } from "./answer";
+import * as geo from "./advisory-geo";
 import { inTripBound } from "./trip-bound";
 
 export interface Province {
@@ -14,44 +15,27 @@ export interface ProvinceIndex {
   provinceOf(p: Point): Province | null;
 }
 
-interface BoxedProvince extends Province {
-  south: number;
-  north: number;
-  west: number;
-  east: number;
-}
+const METRO_MANILA: Province = { code: "1300000000", name: "Metro Manila" };
+const ISABELA_CITY_CODE = "0990100000";
 
 /**
- * TEMPORARY until the province polygons land (lib/advisory-geo.ts, S1-geo): rough hand-drawn boxes around ten provinces,
- * not boundaries. A point in none of them reads as outside the Philippines. Earlier entries win where boxes overlap,
- * so Bohol is listed before Cebu and Iloilo before Negros Occidental. Codes follow faeldon's adm2_psgc where known.
+ * The polygons split Metro Manila into four districts named "NCR, … District (Not a Province)". A web search and a
+ * rider both know it as one place, so the districts are one search area here; Isabela City gets its everyday name.
  */
-const PROVINCE_BOXES: readonly BoxedProvince[] = [
-  { code: "1300000000", name: "Metro Manila", south: 14.35, north: 14.79, west: 120.9, east: 121.14 },
-  { code: "305400000", name: "Pampanga", south: 14.8, north: 15.35, west: 120.35, east: 120.95 },
-  { code: "1401100000", name: "Benguet", south: 16.15, north: 16.95, west: 120.45, east: 120.95 },
-  { code: "701200000", name: "Bohol", south: 9.5, north: 10.15, west: 123.75, east: 124.65 },
-  { code: "702200000", name: "Cebu", south: 9.4, north: 11.35, west: 123.25, east: 124.1 },
-  { code: "603000000", name: "Iloilo", south: 10.4, north: 11.6, west: 121.9, east: 122.75 },
-  { code: "604500000", name: "Negros Occidental", south: 9.2, north: 11.05, west: 122.75, east: 123.55 },
-  { code: "803700000", name: "Leyte", south: 9.9, north: 11.6, west: 124.25, east: 125.1 },
-  { code: "1104300000", name: "Misamis Oriental", south: 8.2, north: 9.1, west: 124.2, east: 125.3 },
-  { code: "1102400000", name: "Davao del Sur", south: 6.4, north: 7.6, west: 125.0, east: 125.7 },
-];
-
-function boxOf(p: Point): BoxedProvince | null {
-  return PROVINCE_BOXES.find((b) => p.lat >= b.south && p.lat <= b.north && p.lon >= b.west && p.lon <= b.east) ?? null;
+function searchArea(unit: Province): Province {
+  if (unit.code.startsWith("13")) return METRO_MANILA;
+  if (unit.code === ISABELA_CITY_CODE) return { code: unit.code, name: "Isabela City" };
+  return { code: unit.code, name: unit.name };
 }
 
-const asProvince = (b: BoxedProvince): Province => ({ code: b.code, name: b.name });
-
-export const bboxProvinceIndex: ProvinceIndex = {
-  inPhilippines: (p) => boxOf(p) !== null,
+/** faeldon's province polygons (lib/advisory-geo.ts), with Metro Manila one area. */
+export const polygonProvinceIndex: ProvinceIndex = {
+  inPhilippines: geo.inPhilippines,
   provinceOf: (p) => {
-    const box = boxOf(p);
-    return box && asProvince(box);
+    const unit = geo.provinceOf(p);
+    return unit && searchArea(unit);
   },
-  provincesAlong: (line) => provincesInOrder(line.map(boxOf).filter((b): b is BoxedProvince => b !== null).map(asProvince)),
+  provincesAlong: (line) => provincesInOrder(geo.provincesAlong(line).map(searchArea)),
 };
 
 export function provincesInOrder(provinces: readonly Province[]): Province[] {
@@ -59,8 +43,7 @@ export function provincesInOrder(provinces: readonly Province[]): Province[] {
   return provinces.filter((p) => !seen.has(p.code) && seen.add(p.code));
 }
 
-// At merge: `const DEFAULT_INDEX: ProvinceIndex = advisoryGeo;` with `import * as advisoryGeo from "./advisory-geo"`.
-const DEFAULT_INDEX: ProvinceIndex = bboxProvinceIndex;
+const DEFAULT_INDEX: ProvinceIndex = polygonProvinceIndex;
 
 let current: ProvinceIndex = DEFAULT_INDEX;
 
