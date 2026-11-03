@@ -196,6 +196,8 @@ export default function TripMap({
     // the sheet covers (S9: on a phone the visible strip showed southern China).
     const points = framed.current ?? PHILIPPINES_CORNERS;
     const size = m.getSize();
+    // A map smaller than the fallback padding has no area to fit into; Leaflet would compute a NaN zoom (S9 duck).
+    if (size.x <= 48 || size.y <= 48) return;
     const { topLeft, bottomRight } = pad.current;
     // Padding that leaves no room would give Leaflet a negative area to fit into, and a non-finite view.
     const roomy = size.x - topLeft[0] - bottomRight[0] > 40 && size.y - topLeft[1] - bottomRight[1] > 40;
