@@ -35,6 +35,8 @@ export interface WatchRecord {
   sending: SentAnswer | null;
   /** Epoch ms of the last run claimed; 0 for never. */
   checkedAt: number;
+  /** Epoch ms it was linked to its chat; absent for a watcher linked before this was kept. */
+  linkedAt?: number;
   /** Set when a switch-off has begun (S4P-2): no send is claimed for it from then on. */
   stopping?: true;
 }
@@ -128,6 +130,7 @@ function fromFields(id: string, f: Fields): WatchRecord | null {
       lastDay: f.lastDay || null,
       sending: sendingAs && sendingDay ? { kind: sendingAs, day: sendingDay } : null,
       checkedAt: Number(f.checkedAt) || 0,
+      ...(Number(f.linkedAt) > 0 ? { linkedAt: Number(f.linkedAt) } : {}),
       ...(f.stopping ? { stopping: true as const } : {}),
     };
   } catch {
@@ -245,6 +248,7 @@ export class MemoryWatchStore implements WatchStore {
     const fields = this.live(id);
     if (!fields || fields.code !== code) return null;
     fields.chat = chatId;
+    fields.linkedAt = String(this.now());
     delete fields.code;
     return fromFields(id, fields);
   }
@@ -406,14 +410,14 @@ redis.call('SET', KEYS[2] .. ARGV[2], ARGV[1], 'PX', ARGV[3])
 return 1
 `;
 
-/** KEYS: code, record prefix. ARGV: code, chat. Returns the id, then the record's fields as name, value pairs. */
+/** KEYS: code, record prefix. ARGV: code, chat, now ms. Returns the id, then the record's fields as name, value pairs. */
 const REDEEM_SCRIPT = `
 local id = redis.call('GET', KEYS[1])
 if not id then return false end
 redis.call('DEL', KEYS[1])
 local record = KEYS[2] .. id
 if redis.call('HGET', record, 'code') ~= ARGV[1] then return false end
-redis.call('HSET', record, 'chat', ARGV[2])
+redis.call('HSET', record, 'chat', ARGV[2], 'linkedAt', ARGV[3])
 redis.call('HDEL', record, 'code')
 local out = { id }
 for _, v in ipairs(redis.call('HGETALL', record)) do table.insert(out, v) end
@@ -629,7 +633,7 @@ export class UpstashWatchStore implements WatchStore {
   }
 
   async redeem(code: string, chatId: string) {
-    const result = await this.evalScript(REDEEM_SCRIPT, [this.codePrefix + code, this.record("")], [code, chatId]);
+    const result = await this.evalScript(REDEEM_SCRIPT, [this.codePrefix + code, this.record("")], [code, chatId, Date.now()]);
     if (!Array.isArray(result)) return null;
     const [id, ...flat] = result;
     return fromFields(String(id), pairs(flat));

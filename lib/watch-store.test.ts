@@ -16,7 +16,10 @@ describe.each(watchStores)("the watch %s", (_name, make) => {
     const { store } = make();
     expect(await store.create(watcher(), "code1")).toBe("created");
     expect(await store.get("a".repeat(64))).toMatchObject({ chatId: null, lastKind: null, lastDay: null, checkedAt: 0, gen: "g1" });
+    expect((await store.get("a".repeat(64)))?.linkedAt).toBeUndefined();
     const linked = await store.redeem("code1", "4242");
+    // When it was linked, which orders the tick's due watchers (#26).
+    expect((await store.get("a".repeat(64)))?.linkedAt).toBeGreaterThan(0);
     expect(linked).toMatchObject({ id: "a".repeat(64), chatId: "4242", window: { startMin: 360, endMin: 480 }, trip: { from: BANILAD, to: IT_PARK } });
     expect(await store.redeem("code1", "9999")).toBeNull();
     expect((await store.get("a".repeat(64)))?.chatId).toBe("4242");

@@ -57,6 +57,12 @@ export interface TickDeps {
   limits?: Partial<TickLimits>;
   /** Time spent so far in this tick; real time unless a test sets it. */
   elapsedMs?: () => number;
+  /**
+   * Keeps the function running for work the tick stopped waiting for at its end (next/server's `after` on Vercel), so
+   * a store call cut off then settles inside its own 5 s timeout, while no later tick can run, rather than being frozen
+   * with the function and landing when it next wakes.
+   */
+  settleLater?: (work: Promise<unknown>) => void;
 }
 
 export interface TickSummary {
@@ -72,13 +78,13 @@ export interface TickSummary {
 }
 
 /**
- * When the watcher last became due: its window's opening today or the end of its gap since its last check, whichever
- * is later. A trip deferred by one tick became due by that tick's start; every trip that tick checked becomes due a
- * gap after it, and every other trip after it too (its window opened later, or its gap hadn't passed), so sorting on
- * this puts each deferred trip first at the next tick.
+ * When the watcher last became due: its window's opening today, its linking to a chat, or the end of its gap since its
+ * last check, whichever is latest. A trip deferred by one tick became due by that tick's start; every trip that tick
+ * checked becomes due a gap after it, and every other trip after it too (its window opened, it was linked, or its gap
+ * passed since), so sorting on this puts each deferred trip first at the next tick.
  */
 export function dueSince(w: WatchRecord, at: Date, minGapMs: number): number {
-  return Math.max(w.checkedAt + minGapMs, windowOpensAt(w.window, at));
+  return Math.max(w.checkedAt + minGapMs, windowOpensAt(w.window, at), w.linkedAt ?? 0);
 }
 
 /** Built from Lusong's fixed answer words and the window's own times only, never from model text. */
@@ -105,7 +111,7 @@ export async function runTick(deps: TickDeps): Promise<TickSummary> {
 
   let watchers: WatchRecord[];
   try {
-    watchers = await by(deps.store.list(), checksEnd);
+    watchers = await by(deps, deps.store.list(), checksEnd);
   } catch (err) {
     console.error("watch store unreadable:", err instanceof Error ? err.message : err);
     return { ...summary, ok: false };
@@ -126,7 +132,8 @@ export async function runTick(deps: TickDeps): Promise<TickSummary> {
     const startAt = deps.now();
     if (!inWindow(w.window, startAt)) continue;
     try {
-      if (!(await by(deps.store.claimRun(w.id, w.gen, startAt.getTime(), limits.minGapMs), checksEnd))) continue;
+      // A claim that answers late leaves less than a check needs; it may still land, and the trip waits one gap.
+      if (!(await by(deps, deps.store.claimRun(w.id, w.gen, startAt.getTime(), limits.minGapMs), checksEnd - limits.minCheckMs))) continue;
     } catch (err) {
       console.error("watch store failed on claim:", err instanceof Error ? err.message : err);
       summary.failed += 1;
@@ -150,7 +157,7 @@ async function runOne(
   let result: ScheduledCheck | "late";
   try {
     // A check ends by its deadline; one that runs on until no send could fit is a failed check, left to end on its own.
-    result = await beforeDeadline(deps.check(w.trip, { deadline: run.deadline }), run.end - SEND_LEASE_MS);
+    result = await within(deps, deps.check(w.trip, { deadline: run.deadline }), run.end - SEND_LEASE_MS);
   } catch (err) {
     console.error("watcher check failed:", err instanceof Error ? err.message : err);
     return "failed";
@@ -165,7 +172,7 @@ async function runOne(
       const saving = deps.store.saveRoute(w.id, w.gen, simplifyLine(result.line)).catch((err) => {
         console.error("watch store failed saving the route line:", err instanceof Error ? err.message : err);
       });
-      await beforeDeadline(saving, run.end);
+      await within(deps, saving, run.end);
     }
   }
 }
@@ -181,7 +188,7 @@ async function sendAnswer(deps: TickDeps, w: WatchRecord, kind: AnswerKind, end:
   const leaseAsked = Date.now();
   let lease: string | null | "late";
   try {
-    lease = await beforeDeadline(deps.store.takeSendLease(w.id, SEND_LEASE_MS), end);
+    lease = await within(deps, deps.store.takeSendLease(w.id, SEND_LEASE_MS), end);
   } catch (err) {
     console.error("watch store failed on the send lease:", err instanceof Error ? err.message : err);
     return "failed";
@@ -196,17 +203,21 @@ async function sendAnswer(deps: TickDeps, w: WatchRecord, kind: AnswerKind, end:
     const releasing = deps.store.releaseSendLease(w.id, held).catch((err) => {
       console.error("watch store failed releasing the send lease:", err instanceof Error ? err.message : err);
     });
-    await beforeDeadline(releasing, end);
+    await within(deps, releasing, end);
   }
 }
 
-/** The call's value; one that answers after `end` is a store failure, left to settle on its own. */
-async function by<T>(call: Promise<T>, end: number): Promise<T> {
-  const result = await beforeDeadline(call, end);
-  if (result === "late") {
-    call.catch(() => {});
-    throw new Error("no answer before the tick's end");
-  }
+/** The work's value, or "late" once `deadline` passes; late work is handed to settleLater. */
+async function within<T>(deps: TickDeps, work: Promise<T>, deadline: number): Promise<T | "late"> {
+  const result = await beforeDeadline(work, deadline);
+  if (result === "late") deps.settleLater?.(work.catch(() => {}));
+  return result;
+}
+
+/** The call's value; one that answers after `end` is a store failure. */
+async function by<T>(deps: TickDeps, call: Promise<T>, end: number): Promise<T> {
+  const result = await within(deps, call, end);
+  if (result === "late") throw new Error("no answer before the tick's end");
   return result;
 }
 
@@ -224,17 +235,17 @@ async function sendUnderLease(deps: TickDeps, w: WatchRecord, kind: AnswerKind, 
   try {
     // Recorded before the send, so a send whose outcome is unknown, or whose commit fails, is never sent again.
     // False when switched off (or switched on again) while the check ran: this run speaks for no one.
-    if (!(await by(deps.store.markSending(w.id, w.gen, answer), end))) return "quiet";
+    if (!(await by(deps, deps.store.markSending(w.id, w.gen, answer), end))) return "quiet";
     // The lease was asked for with at least its own length left of the tick, so a send that ends inside it ends in time.
     if (Date.now() - leaseAsked > SEND_LEASE_MS - SEND_TIMEOUT_MS - LEASE_MARGIN_MS) {
       // Too little of the lease is left for the send to end inside it, where a switch-off waits for it.
-      await by(deps.store.dropSending(w.id, w.gen), end);
+      await by(deps, deps.store.dropSending(w.id, w.gen), end);
       return "failed";
     }
     // Recording the answer takes time too, and the window may close during it; the answer was recorded for `day`.
     sendAt = deps.now();
     if (!inWindow(w.window, sendAt) || phtDay(sendAt) !== day) {
-      await by(deps.store.dropSending(w.id, w.gen), end);
+      await by(deps, deps.store.dropSending(w.id, w.gen), end);
       return "quiet";
     }
   } catch (err) {
@@ -242,13 +253,16 @@ async function sendUnderLease(deps: TickDeps, w: WatchRecord, kind: AnswerKind, 
     return "failed";
   }
   const text = watchMessage({ kind, was: opening ? null : last.kind, at: sendAt, window: w.window, pageUrl: deps.pageUrl });
-  const sent = await deps.channel.send(w.chatId!, text);
+  // A channel gives up after SEND_TIMEOUT_MS; one that doesn't answer inside the lease is an uncertain send, and its
+  // mark stays, so it counts as sent.
+  const sent = await within(deps, deps.channel.send(w.chatId!, text), leaseAsked + SEND_LEASE_MS);
+  if (sent === "late") return "failed";
   try {
     if (sent.ok) {
-      await by(deps.store.commit(w.id, w.gen, answer), end);
+      await by(deps, deps.store.commit(w.id, w.gen, answer), end);
     } else if (sent.rejected) {
-      if (sent.permanent) await by(deps.store.remove(w.id), end);
-      else await by(deps.store.dropSending(w.id, w.gen), end);
+      if (sent.permanent) await by(deps, deps.store.remove(w.id), end);
+      else await by(deps, deps.store.dropSending(w.id, w.gen), end);
     }
   } catch (err) {
     // The mark stays, so the answer counts as sent: after a refusal that means one missed message, never a duplicate.

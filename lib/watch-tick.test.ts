@@ -413,6 +413,34 @@ describe("the watcher's tick (fake clock, fake channel)", () => {
   });
 });
 
+describe("a watcher linked since the last tick doesn't go ahead of one that tick deferred (#26, review)", () => {
+  it("one linked at 06:15 to a window open since 06:00 is checked after the trip deferred at 06:10", async () => {
+    const { clock, store, deps } = setup("2026-10-30T06:10:00+08:00");
+    const a = await linkedWatcher(store, { id: "a".repeat(64), trip: { from: BANILAD, to: IT_PARK } }, "a");
+    const b = await linkedWatcher(store, { id: "b".repeat(64), trip: { from: IT_PARK, to: BANILAD }, window: { startMin: 365, endMin: 480 } }, "b");
+    const name = new Map([a, b].map((w) => [JSON.stringify(w.trip), w.id[0]]));
+    let elapsed = 0;
+    deps.elapsedMs = () => elapsed;
+    const order: string[] = [];
+    deps.check = async (trip) => {
+      order.push(name.get(JSON.stringify(trip))!);
+      elapsed += 35_000;
+      return { ok: true, kind: "go" };
+    };
+    expect(await runTick(deps)).toMatchObject({ due: 2, checked: 1, deferred: 1 });
+    expect(order).toEqual(["a"]);
+
+    clock.set("2026-10-30T06:15:00+08:00");
+    const c = await linkedWatcher(store, { id: "c".repeat(64), trip: { from: BANILAD, to: BANILAD } }, "c");
+    name.set(JSON.stringify(c.trip), "c");
+    clock.set("2026-10-30T06:20:00+08:00");
+    elapsed = 0;
+    // By its window alone (06:00), c would go ahead of b (06:05); it became due when it was linked, at 06:15.
+    expect(await runTick(deps)).toMatchObject({ due: 3, checked: 1, deferred: 2 });
+    expect(order).toEqual(["a", "b"]);
+  });
+});
+
 describe("the watcher's tick keeps inside its budget with slow dependencies (fake timers, #26)", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -446,7 +474,9 @@ describe("the watcher's tick keeps inside its budget with slow dependencies (fak
       await wait(opts.deadline - Date.now());
       return { ok: true, kind: "go", line: [BANILAD, IT_PARK] };
     };
-    return { store, channel, deps, sends };
+    const later: Promise<unknown>[] = [];
+    deps.settleLater = (work) => later.push(work);
+    return { store, channel, deps, sends, later, wait };
   }
 
   async function timed(deps: TickDeps) {
@@ -462,7 +492,7 @@ describe("the watcher's tick keeps inside its budget with slow dependencies (fak
     { storeMs: 4_000, sent: 0 },
     { storeMs: 20_000, sent: 0 },
   ])("a store taking $storeMs ms a call: the tick ends inside its 55 s, and sends $sent", async ({ storeMs, sent }) => {
-    const { store, deps, sends, channel } = slowTick(storeMs);
+    const { store, deps, sends, channel, later } = slowTick(storeMs);
     for (const c of "abc") await linkedWatcher(store, { id: c.repeat(64) }, c);
 
     const { summary, started, tookMs } = await timed(deps);
@@ -474,6 +504,51 @@ describe("the watcher's tick keeps inside its budget with slow dependencies (fak
     expect(summary.sent).toBe(sent);
     // A send is started only when it ends before the tick does.
     for (const at of sends) expect(at + SEND_TIMEOUT_MS).toBeLessThanOrEqual(started + TICK_LIMITS.budgetMs);
+    // Every store call the tick stopped waiting for is handed on to be kept running, and settles.
+    if (storeMs > 1_000) expect(later.length).toBeGreaterThan(0);
+    let settled = 0;
+    for (const work of later) void work.then(() => (settled += 1));
+    await vi.advanceTimersByTimeAsync(storeMs);
+    expect(settled).toBe(later.length);
+  });
+
+  it("a channel that never answers: the tick still ends inside its budget, and the answer counts as sent, so it isn't sent again", async () => {
+    const { store, deps, later } = slowTick(0);
+    const w = await linkedWatcher(store);
+    let sends = 0;
+    deps.channel = {
+      send: () => {
+        sends += 1;
+        return new Promise(() => {});
+      },
+    };
+
+    const { summary, tookMs } = await timed(deps);
+
+    expect(tookMs).toBeLessThanOrEqual(TICK_LIMITS.budgetMs);
+    expect(summary).toMatchObject({ checked: 1, sent: 0, failed: 1 });
+    expect(sends).toBe(1);
+    expect(later).toHaveLength(1);
+    expect((await store.get(w.id))?.sending).toMatchObject({ kind: "go" });
+  });
+
+  it("a claim that answers with less than a check's minimum left starts no check (#26, review)", async () => {
+    const { store, deps, wait } = slowTick(0);
+    await linkedWatcher(store);
+    const claimRun = store.claimRun.bind(store);
+    store.claimRun = async (...args) => {
+      await wait(TICK_LIMITS.budgetMs - TICK_LIMITS.afterCheckMs - TICK_LIMITS.minCheckMs + 1_000);
+      return claimRun(...args);
+    };
+    let checks = 0;
+    const check = deps.check;
+    deps.check = (trip, opts) => ((checks += 1), check(trip, opts));
+
+    const { summary, tookMs } = await timed(deps);
+
+    expect(checks).toBe(0);
+    expect(summary).toMatchObject({ due: 1, checked: 0, failed: 1 });
+    expect(tookMs).toBeLessThanOrEqual(TICK_LIMITS.budgetMs);
   });
 
   it("with a quick store, a check that runs to its deadline still leaves its send the time it needs", async () => {
