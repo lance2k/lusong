@@ -330,7 +330,8 @@ describe("the watcher's tick (fake clock, fake channel)", () => {
     for (const c of "abc") await linkedWatcher(store, { id: c.repeat(64) }, c);
     let elapsed = 0;
     deps.elapsedMs = () => elapsed;
-    deps.limits = { budgetMs: 45_000, minCheckMs: 15_000 };
+    // Checks end by 40 s; one starts only with 15 s for it and 5 s for its claim left: at 0 and 20 s, not at 40 s.
+    deps.limits = { budgetMs: 50_000, minCheckMs: 15_000 };
     deps.check = async () => {
       elapsed += 20_000;
       return { ok: true, kind: "go" };
@@ -530,6 +531,30 @@ describe("the watcher's tick keeps inside its budget with slow dependencies (fak
     expect(sends).toBe(1);
     expect(later).toHaveLength(1);
     expect((await store.get(w.id))?.sending).toMatchObject({ kind: "go" });
+  });
+
+  it("a trip isn't claimed without its claim's whole timeout and a check's minimum left, so a slow claim can't cost it its place (#26, review 2)", async () => {
+    const { store, deps, wait } = slowTick(0);
+    const a = await linkedWatcher(store, { id: "a".repeat(64), trip: { from: BANILAD, to: IT_PARK } }, "a");
+    const b = await linkedWatcher(store, { id: "b".repeat(64), trip: { from: IT_PARK, to: BANILAD } }, "b");
+    const claimRun = store.claimRun.bind(store);
+    store.claimRun = async (...args) => {
+      // Inside the store's own 5 s timeout.
+      if (args[0] === b.id) await wait(4_900);
+      return claimRun(...args);
+    };
+    deps.check = async () => {
+      // 18 s is left before the checks' end at 45 s: a check's 15 s, but not its claim's 5 s besides.
+      await wait(27_000);
+      return { ok: true, kind: "go" };
+    };
+
+    const { summary } = await timed(deps);
+
+    expect(summary).toMatchObject({ due: 2, checked: 1, deferred: 1 });
+    expect((await store.get(a.id))?.checkedAt).toBeGreaterThan(0);
+    // Untouched, so it keeps its place for the next tick.
+    expect((await store.get(b.id))?.checkedAt).toBe(0);
   });
 
   it("a claim that answers with less than a check's minimum left starts no check (#26, review)", async () => {

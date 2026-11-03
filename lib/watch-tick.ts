@@ -41,6 +41,8 @@ export const TICK_LIMITS: TickLimits = {
 export const SEND_LEASE_MS = 8_000;
 /** A send starts only with Telegram's timeout and this margin left of the lease, so it always ends inside it. */
 const LEASE_MARGIN_MS = 500;
+/** The store's own timeout on a call (lib/watch-store.ts): a run claim is started only with this long to answer. */
+const CLAIM_MS = 5_000;
 /** Longer than a lease lives; see switchOff. */
 export const SWITCH_OFF_WAIT_MS = 10_000;
 const SWITCH_OFF_POLL_MS = 100;
@@ -124,7 +126,9 @@ export async function runTick(deps: TickDeps): Promise<TickSummary> {
   summary.due = due.length;
 
   for (const [i, w] of due.entries()) {
-    if (i >= limits.maxPerTick || checksEnd - (started + elapsed()) < limits.minCheckMs) {
+    // The claim gets its whole timeout and still leaves the check its minimum, so only a store past its own timeout
+    // can answer it late, and cost the trip its place.
+    if (i >= limits.maxPerTick || checksEnd - (started + elapsed()) < limits.minCheckMs + CLAIM_MS) {
       summary.deferred = due.length - i;
       break;
     }
