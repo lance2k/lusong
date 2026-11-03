@@ -15,6 +15,7 @@ import { tripMapProps } from "./map-props";
 import { CLEAR_FAILED_LINE, outsideLine, useOwnTrip } from "./own-trip";
 import { backMove, PUSHED_KEY, viewFromSearch, type SheetView } from "./sheet-route";
 import { checkRequest } from "./trip";
+import { leaveAtFor, type TypedLeave } from "./typed-trip";
 import { IconCamera, IconInfo, IconLayers } from "./ui/icons";
 import { detentPx, Sheet, SheetBody, SheetHeader, type Detent } from "./ui/sheet";
 import { ErrorNote } from "./ui/states";
@@ -74,6 +75,8 @@ function Shell() {
   });
   const ownTrip = trip === OWN_TRIP;
   const savedTrip = own.draft.step === "set" ? own.draft.trip : null;
+  const [typedLeave, setTypedLeave] = useState<TypedLeave | null>(null);
+  const leaveAt = leaveAtFor(typedLeave, savedTrip);
 
   const sheetView = useSyncExternalStore(subscribeLocation, () => viewFromSearch(window.location.search), () => null);
   const desktop = useSyncExternalStore(subscribeMedia, () => window.matchMedia(DESKTOP).matches, () => false);
@@ -237,7 +240,7 @@ function Shell() {
             <div>
               <SheetHeader id={VIEW_HEADING} ref={viewHeading} title={VIEW_TITLES[sheetView]} onBack={closeView} />
               {sheetView === "check" && <CheckView />}
-              {sheetView === "watch" && <WatchView trip={savedTrip} />}
+              {sheetView === "watch" && <WatchView trip={savedTrip} leaveAt={leaveAt} />}
               {sheetView === "about" && <AboutView />}
               {sheetView === "legend" && (
                 <MapLegend rows={rows} layers={layers} samplesShown={samplesShown} onToggle={(id: LayerId) => setLayers((l) => ({ ...l, [id]: !l[id] }))} />
@@ -267,6 +270,13 @@ function Shell() {
               collapsed={collapsed}
               onExpand={() => setEditing(true)}
               summary={view.step === "idle" ? null : inputWords(view.for)}
+              leaveAt={leaveAt}
+              onUseTypedTrip={({ from, to, leaveAt: at }) => {
+                if (!own.pickBoth(from, to)) return false;
+                const point = (p: { lat: number; lon: number }) => ({ lat: p.lat, lon: p.lon });
+                setTypedLeave(at ? { leaveAt: at, home: point(from), work: point(to) } : null);
+                return true;
+              }}
             />
             {view.step === "checking" && <CheckProgress since={view.startedAt} />}
             <div aria-live="polite" className="space-y-4">

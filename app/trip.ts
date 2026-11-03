@@ -35,6 +35,14 @@ export function pickTrip(draft: TripDraft, end: "from" | "to", at: Point): { dra
   return { draft: home ? { step: "set", trip: { home, work: at } } : { step: "home", work: at }, outside: false };
 }
 
+/** Both ends at once, as if From then To were picked; if either is outside the trip bound, it changes nothing. */
+export function pickBothTrip(draft: TripDraft, from: Point, to: Point): { draft: TripDraft; outside: boolean } {
+  const first = pickTrip(draft, "from", from);
+  if (first.outside) return first;
+  const second = pickTrip(first.draft, "to", to);
+  return second.outside ? { draft, outside: true } : second;
+}
+
 /** The only way the trip leaves the phone: as a real check's start and end, which the server uses and doesn't keep. */
 export function checkRequest(trip: Trip, rainingHere: boolean) {
   return { mode: "real" as const, from: trip.home, to: trip.work, rainingHere };
