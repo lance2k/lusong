@@ -126,6 +126,14 @@ describe("judging an area against a route", () => {
     expect(judgeArea({ desc: "x", polygons: [square], geocodes: ["071200000"] }, north)).toBe("outside");
   });
 
+  it("a route on a coast the low-resolution polygon cuts off is covered by its province's area, as provinceOf places it (S1G-4)", () => {
+    const offshore = { lat: 10.2407, lon: 123.857 };
+    const coastal = [offshore, { lat: 10.2412, lon: 123.8575 }];
+    expect(provinceOf(offshore)?.name).toBe("Cebu");
+    expect(judgeArea({ desc: "Cebu", polygons: [], geocodes: ["072200000"] }, coastal)).toBe("covers");
+    expect(judgeArea({ desc: "Bohol", polygons: [], geocodes: ["071200000"] }, coastal)).toBe("outside");
+  });
+
   it("a nationwide area covers a Cebu and a Davao route alike", () => {
     const whole: CapArea = { desc: "Philippines", polygons: [], geocodes: [] };
     expect(judgeArea(whole, cebuRoute)).toBe("covers");

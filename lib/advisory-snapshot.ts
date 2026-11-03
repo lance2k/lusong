@@ -327,8 +327,11 @@ function readRecord(xml: string, link: string): ParsedRecord {
     const areas = childrenOf(info, CAP, "area").map((a) => readArea(a, link));
     if (describes && areas.length === 0) throw new Unreadable(`${link} has no usable area`);
     const description = childOf(info, CAP, "description")?.text ?? "";
+    // The event decides whether a product counts, so an Alert or Update without one can't be read lean safe.
+    const event = textOf(info, CAP, "event")?.trim() ?? "";
+    if (describes && event === "") throw new Unreadable(`${link} has an info with no event`);
     return {
-      event: textOf(info, CAP, "event"),
+      event,
       headline: textOf(info, CAP, "headline"),
       allClear: responses.includes("AllClear"),
       info: {
@@ -339,7 +342,8 @@ function readRecord(xml: string, link: string): ParsedRecord {
       } satisfies ProductInfo,
     };
   });
-  const event = read.find((r) => r.event)?.event ?? read.find((r) => r.headline)?.headline ?? "PAGASA alert";
+  // A record whose infos name different events counts if any of them does.
+  const event = read.find((r) => COUNTING_KINDS.has(kindOf(r.event)))?.event ?? read.find((r) => r.event)?.event ?? "PAGASA alert";
   return {
     id,
     status,
@@ -358,14 +362,19 @@ function readRecord(xml: string, link: string): ParsedRecord {
   };
 }
 
+/** A record sent this little after the server's clock counts as sent: PAGASA's clock and Vercel's needn't agree. */
+export const CLOCK_SKEW_MS = 2 * 60_000;
+
 /**
  * Product identity is the CAP identifier: an Update replaces, and a Cancel removes, exactly the products its references
- * name. What is left is every Actual Alert or Update already sent that nothing names, with its live infos.
+ * name. Only an Actual record already sent does either, so a Test or Exercise cancellation never removes a live product.
+ * What is left is every Actual Alert or Update already sent that nothing live names, with its live infos.
  */
 function liveProducts(records: readonly ParsedRecord[], now: number): AdvisoryProduct[] {
-  const replaced = new Set(records.filter((r) => r.msgType === "Update" || r.msgType === "Cancel").flatMap((r) => r.references));
-  return records
-    .filter((r) => r.status === "Actual" && (r.msgType === "Alert" || r.msgType === "Update") && r.sentMs <= now && !replaced.has(r.id))
+  const live = records.filter((r) => r.status === "Actual" && r.sentMs <= now + CLOCK_SKEW_MS);
+  const replaced = new Set(live.filter((r) => r.msgType === "Update" || r.msgType === "Cancel").flatMap((r) => r.references));
+  return live
+    .filter((r) => (r.msgType === "Alert" || r.msgType === "Update") && !replaced.has(r.id))
     .map((r) => ({ ...r.product, infos: r.product.infos.filter((i) => Date.parse(i.expires) > now) }))
     .filter((p) => p.infos.length > 0);
 }
@@ -413,7 +422,8 @@ async function buildSnapshot(deps: BuildDeps, generation: number): Promise<Advis
     return snapshot(false, `feed: ${err instanceof Error ? err.message : String(err)}`, [], []);
   }
   let failure: string | null = feed.unlinked.length > 0 ? `feed entry "${feed.unlinked[0]}" has no CAP link` : null;
-  const listed = feed.entries.filter((e) => e.updatedMs <= now).sort((a, b) => b.updatedMs - a.updatedMs);
+  // Every listed entry is read, even one dated ahead of this clock: a record not yet sent is read and simply not live.
+  const listed = [...feed.entries].sort((a, b) => b.updatedMs - a.updatedMs);
   if (listed.length > limits.maxRecords) failure ??= `the feed lists more than ${limits.maxRecords} records`;
   const entries = listed.slice(0, limits.maxRecords);
 

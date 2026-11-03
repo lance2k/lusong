@@ -199,6 +199,49 @@ describe("the whole-feed snapshot, product by product", () => {
   });
 });
 
+describe("only live records change what is live (diff duck round 1, S1G-1, S1G-2)", () => {
+  const links = [CAGAYAN_GFA4, CAGAYAN_GFA4_CANCEL, CAGAYAN_GFA4_REISSUED];
+
+  it.each(["Test", "Exercise"])("a %s cancellation doesn't remove the Actual product it names", async (status) => {
+    const drill = (cap: string) => cap.replace("<status>Actual</status>", `<status>${status}</status>`);
+    const { snapshot, judge } = await snapshotAt("2026-10-23T05:45:00+08:00", listing(links, { [CAGAYAN_GFA4_CANCEL]: drill }));
+    expect(snapshot.complete).toBe(true);
+    expect(snapshot.products.map((p) => p.link).sort()).toEqual([CAGAYAN_GFA4, CAGAYAN_GFA4_REISSUED].sort());
+    expect(judge(TUGUEGARAO_ROUTE).state).toBe("active");
+  });
+
+  it("a cancellation not yet sent hasn't removed anything yet", async () => {
+    const later = (cap: string) => cap.replace("<sent>2026-10-23T05:34:32+08:00</sent>", "<sent>2026-10-23T06:34:32+08:00</sent>");
+    expect(later(ALL_SAVED[CAGAYAN_GFA4_CANCEL])).not.toBe(ALL_SAVED[CAGAYAN_GFA4_CANCEL]);
+    const { snapshot } = await snapshotAt("2026-10-23T05:45:00+08:00", listing(links, { [CAGAYAN_GFA4_CANCEL]: later }));
+    expect(snapshot.products.map((p) => p.link).sort()).toEqual([CAGAYAN_GFA4, CAGAYAN_GFA4_REISSUED].sort());
+  });
+
+  it("a feed entry dated a second ahead of the server's clock is still read, and its record counts", async () => {
+    // The update's feed entry says 2026-10-30 21:11:07 PHT; the server's clock reads one second earlier.
+    const { snapshot, judge, net } = await snapshotAt("2026-10-30T21:11:06+08:00", listing([DAVAO_GFA1_ALERT, DAVAO_GFA1_UPDATE]));
+    expect(net.calls).toContain(DAVAO_GFA1_UPDATE);
+    expect(snapshot).toMatchObject({ complete: true, entries: [{ link: DAVAO_GFA1_UPDATE }, { link: DAVAO_GFA1_ALERT }] });
+    expect(judge(DAVAO_CITY_ROUTE).covering.map((p) => p.link)).toEqual([DAVAO_GFA1_UPDATE]);
+  });
+
+  it("a listed record that can't be fetched makes the snapshot incomplete however far ahead its entry is dated", async () => {
+    const served = listing([DAVAO_GFA1_ALERT, DAVAO_GFA1_UPDATE]);
+    delete served[DAVAO_GFA1_UPDATE];
+    const { snapshot } = await snapshotAt("2026-10-30T21:00:00+08:00", served);
+    expect(snapshot.complete).toBe(false);
+  });
+});
+
+describe("a record's event decides whether it counts (diff duck round 1, S1G-3)", () => {
+  it("an Alert or Update info with no event makes the snapshot incomplete, never a quiet non-counting product", async () => {
+    const noEvent = (cap: string) => cap.replace(/<event>[^<]*<\/event>/, "");
+    const { snapshot, judge } = await snapshotAt("2026-10-30T21:30:00+08:00", listing([DAVAO_GFA1_ALERT, DAVAO_GFA1_UPDATE], { [DAVAO_GFA1_UPDATE]: noEvent }));
+    expect(snapshot).toMatchObject({ complete: false, why: `${DAVAO_GFA1_UPDATE}: ${DAVAO_GFA1_UPDATE} has an info with no event` });
+    expect(judge(DAVAO_CITY_ROUTE).state).toBe("unreadable");
+  });
+});
+
 describe("a snapshot that can't be relied on reads as incomplete", () => {
   it("a listed record that can't be fetched makes it incomplete, and every route's advisory unreadable", async () => {
     const served = listing([DAVAO_GFA1_ALERT, DAVAO_GFA1_UPDATE]);

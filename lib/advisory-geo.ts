@@ -329,9 +329,12 @@ export function judgeArea(area: CapArea, line: readonly Point[]): AreaJudgement 
   if (bound?.kind === "nationwide") return "covers";
   if (area.polygons.some((ring) => lineEnters(line, [ring]))) return "covers";
   if (!bound) return area.polygons.length > 0 ? "outside" : "unbounded";
+  // A route on a coast the low-resolution polygon cuts off is in the province, as provinceOf already says.
   const inBound = bound.codes.some((code) => {
     const province = BY_CODE.get(code);
-    return province !== undefined && lineEnters(line, province.rings, province.bbox);
+    if (!province) return false;
+    if (lineEnters(line, province.rings, province.bbox)) return true;
+    return line.some((p) => inBox(province.bbox, p, NEAR_MARGIN_DEG) && distanceToRingsM(province.rings, p) <= NEAR_PROVINCE_M);
   });
   return inBound ? "covers" : "outside";
 }
