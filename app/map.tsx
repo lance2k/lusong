@@ -22,6 +22,7 @@ import {
   type PinSpec,
 } from "./map-layers";
 import { PHILIPPINES_VIEW, pinPopup } from "./map-props";
+import { TRIP_BOUND } from "../lib/trip-bound";
 import type { ClosureMark } from "../lib/closure-marks";
 import type { RainCircle } from "./rain-layer";
 
@@ -69,6 +70,10 @@ export interface MapView {
   onView: (view: { south: number; west: number; north: number; east: number }) => void;
 }
 
+const PHILIPPINES_CORNERS = [
+  { lat: TRIP_BOUND.south, lon: TRIP_BOUND.west },
+  { lat: TRIP_BOUND.north, lon: TRIP_BOUND.east },
+];
 const RAIN_PANE = "lusong-rain";
 const CLOSURES_PANE = "lusong-closures";
 
@@ -187,12 +192,12 @@ export default function TripMap({
     const m = map.current;
     if (!m) return;
     m.invalidateSize();
-    const points = framed.current;
-    if (!points) {
-      m.setView(latLng(PHILIPPINES_VIEW.centre), PHILIPPINES_VIEW.zoom);
-      return;
-    }
+    // Nothing to frame yet: the whole country, fitted into the room the sheet leaves, rather than a fixed centre that
+    // the sheet covers (S9: on a phone the visible strip showed southern China).
+    const points = framed.current ?? PHILIPPINES_CORNERS;
     const size = m.getSize();
+    // A map smaller than the fallback padding has no area to fit into; Leaflet would compute a NaN zoom (S9 duck).
+    if (size.x <= 48 || size.y <= 48) return;
     const { topLeft, bottomRight } = pad.current;
     // Padding that leaves no room would give Leaflet a negative area to fit into, and a non-finite view.
     const roomy = size.x - topLeft[0] - bottomRight[0] > 40 && size.y - topLeft[1] - bottomRight[1] > 40;

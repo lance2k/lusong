@@ -68,7 +68,7 @@ export function Sheet({
         <button
           type="button"
           aria-label={`Panel: ${WORDS[detent]} height`}
-          className="flex h-8 w-24 touch-none cursor-grab items-center justify-center"
+          className="flex h-11 w-24 touch-none cursor-grab items-center justify-center"
           onClick={() => {
             if (justDragged.current) {
               justDragged.current = false;

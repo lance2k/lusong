@@ -91,7 +91,7 @@ describe("the trip chips (S3P-1)", () => {
     expect(typed).toBeLessThan(html.indexOf("From (home)"));
     expect(html).toContain("The words you type here are sent to Lusong&#x27;s server and to Meta&#x27;s Model API");
     const privacy = /Place names you type[^<]*/.exec(html)![0];
-    expect(privacy).toContain("Words you type in the trip box are sent to Lusong&#x27;s server and to Meta&#x27;s Model API");
+    expect(privacy).toContain("What the trip box sends is said beside it.");
     expect(privacy).toContain("Lusong doesn&#x27;t store any of them");
     expect(html).toContain("Leaving around 07:00. If you switch on the watcher, its window starts an hour before.");
   });

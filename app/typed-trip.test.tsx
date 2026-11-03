@@ -4,7 +4,7 @@ import type { Place } from "../lib/built-in-places";
 import { parseWindow } from "../lib/watch-window";
 import { TO_THE_BOXES, TRIP_TEXT_LINES, TRIP_TEXT_REASONS, type TripTextReply } from "../lib/trip-text-words";
 import { createTripStore, pickBothTrip, pickTrip, startTrip, type TripStorage } from "./trip";
-import { TypedTripView, USE_THIS_TRIP } from "./typed-trip-box";
+import { PICK_BOTH_LINE, TypedTripView, USE_THIS_TRIP } from "./typed-trip-box";
 import {
   chosenTrip,
   initialTypedTrip,
@@ -175,8 +175,10 @@ describe("the typed box as drawn", () => {
     expect(html).toContain("Cebu IT Park, Lahug, Cebu City");
     expect(html).toContain("Leaving around 07:00");
     expect(html).toMatch(new RegExp(`<button[^>]*disabled=""[^>]*>${USE_THIS_TRIP}</button>`));
+    expect(html).toContain(PICK_BOTH_LINE);
     const picked = render(run([{ type: "pick", end: "from", index: 0 }], s));
     expect(picked).toMatch(new RegExp(`<button(?![^>]*disabled="")[^>]*>${USE_THIS_TRIP}</button>`));
+    expect(picked).not.toContain(PICK_BOTH_LINE);
   });
 
   it("each failure is one fixed line that points to the From and To boxes", () => {
