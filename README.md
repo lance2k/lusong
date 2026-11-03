@@ -1,16 +1,21 @@
 # Lusong
 
-Before you ride to work anywhere in the Philippines, Lusong answers "should I leave now, and which way?": **Go**,
-**Go another way**, **Wait** or **No one knows**, with the evidence under the answer. The evidence is PAGASA's flood
-advisory for your route and
-photo reports from people at the water, each read by Lusong's depth reader: send a photo of a flooded street and it
-reads how deep the water is on the MMDA flood gauge, with the waterline drawn on the photo.
+Before you ride anywhere in the Philippines, Lusong answers "should I leave now, and which way?": **Go**,
+**Go another way**, **Wait** or **No one knows**, with the evidence under the answer. Name two places in the From
+and To boxes like Google Maps, or type the whole trip in plain words ("Talamban to IT Park, leaving around 7").
+The page is a map: it shows flooded spots, PAGASA's advisory areas, road closures and rain, and the answer sits on
+a sheet over it. The evidence is PAGASA's flood advisory for your route, photo reports from people at the water
+(each read by Lusong's depth reader, which turns a photo of a flooded street into a depth on the MMDA flood gauge,
+with the waterline drawn on the photo) and road-closure posts found by a web sweep. A watcher sends a Telegram
+alert to riders whose saved route a PAGASA advisory, a closure or a disaster-office post touches, and the bot takes
+photo and voice reports.
 
 **Try it:** https://lusong-mocha.vercel.app (10 checks per address per day; when the day's budget runs out it
 shows sample results).
 
-Built with Meta's SAM 3.1 and Muse Spark through the Meta Model API: Muse Spark 1.3 reads photos and runs the
-investigation, and Muse Spark 1.2 hears Bisaya voice notes.
+Built with Meta's models through the Meta Model API: SAM 3.1 outlines the water, people and cars; Muse Spark 1.3
+reads photos, runs the investigation and reads a typed trip; Muse Spark 1.2 hears Bisaya voice notes; and Muse
+Wonder 1.0 sweeps the web for road closures.
 
 ## Why
 
@@ -20,9 +25,28 @@ edge of a flooded street still have to guess which one they are looking at. Some
 Lusong reads the depth from the people and cars already standing in the water, and says whether that is too
 deep for cars on the same gauge.
 
+The same question comes up on every island, and the sources do not stop at Metro Manila. PAGASA's flood advisory
+covers the whole country, and a closure can be on any road. So Lusong takes a trip anywhere in the Philippines and
+judges PAGASA's whole feed against the route. The MMDA gauge is Metro Manila's, but Lusong uses its landmarks
+(knee, tyre, waist) for a photo from anywhere.
+
 ## The commute check
 
-Pick a trip (a preset one such as Banilad → IT Park, or your own two points on the map) and tap Check.
+Pick a trip and tap Check. There are three ways to pick one:
+
+- **From and To boxes, like Google Maps.** Type a place and pick one of up to 8 candidates. The place search is
+  Photon (OpenStreetMap data), limited to the Philippines, with Lusong's built-in places first. A phone location, if
+  you share it, is rounded to about 10 km before it is used. Photon is given 4 seconds; when it is slower, the box
+  says place search can't be reached and offers the built-in places and the map.
+- **The whole trip in plain words.** Type 3 to 160 characters ("Talamban to IT Park, leaving around 7"). Muse Spark
+  1.3 reads two place strings and a time, copied from your words, and the place search names the candidates.
+  Nothing is checked or saved until you tap **Use this trip**, and the text is not kept.
+- **Two taps on the map**, or one of the three demo trips.
+
+The map is the page. One sheet (a side panel on a wide screen) holds the trip, the answer and the evidence.
+Layers switch on and off: your route, reports, PAGASA areas (shaded from the advisory), road closures (the web
+sweep's findings, see below) and Rain now. Rain now is Open-Meteo's model of the rain, credited in the legend, off
+until you switch it on, and never part of a verdict.
 
 - **The answer comes from fixed rules**, tested in `lib/answer.ts`. A photo report counts for 3 hours. A reading of
   "not passable to light vehicles" or deeper blocks its spot. Only a photo taken within the hour that shows no flood
@@ -30,6 +54,9 @@ Pick a trip (a preset one such as Banilad → IT Park, or your own two points on
 - **Which way:** the plain route and a way around a blocked spot come from the public Valhalla router (motorcycle
   costing, the blocked spots excluded). Lusong checks the way around against the reports too. Plain route clear ⇒ Go.
   Plain blocked and the way around clear ⇒ Go another way. No way around, or it is blocked too ⇒ Wait.
+- **Anywhere in the Philippines, within limits.** The route comes from one island's roads: a trip that needs a
+  ferry is refused, and so are ends more than 100 km apart in a straight line and routes over 150 km. PAGASA's whole
+  feed is judged against the route, and the web search covers up to 2 provinces a check.
 - **Under an advisory or rain**, a Go needs clear reports every 500 m of the route. Without them the answer is No one
   knows, because nobody has looked yet. An advisory Lusong can't read counts as active.
 - **Muse Spark investigates** through the Responses API: it calls Lusong's tools (read the advisory, list the reports
@@ -58,6 +85,33 @@ Pick a trip (a preset one such as Banilad → IT Park, or your own two points on
   runs scheduled jobs once a day: all 27 ticks it logged from 2026-11-02 20:50 to 2026-11-03 01:10 PHT got 200. A
   GitHub Actions schedule stays on as a backup, though GitHub started it only every 3 to 7 hours.
   `docs/watcher-setup.md` has the setup.
+- **Alerts** go to a watcher outside its window too. A PAGASA advisory, a road closure or a disaster-office post
+  that touches a watched trip is sent once for each version of the alert, whatever the window. "Touches" means the
+  alert's area or spot lies within 1,000 m of the last route the watcher checked (before one is stored, near the
+  trip's two ends). An alert for the whole country goes to every watcher. A separate schedule
+  (`lusong-alert-deliver`, every 10 minutes) sends them, and a watcher gets at most one alert a second. In the
+  QStash log read 2026-11-04 11:53 PHT, 67 of 67 deliveries got 200. Whether any alert has reached a rider is not
+  known, because those replies aren't logged. At that time the sweep's closure store held 0 items, and PAGASA's feed
+  had held 0 live products when last read, at 2026-11-03 22:44 PHT.
+- **The web sweep** finds closures and flood posts the feeds do not carry. Muse Wonder 1.0 searches the web for road
+  closures and floods in the last 48 hours, at most 4 times a UTC day and at least 3 hours apart, with web search
+  capped at 4 tool calls a run. Its reply is only a list of pages to look at. Lusong then fetches each page itself
+  and admits an item only when the page is on a short allow-list (`*.gov.ph` sites and eight named news sites),
+  robots.txt allows it, the page's own structured data gives a publication time within 48 hours, and the page names
+  the place and the province with a closure or flood word within 400 characters of the place. The source
+  organisation comes from the host, the time from the page and the place from the geocoder, never from the model's
+  words. An item lasts 12 hours from when its page was posted. Sweep items only warn: `SWEEP_BLOCKING` is `false`,
+  so they never change an answer. They show on the page as "Posts near your way" and on the map as dashed circles
+  (province-wide ones are listed in the legend), marked unconfirmed and linked to their source. In its first measured
+  run (development, 1 draw, 2026-11-03 23:54 PHT) the sweep admitted 0 candidates, and Wonder's own answer was an
+  empty list, so 0 is what Wonder found for those 48 hours. On production, `/api/closures` showed 0 marks at
+  2026-11-04 02:40 PHT. QStash keeps no reply bodies, so how many production runs called Wonder is not known.
+- **Telegram reports.** Send the bot a photo or a voice note, then share your location within 2 minutes. Lusong reads
+  it the way the web page does and replies from fixed sentences. It refuses venues, forwarded messages and anything
+  over 10 minutes old, answers private chats only, ignores edited messages, and a voice note needs `/bisaya`, `/tagalog` or `/english` sent
+  once first. Voice notes can be up to 30 seconds. No photo or recording is kept, and a Telegram report's photo is
+  never published. One synthetic photo update (1 draw, 2026-11-03 23:00 PHT) got a 200 from production; the report
+  count before and after was not measured, because the production store's credentials could not be read.
 - **The demo trips** are recorded routes with sample reports: two in Cebu City and one in Metro Manila (Araneta City
   Cubao → Makati City Hall). Every sample says it is a sample and where the photo was really taken (Cavite, Manila or
   Shah Alam in Malaysia, from Lusong's labelled test photos), so it is never mistaken for a report from the street it
@@ -272,6 +326,22 @@ track). Everything in this repository was written during the event; the commit h
 - 2026-11-02 23:36 PHT `0bb7102` fix: a deadline is late only once the clock reaches it, not when its timer fires 1 ms early (#18) (#20)
 - 2026-11-03 00:16 PHT `988ce34` feat: Bisaya voice notes go to Muse Spark 1.2 as audio, since Voice Transcribe doesn't list Cebuano (#9) (#21)
 - 2026-11-03 00:56 PHT `53ca979` fix: Muse Spark's later turns get 30 s, not 15 s, so the commute check's pick is no longer dropped by its own time cap (#22)
+- 2026-11-03 01:16 PHT `71e16ac` docs: README matches production at 53ca979: photos stay hidden behind PLATE_DETECTION_TRUSTED, QStash ticks measured, Muse Spark 1.2 for Bisaya, the pick's 30 s turns, commit list through 53ca979 (#24)
+- 2026-11-03 10:16 PHT `29638f1` PR #25: fix: a missing pick says why in the logs, timeouts labelled from the error (#23), intro names all four answers
+- 2026-11-03 10:33 PHT `5630d88` PR #27: fix: the missing-pick log names the failed call (endpoint and HTTP status, never Meta's body)
+- 2026-11-03 21:15 PHT `a603c64` PR #28: Place search: From and To boxes that suggest places as you type
+- 2026-11-03 22:36 PHT `515a42f` PR #29: feat: trips anywhere in the Philippines, judged against PAGASA's whole feed (S1)
+- 2026-11-03 22:43 PHT `90fa557` PR #30: fix(advisory): fetch records PAGASA links by bare IP from the feed's host
+- 2026-11-03 22:59 PHT `1a6e754` PR #31: feat: photo and voice reports through the Telegram bot (S6)
+- 2026-11-03 23:20 PHT `402aa7f` PR #32: feat: the map is the app: full-screen map, one sheet, advisory areas and a legend (S3a)
+- 2026-11-03 23:38 PHT `13df8e9` PR #33: feat: type your trip in plain words; the place search names the places you confirm (S5)
+- 2026-11-03 23:51 PHT `9112b1a` PR #34: feat: alerts reach the riders whose route they touch, and a warn-only Muse Wonder sweep (S4)
+- 2026-11-04 00:30 PHT `0a05948` PR #35: fix: each watched trip in a tick gets its own deadline, deferred trips go first, and a tick never starts a search it can't finish (#26)
+- 2026-11-04 02:16 PHT `ecea7a1` PR #36: S3b: a Rain now map layer (Open-Meteo model rain), off until switched on, capped at 300 calls an hour across processes
+- 2026-11-04 02:39 PHT `94e419e` PR #37: S3c: road closures from the web sweep on the map, with the alert's own words and its source
+- 2026-11-04 03:11 PHT `62f51a0` PR #38: S9: UX polish from the live walk (framing, tap targets, commit-point wording, announced errors)
+- 2026-11-04 03:21 PHT `c00e81d` test(sweep): the two untested refusals (place not named, no closure term near it) and a positive control for the warn-only gate (goal ledger #4) (#39)
+- 2026-11-04 08:24 PHT `5180ea7` PR #54: fix(ux): say when the web search kept nothing, and that this doesn't mean the roads are clear (S9 F15)
 <!-- commits:end -->
 
 ## How it works
@@ -297,6 +367,15 @@ track). Everything in this repository was written during the event; the commit h
    verdict.
 5. The page draws the water mask, boxes each person and car it measured, and marks the waterline
    where SAM's mask of that person or car meets the water.
+6. A trip check puts the pieces together. The place search (Photon) gives each end, the public Valhalla router gives
+   the route, and the rules in `lib/answer.ts` judge it against PAGASA's advisory and the photo reports. A Muse
+   Spark investigation picks which evidence to show; it cannot change the answer.
+7. The web sweep runs on its own schedule (`lusong-alert-sweep`, QStash, at minutes 25 and 55; the code
+   lets Muse Wonder 1.0 run at most 4 times a UTC day, 3 hours apart). Wonder searches the web, capped at 4 tool
+   calls, and returns pages to look at. Lusong fetches each page and admits an item only when the page names the
+   place and its province with a closure or flood word near the place. The organisation comes from the host, the
+   time from the page and the place from the geocoder. Admitted items warn and never change an answer
+   (`SWEEP_BLOCKING` is `false`). Each admitted item is also an alert for watchers whose route it touches.
 
 ## Why SAM 3.1 and Muse Spark
 
@@ -305,6 +384,15 @@ track). Everything in this repository was written during the event; the commit h
   person's or car's mask meets the water's.
 - **Muse Spark 1.3 reads.** Where the water sits on a body or a tyre is a visual judgement. A JSON schema holds it
   to a fixed list of landmarks, so it never writes centimetres, a verdict or any text that reaches the page.
+- **Muse Spark 1.3 also reads a typed trip.** "Talamban to IT Park, leaving around 7" becomes two place strings and
+  a time, in a JSON schema, copied from the rider's words. The place search turns each string into candidates the
+  rider picks from. In a development measurement (1 draw per text, 10 texts, 2026-11-03 about 23:30 PHT, $0.037),
+  10 of 10 texts were read with both ends and the time; the expected place came first for 8 of 10, and 1 of 10 got
+  no candidates because place search answered `down`. That is 10 draws, not an accuracy figure.
+- **Muse Wonder 1.0 sweeps the web.** It is the one model here that searches by itself, so it is boxed in: web
+  search capped at 4 tool calls (the provider enforced the cap in 2 of 2 draws on 2026-11-03), a reply that is only
+  a list of pages, and admission rules in plain code that read each page. It cannot put its own words on the page,
+  and its items never change an answer.
 - **Plain code decides.** Landmarks become depth intervals and the deepest reading sets the MMDA class, by
   rules with unit tests (`lib/verdict.test.ts`, `lib/tyre.test.ts`). `docs/meta-api-notes.md` records what we measured about both models' API behaviour.
 
@@ -355,6 +443,32 @@ against 6 on the previous run. The tyre estimate appeared on 4 of the 30 draws a
   between its ends (on different islands) gets no answer: Valhalla is asked for no ferries, and a route that still
   takes one is refused.
 - The web search covers at most two provinces a check. When the route enters one it didn't search, the page says so.
+- A route's ends must lie within 50 m of the trip's two points. Valhalla snaps each point to the nearest road, and a
+  start in a big lot (a mall, a plaza) can snap further. On production a Jaro plaza start snapped 51 m away (1 draw)
+  and the check was refused with 503. This will refuse more places nationwide than it did for Cebu's built-in
+  places; no count of how many. Follow-up: #41.
+- Place search gives Photon 4 seconds. On 2026-11-03 production answered `down` for two Iloilo names at about 22:47
+  PHT and `ok` for six names at 23:32 PHT, 2.2 to 3.8 s each (1 draw each). A slow Photon minute therefore shows as
+  `down`; this is inferred from timings, and Photon's own latency at 22:47 was not measured. The top candidate is not
+  always the place meant ("Banilad Town Centre" came back with "Banilad Town Homes" first, 1 draw). Follow-up: #42.
+- A Luzon check (Quezon City Hall to Ortigas Center) took 57.4 s on production and a Mindanao one 40.1 s (1 draw each),
+  against the commute page's 80 s deadline. #26 gave each watched trip its own deadline inside the watcher tick's 55 s;
+  the page's 80 s split is unchanged (#44).
+- The web sweep found nothing in its first measured run (0 candidates admitted, 1 draw). It reads only pages on its
+  allow-list that carry a structured publication time, so a closure posted anywhere else, or on Facebook, is not
+  seen. Sweep items warn and never clear or block an answer.
+- Rain now is a model's estimate from Open-Meteo, not a measurement, and is never part of a verdict. With no budget
+  store the layer is paused and makes no call.
+- A Telegram report needs a location sent within 2 minutes of the photo or voice note. The web Report sheet sends a
+  picked photo at once, with no preview or confirm step yet (#48).
+- Video reports read by SAM 3.1 did not ship. The plan required at least 5 openly licensed clips with a stated depth
+  to measure it on, and a search on 2026-11-03 found none (about 650 Wikimedia Commons videos scanned, plus the
+  Internet Archive and two web searches). Not tried: DVIDS, YouTube CC BY. Follow-up: #46.
+- Unfixed follow-ups from this release: alert delivery's read of the alert store can race a PAGASA rebuild (#40); a late store write
+  could overwrite a newer attempt (#45); the bot's old description was not saved before it was replaced (#47);
+  the page does not yet open on the rider's own saved trip (#43), move focus after "Use this trip" (#49) or after From
+  (#50), close a sheet with Escape (#51), show the watcher's times in 24 hours (#52), or fit the typed-trip
+  placeholder at 390 px (#53).
 
 - It measures only where a person or car stands in the water. The deepest part of the street may be
   elsewhere, which is why it never says "passable to all vehicles".
@@ -400,11 +514,28 @@ limit, so the reservation rests on a measured bound: 1.5× the input tokens of t
 server accepts (1600×1600, 12 objects). An overrun that Meta reports is charged, which refuses later
 checks, so the daily total can pass the budget only by that overrun on the checks already in flight.
 
+The Muse Wonder sweep draws on the same daily budget, with two guards of its own (`lib/sweep.ts`). It reserves
+$0.30 (two attempts at 4 web searches, a 20,000-token input bound and a 3,000-token output cap at Wonder's listed
+rates; the rates are UNVERIFIED against Meta's pricing page, no quotecheck run). It is refused when that reserve
+would take the day's total spend past the budget less $7.00, so riders keep at least $7.00 of a $10 day, and
+when it would take the sweeps' own spend past $1.50 a day. Both checks run in one atomic step in the ledger. A sweep
+is also limited to 4 a UTC day, 3 hours apart. One full sweep on the local store charged $0.1009 (development, 1 draw,
+2026-11-03 23:54 PHT); at that rate 4 a day is about $0.40, which is an estimate, not a production bill.
+
+A typed trip reserves its own worst case: two attempts at the measured input bound and the 2,000-token output cap set in
+`lib/trip-text.ts`. All 10 texts of the live measurement were read within that cap, and they cost $0.037 in total (1 draw
+each).
+
+The Rain now layer calls Open-Meteo, not Meta, and costs no dollars. Lusong makes at most 300 Open-Meteo calls an
+hour across every server process, counted in the budget's database with one key per UTC hour. With no store the
+layer is paused and makes no call. While building it, 3 calls were made in all (1 curl, 1 local browser pass and 1 production check).
+
 | Variable | Default | Meaning |
 |---|---|---|
 | `DAILY_BUDGET_USD` | `10` | Spend allowed per UTC day (resets 8:00 a.m. in Manila). |
 | `PER_IP_DAILY` | `10` | Checks per client address per UTC day. |
 | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` (or `KV_REST_API_URL`, `KV_REST_API_TOKEN`, which Vercel's Upstash integration sets) | none | The shared ledger. Its keys all start with `lusong:`, so it can share a database. Without them every check is refused. |
+| `LUSONG_SWEEP=on` | unset | Lets the sweep call Muse Wonder (it also needs `MODEL_API_KEY`). Without it, the sweep still works through candidates it already holds but makes no paid call. On in production since 2026-11-03 23:56 PHT. |
 | `LUSONG_BUDGET_STORE=memory` | unset | An in-process ledger for local development. Refused when `VERCEL` is set or `NODE_ENV=production`. |
 
 `pnpm spend-today` prints what the production ledger holds for the two UTC budget days that overlap
