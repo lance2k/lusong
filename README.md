@@ -1,7 +1,8 @@
 # Lusong
 
-Before you ride to work in Cebu, Lusong answers "should I leave now, and which way?": **Go**, **Go another way**,
-**Wait** or **No one knows**, with the evidence under the answer. The evidence is PAGASA's flood advisory for Cebu and
+Before you ride to work anywhere in the Philippines, Lusong answers "should I leave now, and which way?": **Go**,
+**Go another way**, **Wait** or **No one knows**, with the evidence under the answer. The evidence is PAGASA's flood
+advisory for your route and
 photo reports from people at the water, each read by Lusong's depth reader: send a photo of a flooded street and it
 reads how deep the water is on the MMDA flood gauge, with the waterline drawn on the photo.
 
@@ -32,7 +33,8 @@ Pick a trip (a preset one such as Banilad → IT Park, or your own two points on
 - **Under an advisory or rain**, a Go needs clear reports every 500 m of the route. Without them the answer is No one
   knows, because nobody has looked yet. An advisory Lusong can't read counts as active.
 - **Muse Spark investigates** through the Responses API: it calls Lusong's tools (read the advisory, list the reports
-  near a route) and its own web search for road closures in Cebu today. It returns which evidence matters, as ids.
+  near a route) and its own web search for road closures today in the provinces the trip crosses (at most two a
+  check, each cached on its own). It returns which evidence matters, as ids.
   Lusong writes every sentence on the page from those ids, so the model can't change the answer or put its own words
   in front of the rider. A closure it finds blocks a way only when it is dated today and placed on that way.
   Each of its turns gets up to 30 seconds inside the check's 80-second deadline. When it doesn't answer in time, the
@@ -56,9 +58,10 @@ Pick a trip (a preset one such as Banilad → IT Park, or your own two points on
   runs scheduled jobs once a day: all 27 ticks it logged from 2026-11-02 20:50 to 2026-11-03 01:10 PHT got 200. A
   GitHub Actions schedule stays on as a backup, though GitHub started it only every 3 to 7 hours.
   `docs/watcher-setup.md` has the setup.
-- **The demo trips** are recorded routes with sample reports. Every sample says it is a sample and where the photo was
-  really taken (Cavite, Manila or Shah Alam in Malaysia, from Lusong's labelled test photos), so it is never
-  mistaken for a report from Cebu.
+- **The demo trips** are recorded routes with sample reports: two in Cebu City and one in Metro Manila (Araneta City
+  Cubao → Makati City Hall). Every sample says it is a sample and where the photo was really taken (Cavite, Manila or
+  Shah Alam in Malaysia, from Lusong's labelled test photos), so it is never mistaken for a report from the street it
+  is pinned on.
 
 ## Built during the hackathon
 
@@ -346,8 +349,12 @@ against 6 on the previous run. The tyre estimate appeared on 4 of the 30 draws a
   No one knows rather than Go.
 - Routes come from the public FOSSGIS Valhalla server, shared by everyone and limited to one request a second.
   When it can't be reached, the check gives no answer rather than a guess.
-- Map tiles come from OpenStreetMap's servers, which see the area you view. The map opens on all of Metro Cebu
-  and moves to your trip only when you check it.
+- Map tiles come from OpenStreetMap's servers, which see the area you view. The map opens on all of the Philippines
+  and moves to your trip only when you pick or tap one of its ends, or check it.
+- A trip's ends must be in the Philippines and at most 100 km apart, and its route at most 150 km. A trip with no road
+  between its ends (on different islands) gets no answer: Valhalla is asked for no ferries, and a route that still
+  takes one is refused.
+- The web search covers at most two provinces a check. When the route enters one it didn't search, the page says so.
 
 - It measures only where a person or car stands in the water. The deepest part of the street may be
   elsewhere, which is why it never says "passable to all vehicles".
