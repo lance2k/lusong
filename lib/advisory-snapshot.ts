@@ -257,9 +257,21 @@ function readFeed(xml: string): { entries: FeedEntry[]; unlinked: string[] } {
       return [];
     }
     const updated = textOf(entry, ATOM, "updated") ?? "";
-    return [{ title, updated, updatedMs: time(updated, `"${title}" updated`), link: new URL(link.attrs.href, FEED_URL).href }];
+    return [{ title, updated, updatedMs: time(updated, `"${title}" updated`), link: recordUrl(link.attrs.href) }];
   });
   return { entries, unlinked };
+}
+
+/**
+ * Some feed entries link a record by PAGASA's bare IP address (seen 2026-11-03: 2 of 51). Its certificate names only
+ * the feed's host, so a fetch by IP fails TLS; the same path on the feed's host serves the record.
+ */
+const PAGASA_IP_HOSTS = new Set(["121.58.193.10"]);
+
+export function recordUrl(href: string): string {
+  const url = new URL(href, FEED_URL);
+  if (PAGASA_IP_HOSTS.has(url.hostname)) url.hostname = new URL(FEED_URL).hostname;
+  return url.href;
 }
 
 interface ParsedRecord {
