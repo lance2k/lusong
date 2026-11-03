@@ -271,7 +271,7 @@ describe.each(telegramStores)("a photo report through Telegram, on the %s", (_na
     expect(calls).toHaveLength(once);
   });
 
-  it("the pairing landing and its answer lost: 500, and the redelivery only re-stores its half and asks again (S6P-2)", async () => {
+  it("the pairing landing and its answer lost: 500, and the redelivery does nothing, since the pairing marked the update (S6P-2)", async () => {
     const calls = stubMeta();
     const under = make();
     const realPair = under.store.pair.bind(under.store);
@@ -286,10 +286,35 @@ describe.each(telegramStores)("a photo report through Telegram, on the %s", (_na
     const ph = photo();
     expect((await b.send(ph)).status).toBe(500);
     expect((await b.send(ph)).status).toBe(200);
-    expect(b.replies().at(-1)).toBe(TELEGRAM_REPLIES.photoWaiting);
+    expect(b.replies()).toEqual([TELEGRAM_REPLIES.locationWaiting]);
     expect(calls).toEqual([]);
     expect(b.server.requests).toEqual([]);
     expect(await b.reportStore.recent(NOW)).toEqual([]);
+  });
+
+  it("dying mid-read before the update is finished: once its hold lapses, a redelivery doesn't pair with a newer location or read again (S6P-2)", async () => {
+    const calls = stubMeta();
+    const under = make({ processingMs: 300 } satisfies TelegramStoreOptions);
+    const finish = under.store.finishUpdate.bind(under.store);
+    // The worker dies after its Meta read: it never marks the update finished.
+    under.store.finishUpdate = async (id) => {
+      if (calls.length === 0) await finish(id);
+    };
+    const b = bot({ store: under.store });
+    await b.send(location());
+    const ph = photo();
+    await b.send(ph);
+    const paid = calls.length;
+    expect(paid).toBeGreaterThan(0);
+    under.store.finishUpdate = finish;
+
+    await b.send(location({ date: T + 100 }));
+    expect(b.replies().at(-1)).toBe(TELEGRAM_REPLIES.locationWaiting);
+    await under.wait(400);
+    expect((await b.send(ph)).status).toBe(200);
+    expect(calls).toHaveLength(paid);
+    expect(b.server.requests.filter((r) => r.startsWith("download"))).toHaveLength(1);
+    expect(await b.reportStore.recent(NOW)).toHaveLength(1);
   });
 
   it("a store failure after pairing replies that it couldn't read it; redeliveries, even after the hold lapses, repeat nothing (S6P-2)", async () => {
@@ -511,6 +536,21 @@ describe("a voice report through Telegram", () => {
     expect(b.replies().join("\n")).not.toContain("hanggang");
   });
 
+  it("a language command is an update like any other: a redelivered one doesn't undo a newer choice, a forwarded one changes nothing", async () => {
+    stubMeta();
+    const store = new MemoryTelegramStore();
+    const b = bot({ store });
+    const tagalog = text("/tagalog");
+    await b.send(tagalog);
+    await b.send(text("/english"));
+    await b.send(tagalog);
+    expect(await store.language(String(CHAT))).toBe("en");
+    expect(b.replies()).toEqual([TELEGRAM_REPLIES.languageSet("tl"), TELEGRAM_REPLIES.languageSet("en")]);
+    await b.send(update({ text: "/bisaya", forward_origin: { type: "user", date: T, sender_user: { id: 1 } } }));
+    expect(await store.language(String(CHAT))).toBe("en");
+    expect(b.replies().at(-1)).toBe(TELEGRAM_REPLIES.forwarded);
+  });
+
   it("a voice note saying the road is clear never clears it", async () => {
     stubMeta(voiceClaim({ place: "Talamban", depth: "dry", passable: "yes" }));
     const store = new MemoryTelegramStore();
@@ -551,6 +591,7 @@ describe("a voice report through Telegram", () => {
     ["a file larger than 512 KB that said it was small", { bytes: new Uint8Array(600 * 1024), statedSize: 6_000 }, TELEGRAM_REPLIES.voiceTooLong],
     ["40 s of audio in a note whose message said 5 s", { bytes: note("tone-40s.ogg") }, TELEGRAM_REPLIES.voiceTooLong],
     ["a note too short to hold a report", { bytes: note("tone-0.3s.ogg") }, TELEGRAM_REPLIES.voiceTooShort],
+    ["30.25 s of audio, under the decoder's stop but over 30 s", { bytes: note("tone-30.25s.ogg") }, TELEGRAM_REPLIES.voiceTooLong],
   ])("%s never reaches Meta (S6P-4)", async (_what, file, reply) => {
     const calls = stubMeta(voiceClaim(CLAIM));
     const store = new MemoryTelegramStore();

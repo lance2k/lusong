@@ -10,8 +10,8 @@ const location = (lat: number, date = T): LocationHalf => ({ side: "location", l
 describe.each(telegramStores)("pairing a chat's photo and location on the %s (S6P-1)", (_name, make) => {
   it("two photos racing for one waiting location pair exactly once", async () => {
     const { store } = make();
-    expect(await store.pair(CHAT, location(10.3))).toEqual({ paired: false });
-    const results = await Promise.all([store.pair(CHAT, photo("a", T + 5)), store.pair(CHAT, photo("b", T + 5))]);
+    expect(await store.pair(CHAT, location(10.3), 1)).toEqual({ paired: false });
+    const results = await Promise.all([store.pair(CHAT, photo("a", T + 5), 2), store.pair(CHAT, photo("b", T + 5), 3)]);
     expect(results.filter((r) => r.paired)).toHaveLength(1);
     const [won] = results.filter((r) => r.paired);
     expect(won).toEqual({ paired: true, media: expect.objectContaining({ side: "media" }), location: location(10.3) });
@@ -19,45 +19,45 @@ describe.each(telegramStores)("pairing a chat's photo and location on the %s (S6
 
   it("photo, photo, location pairs the second photo", async () => {
     const { store } = make();
-    await store.pair(CHAT, photo("first"));
-    await store.pair(CHAT, photo("second", T + 1));
-    expect(await store.pair(CHAT, location(10.3, T + 2))).toEqual({ paired: true, media: photo("second", T + 1), location: location(10.3, T + 2) });
-    expect(await store.pair(CHAT, location(10.4, T + 3))).toEqual({ paired: false });
+    await store.pair(CHAT, photo("first"), 4);
+    await store.pair(CHAT, photo("second", T + 1), 5);
+    expect(await store.pair(CHAT, location(10.3, T + 2), 6)).toEqual({ paired: true, media: photo("second", T + 1), location: location(10.3, T + 2) });
+    expect(await store.pair(CHAT, location(10.4, T + 3), 7)).toEqual({ paired: false });
   });
 
   it("location, location, photo pairs the second location", async () => {
     const { store } = make();
-    await store.pair(CHAT, location(10.3));
-    await store.pair(CHAT, location(10.4, T + 1));
-    expect(await store.pair(CHAT, photo("p", T + 2))).toEqual({ paired: true, media: photo("p", T + 2), location: location(10.4, T + 1) });
+    await store.pair(CHAT, location(10.3), 8);
+    await store.pair(CHAT, location(10.4, T + 1), 9);
+    expect(await store.pair(CHAT, photo("p", T + 2), 10)).toEqual({ paired: true, media: photo("p", T + 2), location: location(10.4, T + 1) });
   });
 
   it("halves dated 120 s apart pair; 121 s apart they don't, and the later one waits instead", async () => {
     const { store } = make();
-    await store.pair(CHAT, photo("p"));
-    expect((await store.pair(CHAT, location(10.3, T + 120))).paired).toBe(true);
-    await store.pair(CHAT, photo("q"));
-    expect(await store.pair(CHAT, location(10.3, T + 121))).toEqual({ paired: false });
-    expect(await store.pair(CHAT, photo("r", T + 121))).toEqual({ paired: true, media: photo("r", T + 121), location: location(10.3, T + 121) });
+    await store.pair(CHAT, photo("p"), 11);
+    expect((await store.pair(CHAT, location(10.3, T + 120), 12)).paired).toBe(true);
+    await store.pair(CHAT, photo("q"), 13);
+    expect(await store.pair(CHAT, location(10.3, T + 121), 14)).toEqual({ paired: false });
+    expect(await store.pair(CHAT, photo("r", T + 121), 15)).toEqual({ paired: true, media: photo("r", T + 121), location: location(10.3, T + 121) });
   });
 
   it("an expired waiting half doesn't pair", async () => {
     const { store, wait } = make({ pendingTtlMs: 300 });
-    await store.pair(CHAT, photo("p"));
+    await store.pair(CHAT, photo("p"), 16);
     await wait(400);
-    expect(await store.pair(CHAT, location(10.3, T + 1))).toEqual({ paired: false });
+    expect(await store.pair(CHAT, location(10.3, T + 1), 17)).toEqual({ paired: false });
   });
 
   it("another chat's half never pairs", async () => {
     const { store } = make();
-    await store.pair("777", photo("p"));
-    expect(await store.pair(CHAT, location(10.3))).toEqual({ paired: false });
+    await store.pair("777", photo("p"), 18);
+    expect(await store.pair(CHAT, location(10.3), 19)).toEqual({ paired: false });
   });
 
   it("keeps the waiting half under the chat's hash with a 2-minute expiry, and only Telegram's file id", async () => {
     const { store, held } = make();
     const half: Half = { side: "media", kind: "voice", fileId: "voice-file", date: T, durationS: 4, fileSize: 9000, language: "tl" };
-    await store.pair(CHAT, half);
+    await store.pair(CHAT, half, 99);
     const kept = await held();
     expect(Object.keys(kept)).toEqual([`lusong:tg:pending:${chatKey(CHAT)}`]);
     expect(JSON.stringify(kept)).not.toContain(CHAT);
@@ -74,6 +74,18 @@ describe.each(telegramStores)("update ids and language choices on the %s", (_nam
     await store.finishUpdate(1);
     await store.releaseUpdate(1);
     expect(await store.claimUpdate(1)).toBe(false);
+  });
+
+  it("an update that paired can't be taken again, even after its hold lapses and before it was finished (S6P-2)", async () => {
+    const { store, wait } = make({ processingMs: 300 });
+    expect(await store.claimUpdate(1)).toBe(true);
+    await store.pair(CHAT, location(10.3), 1);
+    await store.finishUpdate(1);
+    expect(await store.claimUpdate(2)).toBe(true);
+    expect((await store.pair(CHAT, photo("p"), 2)).paired).toBe(true);
+    await store.releaseUpdate(2);
+    await wait(400);
+    expect(await store.claimUpdate(2)).toBe(false);
   });
 
   it("an update being worked on is taken again once its hold lapses", async () => {

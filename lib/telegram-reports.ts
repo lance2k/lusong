@@ -18,8 +18,8 @@ export const REPLY_RESERVE_MS = 10_000;
 export const STALE_AFTER_S = 10 * 60;
 /** Telegram voice notes are Opus at a low bit rate; 30 s of one is far under this (S6P-4). */
 export const MAX_VOICE_NOTE_BYTES = 512 * 1024;
-/** A note's decoded audio may run a little over its stated 30 s from the codec's frame rounding; more is refused. */
-const DECODED_VOICE_SLACK_MS = 500;
+/** The decoder stops this far past 30 s; anything over 30 s of decoded audio is then refused. */
+const DECODER_STOP_SLACK_MS = 500;
 
 const LANGUAGE_COMMANDS: Record<string, VoiceLanguage> = { bisaya: "ceb", tagalog: "tl", english: "en" };
 const COMMAND_OF: Record<VoiceLanguage, string> = { ceb: "/bisaya", tl: "/tagalog", en: "/english" };
@@ -186,8 +186,10 @@ export function makeTelegramReports(deps: TelegramReportDeps): TelegramReports {
     const { claimBy } = voiceSchedule(deadline, voiceTiming);
     const download = await files.download(media.fileId, { maxBytes: MAX_VOICE_NOTE_BYTES, deadline: claimBy });
     if (!download.ok) return { too_large: TELEGRAM_REPLIES.voiceTooLong, too_slow: TELEGRAM_REPLIES.outOfTime, failed: TELEGRAM_REPLIES.couldntGet }[download.reason];
-    const decoded = await decodeVoiceNote(download.bytes, { maxMs: MAX_VOICE_MS + DECODED_VOICE_SLACK_MS, deadline: claimBy });
+    const decoded = await decodeVoiceNote(download.bytes, { maxMs: MAX_VOICE_MS + DECODER_STOP_SLACK_MS, deadline: claimBy });
     if (!decoded.ok) return { malformed: TELEGRAM_REPLIES.couldntRead, too_long: TELEGRAM_REPLIES.voiceTooLong, too_slow: TELEGRAM_REPLIES.outOfTime }[decoded.reason];
+    // encodeWav cuts at 30 s, so the decoded length is checked first: a longer note is refused, never sent cut short.
+    if ((decoded.samples.length / decoded.sampleRate) * 1000 > MAX_VOICE_MS) return TELEGRAM_REPLIES.voiceTooLong;
     const clip = parseVoiceWav(encodeWav(decoded.samples, decoded.sampleRate));
     if (!clip.ok) return clip.reason === "too_short" ? TELEGRAM_REPLIES.voiceTooShort : clip.reason === "too_long" ? TELEGRAM_REPLIES.voiceTooLong : TELEGRAM_REPLIES.couldntRead;
     return voiceReply(await processVoiceReport({ clip, language: media.language, at, receivedAt, admitKey, deadline }));
@@ -208,21 +210,6 @@ export function makeTelegramReports(deps: TelegramReportDeps): TelegramReports {
       const reply = (text: string) => channel.send(chat, text);
       const started = Date.now();
       const receivedAt = now();
-
-      if (arrival.kind === "language") {
-        if (arrival.language === "ceb" && !BISAYA_VOICE_ENABLED) {
-          await reply(TELEGRAM_REPLIES.bisayaOff);
-          return ok();
-        }
-        try {
-          await store.setLanguage(chat, arrival.language);
-        } catch (err) {
-          console.error("telegram store failed on language:", err instanceof Error ? err.message : err);
-          return storeFailed();
-        }
-        await reply(TELEGRAM_REPLIES.languageSet(arrival.language));
-        return ok();
-      }
 
       const id = updateId as number;
       try {
@@ -245,11 +232,21 @@ export function makeTelegramReports(deps: TelegramReportDeps): TelegramReports {
       };
 
       if (message.forward_origin !== undefined) return finish(TELEGRAM_REPLIES.forwarded);
-      // A picked place arrives with both venue and location set (Message.venue in the Bot API docs), so venue goes first.
-      if (message.venue !== undefined) return finish(TELEGRAM_REPLIES.venue);
       if (!isNumber(message.date) || receivedAt.getTime() / 1000 - message.date > STALE_AFTER_S) return finish(TELEGRAM_REPLIES.stale);
       const date = message.date;
 
+      if (arrival.kind === "language") {
+        if (arrival.language === "ceb" && !BISAYA_VOICE_ENABLED) return finish(TELEGRAM_REPLIES.bisayaOff);
+        try {
+          await store.setLanguage(chat, arrival.language);
+        } catch (err) {
+          console.error("telegram store failed on language:", err instanceof Error ? err.message : err);
+          return giveBack();
+        }
+        return finish(TELEGRAM_REPLIES.languageSet(arrival.language));
+      }
+      // A picked place arrives with both venue and location set (Message.venue in the Bot API docs), so venue goes first.
+      if (message.venue !== undefined) return finish(TELEGRAM_REPLIES.venue);
       let half: Half;
       if (arrival.kind === "photo") {
         const fileId = photoSize(message.photo!);
@@ -278,7 +275,7 @@ export function makeTelegramReports(deps: TelegramReportDeps): TelegramReports {
 
       let pairing: Awaited<ReturnType<TelegramStore["pair"]>>;
       try {
-        pairing = await store.pair(chat, half);
+        pairing = await store.pair(chat, half, id);
       } catch (err) {
         console.error("telegram store failed on pairing:", err instanceof Error ? err.message : err);
         return giveBack();

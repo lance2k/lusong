@@ -38,9 +38,10 @@ export interface TelegramStore {
   /**
    * Atomic, one call per arrival: if the chat's waiting half is the other side and dated within PAIR_WINDOW_S, it is
    * taken and both are returned; otherwise this half waits in its place (the latest wins). Only one arrival can take
-   * a waiting half.
+   * a waiting half. A pairing also marks `updateId` paired for UPDATE_DONE_MS in the same step, so the update can't
+   * be claimed again and form a second job if its worker dies before finishing it.
    */
-  pair(chat: string, half: Half): Promise<Pairing>;
+  pair(chat: string, half: Half, updateId: number): Promise<Pairing>;
   setLanguage(chat: string, language: VoiceLanguage): Promise<void>;
   language(chat: string): Promise<VoiceLanguage | null>;
 }
@@ -120,12 +121,13 @@ export class MemoryTelegramStore implements TelegramStore {
     this.set(`update:${updateId}`, "done", UPDATE_DONE_MS);
   }
 
-  async pair(chat: string, half: Half): Promise<Pairing> {
+  async pair(chat: string, half: Half, updateId: number): Promise<Pairing> {
     const key = `pending:${chatKey(chat)}`;
     const current = this.get(key);
     const waiting = current === null ? null : decodeHalf(current);
     if (waiting && waiting.side !== half.side && Math.abs(waiting.date - half.date) <= PAIR_WINDOW_S) {
       this.keys.delete(key);
+      this.set(`update:${updateId}`, "paired", UPDATE_DONE_MS);
       return paired(half, waiting);
     }
     this.set(key, encodeHalf(half), this.pendingTtlMs);
@@ -141,13 +143,15 @@ export class MemoryTelegramStore implements TelegramStore {
   }
 }
 
-/** KEYS: pending. ARGV: side, date, encoded half, window s, ttl ms. Returns the waiting half it took, or false. */
+/** KEYS: pending, update. ARGV: side, date, encoded half, window s, ttl ms, paired ttl ms. Returns the waiting half it
+ *  took, or false. */
 const PAIR_SCRIPT = `
 local current = redis.call('GET', KEYS[1])
 if current then
   local side, date = string.match(current, '^(%a+)|(%d+)|')
   if side and side ~= ARGV[1] and math.abs(tonumber(date) - tonumber(ARGV[2])) <= tonumber(ARGV[4]) then
     redis.call('DEL', KEYS[1])
+    redis.call('SET', KEYS[2], 'paired', 'PX', ARGV[6])
     return current
   end
 end
@@ -203,17 +207,19 @@ export class UpstashTelegramStore implements TelegramStore {
     await this.call(["SET", this.key(`update:${updateId}`), "done", "PX", UPDATE_DONE_MS]);
   }
 
-  async pair(chat: string, half: Half): Promise<Pairing> {
+  async pair(chat: string, half: Half, updateId: number): Promise<Pairing> {
     const taken = await this.call([
       "EVAL",
       PAIR_SCRIPT,
-      1,
+      2,
       this.key(`pending:${chatKey(chat)}`),
+      this.key(`update:${updateId}`),
       half.side,
       half.date,
       encodeHalf(half),
       PAIR_WINDOW_S,
       this.pendingTtlMs,
+      UPDATE_DONE_MS,
     ]);
     const waiting = typeof taken === "string" ? decodeHalf(taken) : null;
     return waiting ? paired(half, waiting) : { paired: false };

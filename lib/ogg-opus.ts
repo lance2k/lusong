@@ -39,6 +39,7 @@ export async function decodeVoiceNote(bytes: Uint8Array, opts: { maxMs: number; 
     }
     const stop = take(await decoder.flush());
     if (stop) return { ok: false, reason: stop };
+    if (Date.now() > opts.deadline) return { ok: false, reason: "too_slow" };
   } catch {
     return { ok: false, reason: "malformed" };
   } finally {

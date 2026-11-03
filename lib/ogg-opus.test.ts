@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { decodeVoiceNote, OPUS_RATE } from "./ogg-opus";
 import { encodeWav, parseVoiceWav } from "./wav";
 
@@ -31,6 +31,16 @@ describe("decoding a Telegram voice note", () => {
     expect(await decodeVoiceNote(noise, ample())).toEqual({ ok: false, reason: "malformed" });
     expect(await decodeVoiceNote(fixture("tone-3s.ogg").subarray(0, 60), ample())).toEqual({ ok: false, reason: "malformed" });
     expect(await decodeVoiceNote(fixture("tone-3s-vorbis.ogg"), ample())).toEqual({ ok: false, reason: "malformed" });
+  });
+
+  it("refuses a note whose decoding ends past its deadline, even with nothing left to decode", async () => {
+    const deadline = Date.now() + 1;
+    const realNow = Date.now;
+    let calls = 0;
+    // The clock passes the deadline only after the first check, so the decode itself crosses it.
+    vi.spyOn(Date, "now").mockImplementation(() => (calls++ < 1 ? realNow() : deadline + 1_000));
+    expect(await decodeVoiceNote(fixture("tone-0.3s.ogg"), { maxMs: 30_500, deadline })).toEqual({ ok: false, reason: "too_slow" });
+    vi.restoreAllMocks();
   });
 
   it("stops once its deadline has passed (S6P-3)", async () => {
