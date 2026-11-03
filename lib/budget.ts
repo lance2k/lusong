@@ -83,12 +83,12 @@ export interface Budget {
   settle(admission: Admitted, usage: MeteredUsage, succeeded: boolean): Promise<void>;
 }
 
-function utcDay(now: Date): string {
+export function utcDay(now: Date): string {
   return now.toISOString().slice(0, 10);
 }
 
 /** Hashed so the store never holds a plain IP; the day in the input stops keys linking across days. */
-function ipKeyFor(day: string, ip: string): string {
+export function ipKeyFor(day: string, ip: string): string {
   return createHash("sha256").update(`${day}:${ip}`).digest("hex").slice(0, 32);
 }
 
