@@ -1,3 +1,4 @@
+import { closureRowLines } from "./closures-layer";
 import type { AdvisoryArea } from "../lib/advisory-areas";
 import { phtTime } from "../lib/commute-words";
 import { ADVISORY_INCOMPLETE_LINE } from "./credits";
@@ -128,13 +129,13 @@ export function ageMinutes(age: string): number | null {
   return Number(m[1] ?? 0) * 60 + Number(m[2] ?? 0);
 }
 
-export type LayerId = "routes" | "reports" | "areas" | "rain";
+export type LayerId = "routes" | "reports" | "areas" | "closures" | "rain";
 export type LayerToggles = Record<LayerId, boolean>;
 /** Rain is off until the rider switches it on: every rain call is a call to Open-Meteo's free service. */
-export const DEFAULT_LAYERS: LayerToggles = { routes: true, reports: true, areas: true, rain: false };
+export const DEFAULT_LAYERS: LayerToggles = { routes: true, reports: true, areas: true, closures: true, rain: false };
 
 export interface LegendRow {
-  id: LayerId | "closures";
+  id: LayerId;
   label: string;
   /** False when there is nothing to toggle: no answer yet, no area in this reply, or a layer still to come. */
   available: boolean;
@@ -148,7 +149,12 @@ export interface LegendReply {
   advisory: { state: string; note: string | null; incomplete?: boolean };
 }
 
-export function legendRows(reply: LegendReply | null, checkedAt: string | null, rainLines: string[] = rainRowLines(null, false)): LegendRow[] {
+export function legendRows(
+  reply: LegendReply | null,
+  checkedAt: string | null,
+  rainLines: string[] = rainRowLines(null, false),
+  closureLines: string[] = closureRowLines(null, false, 0),
+): LegendRow[] {
   const areas = advisoryAreasOf(reply);
   const ages = (reply?.reports ?? []).map((r) => ({ age: r.age, min: ageMinutes(r.age) })).filter((a) => a.min !== null);
   ages.sort((a, b) => a.min! - b.min!);
@@ -175,7 +181,7 @@ export function legendRows(reply: LegendReply | null, checkedAt: string | null, 
     },
     { id: "reports", label: "Reports", available: Boolean(reply && reply.reports.length > 0), lines: reportLines },
     { id: "areas", label: "PAGASA areas", available: drawn > 0, lines: areaLines },
-    { id: "closures", label: "Road closures", available: false, lines: ["Coming soon"] },
+    { id: "closures", label: "Road closures", available: true, lines: closureLines },
     { id: "rain", label: "Rain now", available: true, lines: rainLines },
   ];
 }

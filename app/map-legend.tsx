@@ -20,7 +20,7 @@ const SWATCHES: Record<LegendRow["id"], React.ReactNode> = {
     </span>
   ),
   areas: <span aria-hidden className="block h-5 w-8 rounded border-2 border-advisory bg-advisory/20" />,
-  closures: <span aria-hidden className="block h-5 w-8 rounded border-2 border-dashed border-line" />,
+  closures: <span aria-hidden className="block h-5 w-8 rounded border-2 border-dashed border-warn-ink" />,
   rain: (
     <span aria-hidden className="flex w-8 gap-0.5">
       {(["light", "moderate", "heavy"] as const).map((band) => (
@@ -46,8 +46,7 @@ export function MapLegend({
     <div className="space-y-4">
       <ul className="divide-y divide-line rounded-card border border-line bg-surface">
         {rows.map((row) => {
-          const toggle = row.id !== "closures";
-          const on = toggle && row.available && layers[row.id as LayerId];
+          const on = row.available && layers[row.id];
           const inputId = `layer-${row.id}`;
           return (
             <li key={row.id} className={`flex items-start gap-3 px-4 py-3 ${row.available ? "" : "opacity-70"}`}>
@@ -58,7 +57,7 @@ export function MapLegend({
                 className="mt-1 h-5 w-5 shrink-0 accent-[var(--brand)]"
                 checked={on}
                 disabled={!row.available}
-                onChange={() => toggle && onToggle(row.id as LayerId)}
+                onChange={() => onToggle(row.id)}
               />
               <span className="mt-0.5 shrink-0">{row.id === "routes" && row.label !== "Route" ? BOTH_ROUTES_SWATCH : SWATCHES[row.id]}</span>
               <span className="min-w-0 space-y-0.5">

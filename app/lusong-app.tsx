@@ -17,6 +17,8 @@ import { CLEAR_FAILED_LINE, outsideLine, useOwnTrip } from "./own-trip";
 import { backMove, PUSHED_KEY, viewFromSearch, type SheetView } from "./sheet-route";
 import { checkRequest } from "./trip";
 import { leaveAtFor, type TypedLeave } from "./typed-trip";
+import { closureRowLines } from "./closures-layer";
+import { useClosures } from "./use-closures";
 import { useRain } from "./use-rain";
 import { IconCamera, IconInfo, IconLayers } from "./ui/icons";
 import { detentPx, Sheet, SheetBody, SheetHeader, type Detent } from "./ui/sheet";
@@ -127,6 +129,7 @@ function Shell() {
   const base = tripMapProps({ demo: ownTrip ? null : DEMO_TRIPS[trip], draft: own.draft, riderMoved: own.touched, result });
   const areas = areaShapes(advisoryAreasOf(result));
   const rain = useRain(layers.rain);
+  const closures = useClosures(layers.closures);
 
   function change(inputs: Partial<CommuteInputs>) {
     dispatch({ type: "change", inputs });
@@ -186,7 +189,7 @@ function Shell() {
     }
   }
 
-  const rows = legendRows(result, result?.checkedAt ?? null, rainRowLines(rain.layer, rain.loading));
+  const rows = legendRows(result, result?.checkedAt ?? null, rainRowLines(rain.layer, rain.loading), closureRowLines(closures.reply, closures.loading, closures.now));
   const samplesShown = Boolean(result?.reports.some((r) => r.sample));
   const collapsed = view.step !== "idle" && !editing;
 
@@ -202,6 +205,7 @@ function Shell() {
         hideBottom={!desktop && detent === "full"}
         focusPin={focusPin}
         rain={rain.layer?.circles ?? []}
+        closures={closures.marks}
         onView={rain.onView}
       />
 

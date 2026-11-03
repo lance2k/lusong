@@ -22,6 +22,7 @@ import {
   type PinSpec,
 } from "./map-layers";
 import { PHILIPPINES_VIEW, pinPopup } from "./map-props";
+import type { ClosureMark } from "../lib/closure-marks";
 import type { RainCircle } from "./rain-layer";
 
 export interface MapPin {
@@ -62,11 +63,14 @@ export interface MapView {
   hideBottom: boolean;
   /** The rain circles to draw, under the routes and pins. Empty while the Rain row is off. */
   rain: RainCircle[];
+  /** The web sweep's reports with a spot, drawn above the PAGASA areas so a tap inside both opens the report (S3cP-3). */
+  closures?: ClosureMark[];
   /** Called with the map's visible box after every move, including the first fit. */
   onView: (view: { south: number; west: number; north: number; east: number }) => void;
 }
 
 const RAIN_PANE = "lusong-rain";
+const CLOSURES_PANE = "lusong-closures";
 
 const latLng = (p: Point): L.LatLngTuple => [p.lat, p.lon];
 
@@ -94,6 +98,20 @@ function popupElement(pin: MapPin): HTMLElement {
     p.textContent = text;
     box.append(p);
   }
+  return box;
+}
+
+/** The report's own template sentence and its source, as text and a link: nothing from the page is parsed as HTML. */
+function closurePopup(mark: ClosureMark): HTMLElement {
+  const box = document.createElement("div");
+  const p = document.createElement("p");
+  p.textContent = mark.words;
+  const link = document.createElement("a");
+  link.href = mark.sourceUrl;
+  link.textContent = "Source";
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  box.append(p, link);
   return box;
 }
 
@@ -143,11 +161,12 @@ export default function TripMap({
   focusPin = null,
   hideBottom = false,
   rain = [],
+  closures = [],
   onView,
 }: TripMapProps & Partial<MapView>) {
   const box = useRef<HTMLDivElement>(null);
   const map = useRef<L.Map | null>(null);
-  const groups = useRef<Record<"routes" | "ends" | "reports" | "areas" | "rain", L.LayerGroup> | null>(null);
+  const groups = useRef<Record<"routes" | "ends" | "reports" | "areas" | "closures" | "rain", L.LayerGroup> | null>(null);
   const markers = useRef(new Map<string, L.Marker>());
   const tap = useRef(onTap);
   const viewed = useRef(onView);
@@ -193,11 +212,13 @@ export default function TripMap({
     m.on("click", (e: L.LeafletMouseEvent) => tap.current?.({ lat: e.latlng.lat, lon: e.latlng.lng }));
     // Below Leaflet's overlay pane (400), where areas and routes are, and above the tiles (200).
     m.createPane(RAIN_PANE).style.zIndex = "350";
+    // Above the overlay pane (400) where the PAGASA areas are, under the markers (600).
+    m.createPane(CLOSURES_PANE).style.zIndex = "450";
     m.on("moveend", () => {
       const b = m.getBounds();
       viewed.current?.({ south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() });
     });
-    groups.current = { rain: L.layerGroup(), areas: L.layerGroup(), routes: L.layerGroup(), ends: L.layerGroup().addTo(m), reports: L.layerGroup() };
+    groups.current = { rain: L.layerGroup(), closures: L.layerGroup(), areas: L.layerGroup(), routes: L.layerGroup(), ends: L.layerGroup().addTo(m), reports: L.layerGroup() };
     map.current = m;
     const el = box.current!;
     const moved = () => {
@@ -274,13 +295,26 @@ export default function TripMap({
     }
   }, [rainKey]);
 
+  const closuresKey = JSON.stringify(closures.filter((m) => m.spot !== null));
+  useEffect(() => {
+    const g = groups.current;
+    if (!g) return;
+    g.closures.clearLayers();
+    for (const mark of JSON.parse(closuresKey) as ClosureMark[]) {
+      const { point, radiusM } = mark.spot!;
+      L.circle([point.lat, point.lon], { radius: radiusM, pane: CLOSURES_PANE, weight: 2, dashArray: "6 4", fillOpacity: 0.12, className: "lusong-closure" })
+        .bindPopup(closurePopup(mark), { maxWidth: 260, autoPanPaddingTopLeft: [16, 96], autoPanPaddingBottomRight: [64, 24] })
+        .addTo(g.closures);
+    }
+  }, [closuresKey]);
+
   const layerKey = JSON.stringify(layers);
   useEffect(() => {
     const m = map.current;
     const g = groups.current;
     if (!m || !g) return;
     const on: LayerToggles = JSON.parse(layerKey);
-    for (const id of ["rain", "areas", "routes", "reports"] as const) {
+    for (const id of ["rain", "areas", "closures", "routes", "reports"] as const) {
       if (on[id]) g[id].addTo(m);
       else g[id].remove();
     }

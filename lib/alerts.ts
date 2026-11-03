@@ -155,6 +155,11 @@ export interface AlertStore {
   addIfAbsent(alerts: readonly Alert[]): Promise<number>;
   /** Every unexpired alert; expired ones are dropped as they are read. */
   all(nowMs: number): Promise<Alert[]>;
+  /**
+   * Every unexpired alert, changing nothing: for public reads (the map), which must never race a rebuild by deleting
+   * what it just replaced (S3cP-1).
+   */
+  list(nowMs: number): Promise<Alert[]>;
   /** True while this version of the alert is stored and unexpired: read again right before each send. */
   isActive(id: string, version: number, nowMs: number): Promise<boolean>;
   cursor(): Promise<string | null>;
@@ -201,6 +206,10 @@ export class MemoryAlertStore implements AlertStore {
       else out.push(a);
     }
     return out;
+  }
+
+  async list(nowMs: number) {
+    return [...this.alerts.values()].map(parseAlert).filter((a): a is Alert => a !== null && Date.parse(a.expiresAt) > nowMs);
   }
 
   async isActive(id: string, version: number, nowMs: number) {
@@ -304,6 +313,18 @@ export class UpstashAlertStore implements AlertStore {
       else out.push(stripStored(a));
     }
     if (expired.length > 0) await this.command(["HDEL", this.key(ALERTS_KEY), ...expired]);
+    return out;
+  }
+
+  async list(nowMs: number) {
+    const flat = await this.command(["HGETALL", this.key(ALERTS_KEY)]);
+    if (!Array.isArray(flat)) throw new Error("unexpected alert list");
+    const out: Alert[] = [];
+    for (let i = 0; i + 1 < flat.length; i += 2) {
+      if (String(flat[i]) === ALERTS_GENERATION_FIELD) continue;
+      const a = parseAlert(String(flat[i + 1]));
+      if (a && Date.parse(a.expiresAt) > nowMs) out.push(stripStored(a));
+    }
     return out;
   }
 
