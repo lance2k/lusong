@@ -6,7 +6,7 @@ import "./map.css";
 import { useEffect, useRef } from "react";
 import type { Point } from "../lib/answer";
 import {
-  ALL_LAYERS,
+  DEFAULT_LAYERS,
   ATTRIBUTION_CONTROL,
   MAP_OPTIONS,
   movesTheMap,
@@ -22,6 +22,7 @@ import {
   type PinSpec,
 } from "./map-layers";
 import { PHILIPPINES_VIEW, pinPopup } from "./map-props";
+import type { RainCircle } from "./rain-layer";
 
 export interface MapPin {
   id: string;
@@ -59,7 +60,13 @@ export interface MapView {
   focusPin: { id: string; n: number } | null;
   /** The sheet covers the bottom of the map, so the zoom buttons are hidden. */
   hideBottom: boolean;
+  /** The rain circles to draw, under the routes and pins. Empty while the Rain row is off. */
+  rain: RainCircle[];
+  /** Called with the map's visible box after every move, including the first fit. */
+  onView: (view: { south: number; west: number; north: number; east: number }) => void;
 }
+
+const RAIN_PANE = "lusong-rain";
 
 const latLng = (p: Point): L.LatLngTuple => [p.lat, p.lon];
 
@@ -130,17 +137,20 @@ export default function TripMap({
   frame,
   onTap,
   areas = [],
-  layers = ALL_LAYERS,
+  layers = DEFAULT_LAYERS,
   padding = { topLeft: [24, 24], bottomRight: [24, 24] },
   bottomInset = 0,
   focusPin = null,
   hideBottom = false,
+  rain = [],
+  onView,
 }: TripMapProps & Partial<MapView>) {
   const box = useRef<HTMLDivElement>(null);
   const map = useRef<L.Map | null>(null);
-  const groups = useRef<Record<"routes" | "ends" | "reports" | "areas", L.LayerGroup> | null>(null);
+  const groups = useRef<Record<"routes" | "ends" | "reports" | "areas" | "rain", L.LayerGroup> | null>(null);
   const markers = useRef(new Map<string, L.Marker>());
   const tap = useRef(onTap);
+  const viewed = useRef(onView);
   const pad = useRef(padding);
   /** The points the current frame fits, kept so a resize or a new padding can fit them again. */
   const framed = useRef<Point[] | null>(null);
@@ -149,6 +159,7 @@ export default function TripMap({
 
   useEffect(() => {
     tap.current = onTap;
+    viewed.current = onView;
     pad.current = padding;
   });
 
@@ -180,7 +191,13 @@ export default function TripMap({
     L.control.zoom(ZOOM_CONTROL).addTo(m);
     L.tileLayer(TILE_URL, { maxZoom: 19, attribution: TILE_ATTRIBUTION, className: "lusong-tiles" }).addTo(m);
     m.on("click", (e: L.LeafletMouseEvent) => tap.current?.({ lat: e.latlng.lat, lon: e.latlng.lng }));
-    groups.current = { areas: L.layerGroup(), routes: L.layerGroup(), ends: L.layerGroup().addTo(m), reports: L.layerGroup() };
+    // Below Leaflet's overlay pane (400), where areas and routes are, and above the tiles (200).
+    m.createPane(RAIN_PANE).style.zIndex = "350";
+    m.on("moveend", () => {
+      const b = m.getBounds();
+      viewed.current?.({ south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() });
+    });
+    groups.current = { rain: L.layerGroup(), areas: L.layerGroup(), routes: L.layerGroup(), ends: L.layerGroup().addTo(m), reports: L.layerGroup() };
     map.current = m;
     const el = box.current!;
     const moved = () => {
@@ -227,7 +244,8 @@ export default function TripMap({
     const g = groups.current;
     if (!g) return;
     const { ends, route, detour, pins, areas }: Pick<TripMapProps, "ends" | "route" | "detour" | "pins"> & { areas: AreaShape[] } = JSON.parse(drawKey);
-    for (const group of Object.values(g)) group.clearLayers();
+    // Rain has its own effect below, keyed by its own data; clearing it here would leave it blank until rain changed.
+    for (const id of ["areas", "routes", "ends", "reports"] as const) g[id].clearLayers();
     markers.current.clear();
     for (const area of areas) {
       L.polygon(area.ring, { className: area.className, weight: 1.5, interactive: true })
@@ -244,13 +262,25 @@ export default function TripMap({
     }
   }, [drawKey]);
 
+  const rainKey = JSON.stringify(rain);
+  useEffect(() => {
+    const g = groups.current;
+    if (!g) return;
+    g.rain.clearLayers();
+    for (const c of JSON.parse(rainKey) as RainCircle[]) {
+      L.circle([c.lat, c.lon], { radius: c.radiusM, pane: RAIN_PANE, stroke: false, fillColor: c.fill, fillOpacity: c.fillOpacity, className: `lusong-rain lusong-rain-${c.band}` })
+        .bindTooltip(c.label, { sticky: true })
+        .addTo(g.rain);
+    }
+  }, [rainKey]);
+
   const layerKey = JSON.stringify(layers);
   useEffect(() => {
     const m = map.current;
     const g = groups.current;
     if (!m || !g) return;
     const on: LayerToggles = JSON.parse(layerKey);
-    for (const id of ["areas", "routes", "reports"] as const) {
+    for (const id of ["rain", "areas", "routes", "reports"] as const) {
       if (on[id]) g[id].addTo(m);
       else g[id].remove();
     }
