@@ -1357,7 +1357,7 @@ describe("Muse Spark in a real check (#6 with #7)", () => {
   });
 
   describe("a scheduled check of a stored trip runs the same investigation (#10 with #7)", () => {
-    it("reserves what the page's check reserves, reads the stored report through reports_near_route, and gives back the answer's kind alone", async () => {
+    it("reserves what the page's check reserves, reads the stored report through reports_near_route, and gives back the answer's kind and the plain route's line alone", async () => {
       const store = new MemoryReportStore();
       const flooded = storedReport(NO_ADVISORY);
       await seedReport(store, flooded);
@@ -1370,7 +1370,7 @@ describe("Muse Spark in a real check (#6 with #7)", () => {
 
       const result = await checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: Date.now() + 60_000 });
 
-      expect(result).toEqual({ ok: true, kind: "go_another_way" });
+      expect(result).toEqual({ ok: true, kind: "go_another_way", line: expect.any(Array) });
       expect(admits).toEqual([COMMUTE_RESERVE_MICROS + investigationReserveMicros({ kind: "search" })]);
       expect(settles).toEqual([true]);
       const toolOutput = JSON.parse((meta.requests[1].input as { output: string }[])[0].output);
@@ -1835,7 +1835,7 @@ describe("a scheduled check of a stored trip (#10's watcher)", () => {
     const budget = openBudget();
     const admit = vi.spyOn(budget, "admit");
     const { checkTrip } = scheduledAt(NO_ADVISORY, budget);
-    expect(await checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: Date.now() + 20_000 })).toEqual({ ok: true, kind: "go" });
+    expect(await checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: Date.now() + 20_000 })).toEqual({ ok: true, kind: "go", line: expect.any(Array) });
     expect(admit).toHaveBeenCalledTimes(1);
     expect(admit.mock.calls[0][0]).toBeNull();
     expect(admit.mock.calls[0][2]).toBe(COMMUTE_RESERVE_MICROS);
@@ -1849,7 +1849,7 @@ describe("a scheduled check of a stored trip (#10's watcher)", () => {
     const noAddress = () => new Request("http://localhost/api/commute", { method: "POST", body: JSON.stringify({ mode: "real", from: BANILAD, to: IT_PARK }) });
     expect((await check.POST(noAddress())).status).toBe(200);
     expect((await check.POST(noAddress())).status).toBe(429);
-    expect(await check.checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: Date.now() + 20_000 })).toEqual({ ok: true, kind: "go" });
+    expect(await check.checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: Date.now() + 20_000 })).toEqual({ ok: true, kind: "go", line: expect.any(Array) });
   });
 
   it("gives no answer when the daily cap refuses it", async () => {

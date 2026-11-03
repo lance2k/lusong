@@ -103,6 +103,24 @@ also shows:
 Each tick checks up to 20 watchers that are in their window and haven't been checked in the last 9 minutes, and it
 finishes in under 45 s, inside the route's 60 s limit.
 
+### Alert delivery: `lusong-alert-deliver` (not yet created)
+
+PAGASA advisories that touch a watcher's trip, and nationwide ones, are sent by their own route, never inside the tick
+(plan S4a, disposition S4P-8). The schedule for it is the main session's to create, as the tick's was:
+
+- Schedule id: `lusong-alert-deliver`
+- Destination: `https://lusong-mocha.vercel.app/api/alerts/deliver`, method `POST`
+- Cron: `5-55/10 * * * *` (every 10 minutes, offset by 5 from the tick)
+- Header: `Upstash-Forward-Authorization: Bearer <WATCH_TICK_SECRET>`, the same secret as the tick
+- Retries: 0
+
+A run sends at most 40 messages in at most 45 s and answers with counts only, for example
+`{"ok":true,"alerts":2,"pagasaHeld":null,"watchers":3,"due":2,"sent":2,"rejected":0,"ambiguous":0,"deferred":0}`.
+`pagasaHeld` says why PAGASA's alerts weren't sent this run (a stale or incomplete snapshot), which leans safe: they go
+at the first run that reads a complete, fresh snapshot. Each alert version reaches a watcher at most once. Its claim is
+written before the send, so a run that dies mid-send never sends it again. Telegram's 429 is tried again after its
+`retry_after` (60 s without one), at most 3 more times.
+
 ## 6. One-message test
 
 1. On a phone, open the preview, pick "Your own trip", and tap home then work in Metro Cebu.

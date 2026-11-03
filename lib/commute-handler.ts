@@ -307,7 +307,8 @@ type CommuteDeps = {
 };
 
 /** What a scheduled check learns: the answer's kind, or the HTTP status a page would have been given instead. */
-export type ScheduledCheck = { ok: true; kind: AnswerKind } | { ok: false; status: number };
+/** `line`: the plain route's line, which the watcher keeps as its alert corridor (lib/alert-corridor.ts). */
+export type ScheduledCheck = { ok: true; kind: AnswerKind; line?: Point[] } | { ok: false; status: number };
 
 /**
  * POST /api/commute. A demo check uses its trip's sample reports and never reads the report store; a real check uses
@@ -387,8 +388,10 @@ export function makeCommuteCheck(deps: CommuteDeps) {
     // The caller's deadline bounds the settle too, so the check's own deadline is one store call earlier.
     const response = await admitted({ real }, null, Math.min(opts.deadline - timing.storeCallMs, Date.now() + timing.deadlineMs));
     if (!response.ok) return { ok: false, status: response.status };
-    const kind = ((await response.json()) as { answer?: { kind?: unknown } }).answer?.kind;
-    return typeof kind === "string" && Object.hasOwn(TITLES, kind) ? { ok: true, kind: kind as AnswerKind } : { ok: false, status: 500 };
+    const body = (await response.json()) as { answer?: { kind?: unknown }; route?: { line?: unknown } };
+    const kind = body.answer?.kind;
+    const line = Array.isArray(body.route?.line) ? (body.route.line as Point[]) : undefined;
+    return typeof kind === "string" && Object.hasOwn(TITLES, kind) ? { ok: true, kind: kind as AnswerKind, ...(line ? { line } : {}) } : { ok: false, status: 500 };
   }
 
   /**

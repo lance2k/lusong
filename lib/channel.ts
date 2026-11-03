@@ -1,7 +1,10 @@
 export type SendResult =
   | { ok: true }
-  /** Telegram answered and didn't take the message. `permanent`: the chat can't be messaged again. */
-  | { ok: false; rejected: true; permanent: boolean }
+  /**
+   * Telegram answered and didn't take the message. `permanent`: the chat can't be messaged again. `retryAfterS`: a 429's
+   * `parameters.retry_after`, the seconds Telegram asks to wait.
+   */
+  | { ok: false; rejected: true; permanent: boolean; retryAfterS?: number }
   /** No clear answer (a timeout, a dropped connection, a server error): the message may have been delivered. */
   | { ok: false; rejected: false };
 
@@ -32,13 +35,17 @@ export class TelegramChannel implements Channel {
         body: JSON.stringify({ chat_id: chatId, text, link_preview_options: { is_disabled: true } }),
         signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
       });
-      const body = (await res.json().catch(() => null)) as { ok?: unknown; description?: unknown } | null;
+      const body = (await res.json().catch(() => null)) as { ok?: unknown; description?: unknown; parameters?: { retry_after?: unknown } } | null;
       if (res.ok && body?.ok === true) return { ok: true };
       // The URL holds the bot token, so only the status and Telegram's description are logged.
       console.error(`Telegram sendMessage HTTP ${res.status}: ${typeof body?.description === "string" ? body.description : "no description"}`);
       // Only a 4XX says the message wasn't taken. A 5XX can come from a gateway after Telegram had the request.
       // UNVERIFIED: that a blocked bot or a deleted chat answers 403. The docs say only that error_code "is subject to change".
-      if (res.status >= 400 && res.status < 500) return { ok: false, rejected: true, permanent: res.status === 403 };
+      if (res.status >= 400 && res.status < 500) {
+        const retryAfter = body?.parameters?.retry_after;
+        const retryAfterS = typeof retryAfter === "number" && Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter, 86_400) : undefined;
+        return { ok: false, rejected: true, permanent: res.status === 403, ...(retryAfterS !== undefined ? { retryAfterS } : {}) };
+      }
       return { ok: false, rejected: false };
     } catch (err) {
       // A timeout or a connection dropped mid-request can come after Telegram had the message.

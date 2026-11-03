@@ -113,7 +113,9 @@ export function WatcherPanel({ trip }: { trip: Trip | null }) {
         <>
           <p className="text-zinc-600 dark:text-zinc-400">
             Lusong checks this trip every 10 minutes in your window and messages you when the window opens and whenever the
-            answer changes. It checks as if you hadn&apos;t tapped &ldquo;raining here&rdquo;.
+            answer changes. It checks as if you hadn&apos;t tapped &ldquo;raining here&rdquo;. Lusong also messages you once
+            for each PAGASA advisory that touches or passes near your trip, and for nationwide ones, whatever the window.
+            It tries to send; it can&apos;t promise you receive it.
           </p>
           <div className="flex flex-wrap items-end gap-3">
             <label className="text-sm">

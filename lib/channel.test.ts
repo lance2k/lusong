@@ -31,6 +31,15 @@ describe("the Telegram channel (no real call: fetch is faked)", () => {
     }
   });
 
+  it("reads a 429's parameters.retry_after as the seconds to wait, and ignores one that isn't a positive number", async () => {
+    const asked = fakeTelegram(429, { ok: false, error_code: 429, description: "Too Many Requests: retry after 7", parameters: { retry_after: 7 } });
+    expect(await new TelegramChannel("T", asked).send("1", "x")).toEqual({ ok: false, rejected: true, permanent: false, retryAfterS: 7 });
+    for (const bad of ["7", -1, null]) {
+      const fetch = fakeTelegram(429, { ok: false, error_code: 429, parameters: { retry_after: bad } });
+      expect(await new TelegramChannel("T", fetch).send("1", "x")).toEqual({ ok: false, rejected: true, permanent: false });
+    }
+  });
+
   it.each([
     ["a 500", 500, { ok: false }],
     ["a 502 from a gateway", 502, "<html>Bad Gateway</html>"],
