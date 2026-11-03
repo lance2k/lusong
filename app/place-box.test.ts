@@ -47,3 +47,16 @@ describe("a From or To box", () => {
     expect(boxReducer(left, { type: "results", lookup: { status: "ok", places: [] } })).toBe(left);
   });
 });
+
+describe("a finished search", () => {
+  it("keeps its results when only a trailing space is added or removed", () => {
+    const done = boxReducer(run([{ type: "focus" }, { type: "type", value: "ayala" }]), {
+      type: "results",
+      lookup: { status: "ok", places: [] },
+    });
+    const spaced = boxReducer(done, { type: "type", value: "ayala " });
+    expect(spaced.lookup).toEqual({ status: "ok", places: [] });
+    expect(searchFor(spaced)).toBe("ayala");
+    expect(boxReducer(spaced, { type: "type", value: "ayala" }).lookup.status).toBe("ok");
+  });
+});

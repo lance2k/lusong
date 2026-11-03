@@ -24,6 +24,8 @@ export const initialBox: BoxState = { editing: false, text: "", lookup: { status
 
 function typed(state: BoxState, value: string): BoxState {
   const q = placeQuery(value);
+  // The same query after a space or a changed case keeps what it already found; nothing new is sent for it.
+  if (state.editing && q !== null && q === placeQuery(state.text)) return { ...state, text: value };
   // Built-in places show at once; the server's arrive after the pause.
   const lookup: Lookup = q ? { status: "searching", places: builtInMatches(q, TRIP_BOUND) } : { status: "idle", places: [] };
   return { editing: true, text: value, lookup, active: -1 };
