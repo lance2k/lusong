@@ -14,10 +14,12 @@ const LABELS = [...json("test/fixtures/depth-set/labels.json"), ...json("test/fi
 const LOCATE = [
   ...json("test/fixtures/valhalla/locate-sample-pins.json"),
   ...json("test/fixtures/valhalla/locate-detour-pin.json"),
+  ...json("test/fixtures/valhalla/locate-manila-pin.json"),
 ] as { input_lat: number; input_lon: number }[];
 const ROUTE_LINES = {
   "banilad-itpark": decodePolyline6(json("test/fixtures/valhalla/banilad-itpark-plain.json").trip.legs[0].shape),
   "mabolo-cbp": decodePolyline6(json("test/fixtures/valhalla/mabolo-cbp-plain.json").trip.legs[0].shape),
+  "cubao-makati": decodePolyline6(json("test/fixtures/valhalla/cubao-makati-plain.json").trip.legs[0].shape),
 };
 const NOW = new Date("2026-10-30T07:00:00+08:00");
 /** Pinned at the trip's end, where no /locate request was spent. */
@@ -79,5 +81,6 @@ describe("sample reports for the demo", () => {
     }
     expect(scenariosFor("banilad-itpark").map((s) => s.id)).toEqual(["none", "flooded", "unclear", "no_way_around"]);
     expect(scenariosFor("mabolo-cbp").map((s) => s.id)).toEqual(["none", "flooded", "unclear"]);
+    expect(scenariosFor("cubao-makati").map((s) => s.id)).toEqual(["none", "flooded"]);
   });
 });
