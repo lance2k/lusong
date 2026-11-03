@@ -2,12 +2,13 @@ import { describe, expect, it } from "vitest";
 import { alertMessage, MemoryAlertStore, type SweepFields } from "./alerts";
 import type { Place } from "./built-in-places";
 import type { SafeFetchResult } from "./safe-fetch";
-import { admitCandidate, blocksAt, canonicalUrl, organisationOf, publishedAt, robotsChecker, SWEEP_BLOCKING, type AdmitDeps, type Candidate } from "./sweep-admit";
+import { admitCandidate, blocksAt, canonicalUrl, organisationOf, publishedAt, roadName, robotsChecker, SWEEP_BLOCKING, type AdmitDeps, type Candidate } from "./sweep-admit";
 
 const NOW = new Date("2026-11-04T10:00:00+08:00");
-const MANDAUE_PLACE: Place = { id: "osm:way1", name: "A. S. Fortuna Street", area: "Banilad, Mandaue", lat: 10.338, lon: 123.918, source: "osm" };
-const DAVAO_PLACE: Place = { id: "osm:way2", name: "Fortuna Street", area: "Davao City", lat: 7.07, lon: 125.61, source: "osm" };
-const FAR_IN_CEBU: Place = { id: "osm:way3", name: "Fortuna Street", area: "Bogo", lat: 11.05, lon: 124.0, source: "osm" };
+const ROAD = { key: "highway", type: "street" };
+const MANDAUE_PLACE: Place = { id: "osm:way1", name: "A. S. Fortuna Street", area: "Banilad, Mandaue", lat: 10.338, lon: 123.918, source: "osm", feature: ROAD };
+const DAVAO_PLACE: Place = { id: "osm:way2", name: "A.S. Fortuna Street", area: "Davao City", lat: 7.07, lon: 125.61, source: "osm", feature: ROAD };
+const FAR_IN_CEBU: Place = { id: "osm:way3", name: "A.S. Fortuna St.", area: "Bogo", lat: 11.05, lon: 124.0, source: "osm", feature: ROAD };
 
 /** A page as a site would serve it: its own publication time in its metadata, the text in its body. */
 function page(body: string, published: string | null = "2026-11-04T08:30:00+08:00", extraHead = ""): string {
@@ -89,6 +90,33 @@ describe("admitting a sweep candidate (ledger #4/#10)", () => {
   it("an item placed outside the province its page names is a province-wide warning, never a spot", async () => {
     const got = await harness({ [URL_GOV]: page(CLOSED) }, [DAVAO_PLACE]).admit(CANDIDATE);
     expect(got).toMatchObject({ outcome: "admitted", alert: { severity: "warn", scope: { codes: ["0702200000"] }, fields: { place: "a place in Cebu" } } });
+  });
+
+  it("a sole same-province answer with an unrelated name is a province-wide warning, never a spot (S4D-2)", async () => {
+    const other: Place = { ...MANDAUE_PLACE, id: "osm:way9", name: "Completely Different Road" };
+    const got = await harness({ [URL_GOV]: page(CLOSED) }, [other]).admit(CANDIDATE);
+    expect(got).toMatchObject({ outcome: "admitted", alert: { scope: { codes: ["0702200000"] }, fields: { place: "a place in Cebu" } } });
+  });
+
+  it("a city, locality or other centroid answer named as the page names it is never a spot (S4D-2)", async () => {
+    const centroids: Place[] = [
+      { ...MANDAUE_PLACE, id: "osm:r1", feature: { key: "place", type: "city" } },
+      { ...MANDAUE_PLACE, id: "osm:r2", feature: { key: "boundary", type: "district" } },
+      { ...MANDAUE_PLACE, id: "osm:r3", feature: { key: "landuse", type: "locality" } },
+      { ...MANDAUE_PLACE, id: "built-in:x", source: "built-in", feature: undefined },
+    ];
+    for (const c of centroids) {
+      const got = await harness({ [URL_GOV]: page(CLOSED) }, [c]).admit(CANDIDATE);
+      expect(got, c.id).toMatchObject({ outcome: "admitted", alert: { scope: { codes: ["0702200000"] } } });
+    }
+  });
+
+  it("the road's name matches across case, diacritics and St./Street (S4D-2)", async () => {
+    const spelled: Place = { ...MANDAUE_PLACE, name: "A.S. FORTUNA St." };
+    const got = await harness({ [URL_GOV]: page(CLOSED) }, [spelled]).admit(CANDIDATE);
+    expect(got).toMatchObject({ outcome: "admitted", alert: { scope: { point: { lat: 10.338, lon: 123.918 } } } });
+    expect(roadName("Avenida Rizal, Cebu")).toBe(roadName("AVENIDA RIZAL"));
+    expect(roadName("Sto. Niño St.")).toBe("santo nino street");
   });
 
   it("an ambiguous place (two far-apart answers in the province) is a province-wide warning", async () => {

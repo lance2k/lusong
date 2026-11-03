@@ -169,7 +169,7 @@ function sweepHarness(reply: unknown = wonderReply([{ ...CANDIDATE, organisation
         fetched.push(url);
         return url === URL_GOV ? { ok: true, url, status: 200, contentType: "text/html", body: PAGE } : { ok: true, url, status: 404, contentType: "text/html", body: "" };
       },
-      geocode: async () => ({ status: "ok", places: [{ id: "osm:1", name: "A. S. Fortuna Street", area: "Mandaue", lat: 10.338, lon: 123.918, source: "osm" }] }),
+      geocode: async () => ({ status: "ok", places: [{ id: "osm:1", name: "A. S. Fortuna Street", area: "Mandaue", lat: 10.338, lon: 123.918, source: "osm", feature: { key: "highway", type: "street" } }] }),
     },
     now: () => NOW,
     enabled: true,

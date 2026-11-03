@@ -184,6 +184,33 @@ export function blocksAt(text: string, place: string): boolean {
   return sentences.length > 0 && sentences.every((s) => BLOCK_TERMS.test(s) && !NOT_BLOCKING.test(s));
 }
 
+/** Photon types that are a road or a point, never the centroid of a locality, city, county, state or country. */
+const POINT_FEATURES = new Set(["street", "house"]);
+/** OSM keys whose features are areas named by their centre. */
+const AREA_KEYS = new Set(["place", "boundary", "landuse"]);
+
+const SPELLED_OUT: Record<string, string> = {
+  st: "street",
+  str: "street",
+  ave: "avenue",
+  av: "avenue",
+  rd: "road",
+  blvd: "boulevard",
+  hwy: "highway",
+  ext: "extension",
+  sto: "santo",
+  sta: "santa",
+};
+
+/** A road or place name folded, with its usual abbreviations spelled out: "A.S. Fortuna St." → "a s fortuna street". */
+export function roadName(name: string): string {
+  const first = name.split(",")[0];
+  return fold(first)
+    .split(" ")
+    .map((w) => SPELLED_OUT[w] ?? w)
+    .join(" ");
+}
+
 /** One province's own name, or Metro Manila for its districts; null for anything wider. */
 function boundName(codes: readonly string[]): string | null {
   if (codes.length > 0 && codes.every((c) => c.startsWith("13"))) return "Metro Manila";
@@ -265,7 +292,10 @@ export async function admitCandidate(c: Candidate, deps: AdmitDeps & { robots: (
   const found = await deps.geocode(`${place}, ${c.province}`);
   if (found.status === "unavailable") return { outcome: "retry", why: "the geocoder is busy" };
   const areas = [...new Set(bound.codes.map(areaCode))];
+  // A spot only for a road or point feature whose own name is the place the page names, in the page's province (S4D-2).
+  const named = roadName(place);
   const inside = found.places.filter((p) => {
+    if (!p.feature || !POINT_FEATURES.has(p.feature.type) || AREA_KEYS.has(p.feature.key) || roadName(p.name) !== named) return false;
     const province = provinceIndex().provinceOf(p);
     return province !== null && areas.includes(areaCode(province.code));
   });
