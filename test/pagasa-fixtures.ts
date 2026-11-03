@@ -103,3 +103,6 @@ export function feedOf(links: readonly string[], edit: (entry: string, link: str
   const head = FEED.slice(0, FEED.indexOf("<entry>"));
   return `${head}${links.map((l) => edit(entryFor(l), l)).join("\n")}\n</feed>\n`;
 }
+
+/** The 2026-10-29 feed listing only the records saved from it, so a whole-feed snapshot of it can be complete. */
+export const SAVED_FEED = feedOf(Object.keys(SAVED));

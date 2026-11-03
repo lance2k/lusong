@@ -1,4 +1,4 @@
-import type { AdvisoryReading } from "./advisory";
+import type { AdvisoryKind, RouteAdvisory } from "./advisory-snapshot";
 import type { Report, RouteState } from "./answer";
 import { ageWords, depthWords, passabilityLine, phtTime } from "./commute-words";
 import type { ClosureKind, WebFinding } from "./web-search";
@@ -11,7 +11,8 @@ export interface EvidenceFacts {
   now: Date;
   reports: readonly (Report & { sample?: boolean })[];
   web: readonly WebFinding[];
-  advisory: AdvisoryReading;
+  /** The advisory on the route the answer is about. */
+  advisory: RouteAdvisory;
   rainingHere: boolean;
   routes: readonly { routeId: string; state: RouteState }[];
 }
@@ -49,10 +50,20 @@ function reportSentence(r: Report & { sample?: boolean }, now: Date): string {
   return `${lead} reads ${depthWords(v)}: ${line.startsWith("Lusong") ? line : line[0].toLowerCase() + line.slice(1)}.`;
 }
 
-function advisorySentence(advisory: AdvisoryReading): string {
-  if (advisory.state === "active") return `PAGASA's flood advisory for Cebu is active until ${phtTime(advisory.advisory.expires)}.`;
-  if (advisory.state === "none") return "PAGASA has no flood advisory for Cebu right now.";
-  return "Lusong couldn't read PAGASA's flood advisory, so it counts one as active.";
+const KIND_WORDS: Record<AdvisoryKind, string> = {
+  flood: "flood advisory",
+  rainfall: "rainfall warning",
+  cyclone: "tropical cyclone warning",
+  other: "alert",
+};
+
+function advisorySentence(advisory: RouteAdvisory): string {
+  if (advisory.state === "unreadable") return "Lusong couldn't read all of PAGASA's advisories, so it counts one as active.";
+  const counting = advisory.covering.filter((p) => p.counts);
+  if (counting.length === 0) return "PAGASA has no advisory covering this way right now.";
+  const [first, ...more] = counting;
+  const others = more.length === 0 ? "" : ` ${more.length} more ${more.length === 1 ? "advisory covers" : "advisories cover"} this way.`;
+  return `PAGASA's ${KIND_WORDS[first.kind]} for ${first.areas.join(", ")} is active until ${phtTime(first.expires)}.${others}`;
 }
 
 const CLOSURE_WORDS: Record<ClosureKind, string> = { closed: "closed", flooded: "flooded", not_passable: "not passable", other_blocking: "blocked" };

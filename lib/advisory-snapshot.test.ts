@@ -161,6 +161,16 @@ describe("the whole-feed snapshot, product by product", () => {
     expect(judge(DAVAO_CITY_ROUTE).state).toBe("active");
   });
 
+  it("a Manila route judged after a Cebu route from the same snapshot gets none of Cebu's advisory (ledger #2)", async () => {
+    const { judge } = await snapshotAt("2026-10-25T20:00:00+08:00", listing([CV_GFA5]));
+    expect(judge(CEBU_ROUTE).state).toBe("active");
+    const manila = judge([
+      { lat: 14.6191, lon: 121.0537 },
+      { lat: 14.5683, lon: 121.0244 },
+    ]);
+    expect(manila).toMatchObject({ state: "none", covering: [] });
+  });
+
   it("an unplaceable area named for Davao de Oro (118200000, no polygon) doesn't touch a Cebu route and does touch one in Davao de Oro", async () => {
     // Davao de Oro's area alone, with its polygon taken away: only its geocode and name place it.
     const unplaced = (cap: string) => cap.replace(/(<\/area>)[\s\S]*(<\/info>)/, "$1$2").replace(/<polygon>[^<]*<\/polygon>/g, "");

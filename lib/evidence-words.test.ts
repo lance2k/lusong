@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AdvisoryReading } from "./advisory";
+import { activeRouteAdvisory, NO_ROUTE_ADVISORY, productView, UNREADABLE_ROUTE_ADVISORY } from "../test/route-advisory";
 import type { Report } from "./answer";
 import { evidenceSentences, type EvidenceFacts } from "./evidence-words";
 import type { Verdict } from "./verdict";
@@ -14,19 +14,7 @@ function photo(id: string, verdict: Verdict, extra: Partial<Report> & { sample?:
 const measured = (low: number, high: number, passability: "NPLV" | "NPATV" | "shallow" | "unsure"): Verdict =>
   ({ kind: "measured", rangeCm: { low, high }, passability, confidence: "high", readingsComplete: true }) as unknown as Verdict;
 
-const ACTIVE: AdvisoryReading = {
-  state: "active",
-  advisory: {
-    id: "gfa",
-    headline: "General Flood Advisory",
-    event: null,
-    rainForecast: null,
-    riversForCebu: null,
-    sent: "2026-10-30T01:00:00+08:00",
-    expires: "2026-10-30T05:27:00+08:00",
-    link: "https://publicalert.pagasa.dost.gov.ph/output/gfa/x.cap",
-  },
-} as AdvisoryReading;
+const ACTIVE = activeRouteAdvisory(productView({ expires: "2026-10-30T05:27:00+08:00" }));
 
 function facts(overrides: Partial<EvidenceFacts> = {}): EvidenceFacts {
   return {
@@ -71,8 +59,16 @@ describe("Lusong's own words for the evidence Muse Spark picked (review 🔴1)",
   });
 
   it.each([
-    [{ state: "none" } as AdvisoryReading, "PAGASA has no flood advisory for Cebu right now."],
-    [{ state: "unreadable" } as AdvisoryReading, "Lusong couldn't read PAGASA's flood advisory, so it counts one as active."],
+    [NO_ROUTE_ADVISORY, "PAGASA has no advisory covering this way right now."],
+    [UNREADABLE_ROUTE_ADVISORY, "Lusong couldn't read all of PAGASA's advisories, so it counts one as active."],
+    [
+      activeRouteAdvisory(
+        productView({ kind: "cyclone", areas: ["Batanes"], expires: "2026-10-24T16:50:27+08:00" }),
+        productView({ areas: ["Batanes"] }),
+        productView({ kind: "other", counts: false }),
+      ),
+      "PAGASA's tropical cyclone warning for Batanes is active until 24 Oct, 4:50 p.m. PHT. 1 more advisory covers this way.",
+    ],
   ])("the advisory when it is %o", (advisory, sentence) => {
     expect(evidenceSentences(["advisory"], facts({ advisory }))).toEqual([sentence]);
   });

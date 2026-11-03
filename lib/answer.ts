@@ -74,6 +74,15 @@ export function roleOf(report: Report, now: Date): Role {
 
 export type AdvisoryState = "active" | "none" | "unreadable";
 
+/**
+ * The advisory each judged route is under, by route id (plan S1P-8): a detour into an area the plain way avoids is
+ * judged under that area's advisory. A detour missing from the map counts as unreadable, the lean-safe side.
+ */
+export interface RouteAdvisories {
+  plain: AdvisoryState;
+  detours: Readonly<Record<string, AdvisoryState>>;
+}
+
 export interface RouteCandidate {
   id: string;
   line: Point[];
@@ -216,9 +225,9 @@ function capitalise(text: string): string {
 
 function rainWords(advisory: AdvisoryState, rainingHere: boolean): string {
   const tap = "you said it's raining here";
-  if (advisory === "active") return `PAGASA's flood advisory for Cebu is active${rainingHere ? ` and ${tap}` : ""}`;
+  if (advisory === "active") return `a PAGASA advisory covers your way${rainingHere ? ` and ${tap}` : ""}`;
   if (advisory === "unreadable") {
-    return `Lusong couldn't read PAGASA's flood advisory, so it counts one as active${rainingHere ? `, and ${tap}` : ""}`;
+    return `Lusong couldn't read all of PAGASA's advisories, so it counts one as active${rainingHere ? `, and ${tap}` : ""}`;
   }
   return tap;
 }
@@ -234,11 +243,15 @@ export function decideAnswer(input: {
   plain: RouteCandidate;
   detours: readonly RouteCandidate[];
   reports: readonly Report[];
-  advisory: AdvisoryState;
+  /** One state for every route, or each route's own. */
+  advisory: AdvisoryState | RouteAdvisories;
   rainingHere: boolean;
   now: Date;
 }): Answer {
-  const raining = input.advisory !== "none" || input.rainingHere;
+  const advisories = input.advisory;
+  const advisoryOf = (routeId: string): AdvisoryState =>
+    typeof advisories === "string" ? advisories : routeId === input.plain.id ? advisories.plain : (advisories.detours[routeId] ?? "unreadable");
+  const rainingOn = (routeId: string) => advisoryOf(routeId) !== "none" || input.rainingHere;
   const judged = input.reports.map((report) => ({ report, role: roleOf(report, input.now), counts: counts(report, input.now) }));
   const clears = judged.filter((j) => j.counts && j.role === "clear").map((j) => j.report);
   const all = judged.map((j) => ({
@@ -247,10 +260,11 @@ export function decideAnswer(input: {
   }));
   const live = all.filter((j) => j.counts && j.retiredBy === null);
 
-  const plain = judgeRoute(input.plain, live, raining);
-  const detours = input.detours.map((d) => judgeRoute(d, live, raining));
+  const plain = judgeRoute(input.plain, live, rainingOn(input.plain.id));
+  const detours = input.detours.map((d) => judgeRoute(d, live, rainingOn(d.id)));
   const passableDetour = detours.find((d) => d.state === "passable");
-  const rain = capitalise(rainWords(input.advisory, input.rainingHere));
+  const raining = rainingOn(input.plain.id);
+  const rain = capitalise(rainWords(advisoryOf(input.plain.id), input.rainingHere));
 
   let answer: AnswerKind;
   let reason: string;
@@ -258,13 +272,13 @@ export function decideAnswer(input: {
   if (plain.state === "passable") {
     answer = "go";
     if (raining) reason = `${rain}, and reports along your whole way show no flood water.`;
-    else if (plain.on.length === 0) reason = "No flood advisory for Cebu, no rain tap, and nothing reported on your way.";
-    else reason = "No flood advisory for Cebu, no rain tap, and the reports on your way show no flood water.";
+    else if (plain.on.length === 0) reason = "No PAGASA advisory covers your way, no rain tap, and nothing reported on your way.";
+    else reason = "No PAGASA advisory covers your way, no rain tap, and the reports on your way show no flood water.";
   } else if (plain.state === "blocked" && passableDetour) {
     answer = "go_another_way";
     chosen = passableDetour;
     reason = `Your usual way is blocked at ${places(plain.blockers)}. ${
-      raining ? "Reports along all of the other way show no flood water." : "Nothing is reported against the other way."
+      rainingOn(passableDetour.route.id) ? "Reports along all of the other way show no flood water." : "Nothing is reported against the other way."
     }`;
   } else if (plain.state === "blocked" && detours.every((d) => d.state === "blocked")) {
     answer = "wait";

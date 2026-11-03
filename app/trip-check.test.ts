@@ -7,7 +7,7 @@ import { makeCommuteHandler } from "../lib/commute-handler";
 import { MemoryReportStore, type StoredReport } from "../lib/report-store";
 import { seedReport } from "../test/seed-report";
 import { makeValhallaGate, MemorySlotStore, VALHALLA_URL } from "../lib/router";
-import { FEED, SAVED } from "../test/pagasa-fixtures";
+import { SAVED, SAVED_FEED } from "../test/pagasa-fixtures";
 import { checkRequest } from "./trip";
 
 const PLAIN = readFileSync("test/fixtures/valhalla/banilad-itpark-plain.json", "utf8");
@@ -19,7 +19,7 @@ const TRIP = { home: { lat: 10.346, lon: 123.911 }, work: { lat: 10.3307, lon: 1
 /** PAGASA and Valhalla faked at fetch with their saved records; nothing leaves the test. */
 const fakeFetch = (async (url: string | URL, init?: RequestInit) => {
   const u = String(url);
-  if (u === FEED_URL) return new Response(FEED);
+  if (u === FEED_URL) return new Response(SAVED_FEED);
   if (u in SAVED) return new Response(SAVED[u]);
   if (u === `${VALHALLA_URL}/route`) return new Response(JSON.parse(String(init!.body)).exclude_polygons ? EXCLUDED : PLAIN);
   throw new TypeError("fetch failed");

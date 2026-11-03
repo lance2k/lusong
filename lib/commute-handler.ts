@@ -1,5 +1,14 @@
 import { admit } from "./admission";
-import { readAdvisory, type AdvisoryReading } from "./advisory";
+import {
+  advisoryStoreFromEnv,
+  judgeRoute,
+  MemoryAdvisoryStore,
+  snapshotForCheck,
+  type AdvisoryStore,
+  type ProductView,
+  type RouteAdvisory,
+  type SnapshotReading,
+} from "./advisory-snapshot";
 import { placeOnRoute, ROUTE_CORRIDOR_M, type AnswerKind, type Point, type Report } from "./answer";
 import { budgetFromEnv, type Budget } from "./budget";
 import { clientIp } from "./check-handler";
@@ -53,6 +62,8 @@ export interface CommuteTiming {
   storeCallMs: number;
   /** The web search's model call ends with this much of the deadline left, beyond a way around: for the model's pick. */
   modelRoomMs: number;
+  /** An inline refresh of PAGASA's snapshot ends this long after it starts; ADVISORY_TIME_MS unless a test shortens it. */
+  advisoryMs?: number;
 }
 export const MODEL_ROOM_MS = 15_000;
 export const COMMUTE_TIMING: CommuteTiming = { deadlineMs: COMMUTE_DEADLINE_MS, routeWorstMs: ROUTE_WORST_MS, storeCallMs: 5_000, modelRoomMs: MODEL_ROOM_MS };
@@ -72,10 +83,11 @@ function museFromEnv(): MuseDeps {
 
 /** A demo trip's plain route, or its detour around a set of spots, is reused this long: the roads don't change, and Valhalla is a shared free server. */
 export const ROUTE_CACHE_MS = 10 * 60_000;
-/** A readable PAGASA reading is reused this long, so a busy demo doesn't fetch the feed on every check. */
-export const ADVISORY_CACHE_MS = 5 * 60_000;
-/** An unreadable reading is reused this long, so demo clicks while PAGASA is down don't each fetch it again. */
-export const UNREADABLE_RETRY_MS = 60_000;
+/**
+ * A check that finds PAGASA's snapshot missing or stale refreshes it inline for at most this long; past it the check
+ * reads the snapshot as incomplete. The old reader's 15 s, plus room for a cold snapshot's first records.
+ */
+export const ADVISORY_TIME_MS = 20_000;
 
 /** Lusong's fixed answer words: the page's title and the watcher's message use these only. */
 export const TITLES: Record<AnswerKind, string> = {
@@ -140,7 +152,7 @@ function webForPage(web: WebEvidence, now: Date) {
  */
 function pickForPage(
   result: Extract<InvestigationResult, { ok: true }>,
-  facts: { now: Date; advisory: AdvisoryReading; rainingHere: boolean; pickable: ReadonlySet<string> },
+  facts: { now: Date; advisory: RouteAdvisory; rainingHere: boolean; pickable: ReadonlySet<string> },
 ) {
   const label = "Muse Spark picked this evidence";
   const hidden = { shown: false, label, sentences: [] as string[], note: !result.pick.shown && result.pick.unavailable ? PICK_UNAVAILABLE : null };
@@ -200,29 +212,36 @@ type CheckedReport =
   | (SampleReport & { photoUrl?: undefined })
   | (Report & { sample: false; origin: null; credit: null; sourceUrl: null; photoUrl: string | null });
 
-function advisoryForPage(reading: AdvisoryReading) {
-  switch (reading.state) {
-    case "active": {
-      const a = reading.advisory;
-      return {
-        state: "active" as const,
-        headline: a.event ?? a.headline,
-        rainForecast: a.rainForecast,
-        rivers: a.riversForCebu,
-        sent: phtTime(a.sent),
-        expires: phtTime(a.expires),
-        link: a.link,
-        note: null,
-      };
-    }
-    case "none":
-      return { state: "none" as const, note: "No General Flood Advisory for Cebu in PAGASA's feed right now." };
-    case "unreadable":
-      return {
-        state: "unreadable" as const,
-        note: "Lusong couldn't read PAGASA's flood advisory feed, so it counts an advisory as active.",
-      };
-  }
+const ADVISORY_NOTES: Record<RouteAdvisory["state"], string | null> = {
+  active: null,
+  none: "No PAGASA advisory in its feed covers this way right now.",
+  unreadable: "Lusong couldn't read all of PAGASA's advisories, so it counts one as active.",
+};
+
+function productForPage(p: ProductView) {
+  return {
+    kind: p.kind,
+    counts: p.counts,
+    event: p.event,
+    area: p.areas.join(", "),
+    sent: phtTime(p.sent),
+    expires: phtTime(p.expires),
+    link: p.link,
+    rainForecast: p.rainForecast,
+    rivers: p.rivers,
+  };
+}
+
+/** The advisory card describes the route the answer recommends: the plain way, or the detour for Go another way. */
+function advisoryForPage(advisory: RouteAdvisory, routeId: string) {
+  return {
+    state: advisory.state,
+    about: routeId === "plain" ? ("your way" as const) : ("the other way" as const),
+    products: advisory.covering.map(productForPage),
+    warnings: advisory.warnings.map(productForPage),
+    incomplete: advisory.incomplete !== null,
+    note: ADVISORY_NOTES[advisory.state],
+  };
 }
 
 function thinNote(kind: AnswerKind, reportCount: number, voiceOnly: boolean): string {
@@ -242,6 +261,8 @@ type CommuteDeps = {
   reports?: () => ReportStore | null;
   muse?: MuseDeps;
   timing?: CommuteTiming;
+  /** The shared store holding PAGASA's snapshot; without one, each handler keeps its own in memory. */
+  advisoryStore?: () => AdvisoryStore | null;
 };
 
 /** What a scheduled check learns: the answer's kind, or the HTTP status a page would have been given instead. */
@@ -270,7 +291,8 @@ export function makeCommuteCheck(deps: CommuteDeps) {
   const now = deps.now ?? (() => new Date());
   const routes = new Map<DemoTripId, { route: Route; at: number }>();
   const detours = new Map<string, { result: RouteResult; at: number }>();
-  let advisoryCache: { reading: AdvisoryReading; at: number } | null = null;
+  const localAdvisoryStore = new MemoryAdvisoryStore();
+  const advisoryStore = () => (deps.advisoryStore ?? advisoryStoreFromEnv)() ?? localAdvisoryStore;
 
   async function routeFor(trip: DemoTripId, t: number, deadline: number): Promise<PlainResult> {
     const cached = routes.get(trip);
@@ -294,14 +316,8 @@ export function makeCommuteCheck(deps: CommuteDeps) {
     return result;
   }
 
-  async function advisoryAt(at: Date): Promise<AdvisoryReading> {
-    if (advisoryCache) {
-      const keep = advisoryCache.reading.state === "unreadable" ? UNREADABLE_RETRY_MS : ADVISORY_CACHE_MS;
-      if (at.getTime() - advisoryCache.at < keep) return advisoryCache.reading;
-    }
-    const reading = await readAdvisory({ fetch: doFetch, now: at });
-    advisoryCache = { reading, at: at.getTime() };
-    return reading;
+  function advisoryAt(at: Date, deadline: number): Promise<SnapshotReading> {
+    return snapshotForCheck({ store: advisoryStore(), fetch: doFetch, now: at, deadline: Math.min(deadline, Date.now() + (timing.advisoryMs ?? ADVISORY_TIME_MS)) });
   }
 
   async function POST(request: Request): Promise<Response> {
@@ -459,7 +475,7 @@ export function makeCommuteCheck(deps: CommuteDeps) {
     const searchDeadline = run.deadline - timing.routeWorstMs - timing.modelRoomMs;
     run.searched = true;
     const [advisory, routed, web] = await Promise.all([
-      beforeDeadline(advisoryAt(at), run.deadline),
+      beforeDeadline(advisoryAt(at, run.deadline), run.deadline),
       check.plain(),
       runWebSearch(run.plan, { store: run.store, now: at, deadline: run.deadline, searchBy: searchDeadline, meter: run.meter }),
     ]);
@@ -474,7 +490,7 @@ export function makeCommuteCheck(deps: CommuteDeps) {
 
     const result = await investigate({
       plainLine,
-      advisory,
+      advisoryFor: (line) => judgeRoute(advisory, line, at),
       rainingHere: check.rainingHere,
       now: at,
       deadline: run.deadline,
@@ -568,9 +584,12 @@ export function makeCommuteCheck(deps: CommuteDeps) {
         streets: detour.streets,
         line: detour.line,
       },
-      advisory: advisoryForPage(advisory),
+      advisory: advisoryForPage(result.advisory, answer.route),
       reports: sent,
-      muse: { pick: pickForPage(result, { now: at, advisory, rainingHere: check.rainingHere, pickable }), web: webForPage(result.web, at) },
+      muse: {
+        pick: pickForPage(result, { now: at, advisory: result.advisory, rainingHere: check.rainingHere, pickable }),
+        web: webForPage(result.web, at),
+      },
       mmdaCredit: MMDA_CREDIT,
     });
   }
