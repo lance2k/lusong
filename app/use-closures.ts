@@ -46,8 +46,12 @@ export function useClosures(enabled: boolean): ClosuresState {
           setNow(Date.now());
         });
     };
+    // Back in view, the clock moves first, so a mark that expired while hidden never shows again, even for the moment
+    // before the refresh lands (S3c diff duck).
     const onVisible = () => {
-      if (document.visibilityState === "visible") load();
+      if (document.visibilityState !== "visible") return;
+      setNow(Date.now());
+      load();
     };
     load();
     const refresh = window.setInterval(load, CLOSURES_REFRESH_MS);
@@ -59,6 +63,8 @@ export function useClosures(enabled: boolean): ClosuresState {
       window.clearInterval(clock);
       document.removeEventListener("visibilitychange", onVisible);
       setLoading(false);
+      // Switched off: the old reply goes, so switching on again shows nothing until a fresh one lands.
+      setReply(null);
     };
   }, [enabled]);
 
