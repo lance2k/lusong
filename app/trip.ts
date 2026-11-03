@@ -1,5 +1,5 @@
 import type { Point } from "../lib/answer";
-import { inMetroCebu } from "../lib/metro-cebu";
+import { inTripBound } from "../lib/trip-bound";
 
 /** A commuter's saved home and work points. It leaves the phone only inside a check request. */
 export interface Trip {
@@ -7,7 +7,8 @@ export interface Trip {
   work: Point;
 }
 
-export type TripDraft = { step: "home" } | { step: "work"; home: Point } | { step: "set"; trip: Trip };
+/** "home" may already hold a work point picked in the To box before From was filled. */
+export type TripDraft = { step: "home"; work?: Point } | { step: "work"; home: Point } | { step: "set"; trip: Trip };
 
 export type TripStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
@@ -17,11 +18,21 @@ export function startTrip(saved: Trip | null): TripDraft {
   return saved ? { step: "set", trip: saved } : { step: "home" };
 }
 
-/** Home first, then work. A tap on a set trip starts a new one; a tap outside Metro Cebu changes nothing. */
+/** Home first, then work. A tap on a set trip starts a new one; a tap outside the trip bound changes nothing. */
 export function tapTrip(draft: TripDraft, at: Point): { draft: TripDraft; outside: boolean } {
-  if (!inMetroCebu(at)) return { draft, outside: true };
+  if (!inTripBound(at)) return { draft, outside: true };
   if (draft.step === "work") return { draft: { step: "set", trip: { home: draft.home, work: at } }, outside: false };
+  if (draft.step === "home" && draft.work) return { draft: { step: "set", trip: { home: at, work: draft.work } }, outside: false };
   return { draft: { step: "work", home: at }, outside: false };
+}
+
+/** A place picked in the From or To box replaces that end and keeps the other; outside the trip bound it changes nothing. */
+export function pickTrip(draft: TripDraft, end: "from" | "to", at: Point): { draft: TripDraft; outside: boolean } {
+  if (!inTripBound(at)) return { draft, outside: true };
+  const home = draft.step === "set" ? draft.trip.home : draft.step === "work" ? draft.home : undefined;
+  const work = draft.step === "set" ? draft.trip.work : draft.step === "home" ? draft.work : undefined;
+  if (end === "from") return { draft: work ? { step: "set", trip: { home: at, work } } : { step: "work", home: at }, outside: false };
+  return { draft: home ? { step: "set", trip: { home, work: at } } : { step: "home", work: at }, outside: false };
 }
 
 /** The only way the trip leaves the phone: as a real check's start and end, which the server uses and doesn't keep. */
@@ -33,7 +44,7 @@ function pointFrom(value: unknown): Point | null {
   if (typeof value !== "object" || value === null) return null;
   const { lat, lon } = value as Record<string, unknown>;
   if (typeof lat !== "number" || typeof lon !== "number" || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-  return inMetroCebu({ lat, lon }) ? { lat, lon } : null;
+  return inTripBound({ lat, lon }) ? { lat, lon } : null;
 }
 
 /** Storage can be missing or throw (private windows, blocked site data), so every access is guarded. */
