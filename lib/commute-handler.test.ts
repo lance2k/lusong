@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FEED_URL } from "./advisory";
 import { createBudget, MemoryBudgetStore, type Budget, type BudgetStore } from "./budget";
 import {
-  ADVISORY_CACHE_MS,
   COMMUTE_DEADLINE_MS,
   COMMUTE_RESERVE_MICROS,
   COMMUTE_TIMING,
@@ -12,7 +11,6 @@ import {
   MUSE_OFF,
   ROUTE_CACHE_MS,
   SETTLE_ROOM_MS,
-  UNREADABLE_RETRY_MS,
   type CommuteTiming,
   type MuseDeps,
 } from "./commute-handler";
@@ -21,7 +19,8 @@ import { sampleReports, scenariosFor, type DemoTripId } from "./samples";
 import { MemoryKvStore, planWebSearch, SEARCH_RESERVE_MICROS, webSearchKey, webSearchLeaseKey, type KvStore } from "./web-search";
 import { callsReply, fakeMeta, hangs, searchReply, textReply } from "../test/muse-derived";
 import { cutEnd, cutStart, derivedReply } from "../test/valhalla-derived";
-import { CAP_EDITS, CV_GFA5, FEED, feedWith, SAVED } from "../test/pagasa-fixtures";
+import { CAP_EDITS, CV_GFA5, feedWith, SAVED, SAVED_FEED } from "../test/pagasa-fixtures";
+import { INCOMPLETE_RETRY_MS, MemoryAdvisoryStore, refreshSnapshot, SNAPSHOT_LEASE_KEY, STALE_AFTER_MS } from "./advisory-snapshot";
 import { decodePolyline6, makeValhallaGate, MemorySlotStore, VALHALLA_URL, type SlotStore } from "./router";
 import { distanceM, placeOnRoute, ROUTE_CORRIDOR_M, type Point } from "./answer";
 import { MemoryReportStore, UpstashReportStore, type ReportStore, type StoredPhotoReport, type StoredVoiceReport } from "./report-store";
@@ -69,7 +68,7 @@ function detourRecordFor(sent: { locations: unknown; exclude_polygons: number[][
 
 /** 20:00 PHT on 2026-10-25: the Central Visayas advisory sent at 17:27 is active. */
 const ADVISORY_ACTIVE = new Date("2026-10-25T20:00:00+08:00");
-/** Noon on 2026-10-29: no GFA entry in the feed's last 24 h, so no advisory. */
+/** Noon on 2026-10-29: every saved region's newest record is a Final all-clear, so no advisory. */
 const NO_ADVISORY = new Date("2026-10-29T12:00:00+08:00");
 
 type Options = {
@@ -101,7 +100,7 @@ function network(opts: Options = {}) {
     const u = String(url);
     calls.push({ url: u, at: performance.now(), body: init?.body ? String(init.body) : undefined });
     if (u === FEED_URL && opts.feed === "down") throw new TypeError("fetch failed");
-    const pagasa = opts.pagasa ?? { [FEED_URL]: FEED, ...SAVED };
+    const pagasa = opts.pagasa ?? { [FEED_URL]: SAVED_FEED, ...SAVED };
     if (u in pagasa) return new Response(pagasa[u]);
     if (u === `${VALHALLA_URL}/route`) {
       if (opts.valhallaDelayMs) await new Promise((resolve) => setTimeout(resolve, opts.valhallaDelayMs));
@@ -217,15 +216,28 @@ describe("the demo commute check", () => {
   it("shows the advisory's forecast, rivers and times, the route's length and time, and the MMDA credit", async () => {
     const { handler } = handlerAt(ADVISORY_ACTIVE);
     const body = await (await handler(demo("banilad-itpark", "none"))).json();
-    expect(body.advisory).toMatchObject({
+    expect(body.advisory).toEqual({
       state: "active",
-      rainForecast: "light to moderate rains and thunderstorms",
-      rivers: "Kotkot, Mananga, Guinabasan, Balamban and Sabangdaku",
-      sent: "25 Oct, 5:27 p.m. PHT",
-      expires: "26 Oct, 5:27 a.m. PHT",
+      about: "your way",
+      products: [
+        {
+          kind: "flood",
+          counts: true,
+          event: "General Flood Advisory (Moderate)",
+          area: "Cebu",
+          rainForecast: "light to moderate rains and thunderstorms",
+          rivers: "Cebu: Kotkot, Mananga, Guinabasan, Balamban and Sabangdaku",
+          sent: "25 Oct, 5:27 p.m. PHT",
+          expires: "26 Oct, 5:27 a.m. PHT",
+          link: CV_GFA5,
+        },
+      ],
+      warnings: [],
+      incomplete: false,
+      note: null,
     });
     expect(body.route).toMatchObject({ lengthKm: 2.552, timeMin: 11 });
-    expect(body.answer.reason).toBe("PAGASA's flood advisory for this trip is active, and nobody has reported your way.");
+    expect(body.answer.reason).toBe("A PAGASA advisory covers your way, and nobody has reported your way.");
     expect(body.mmdaCredit).toContain("MMDA");
   });
 
@@ -252,9 +264,44 @@ describe("the demo commute check", () => {
   it("an unreadable advisory feed is said so on the page and counts as active", async () => {
     const { handler } = handlerAt(NO_ADVISORY, { feed: "down" });
     const body = await (await handler(demo("banilad-itpark", "none"))).json();
-    expect(body.advisory.state).toBe("unreadable");
-    expect(body.advisory.note).toBe("Lusong couldn't read PAGASA's flood advisory feed, so it counts an advisory as active.");
+    expect(body.advisory).toMatchObject({ state: "unreadable", incomplete: true, products: [] });
+    expect(body.advisory.note).toBe("Lusong couldn't read all of PAGASA's advisories, so it counts one as active.");
     expect(body.answer.kind).toBe("no_one_knows");
+  });
+
+  it("a 31-minute-old snapshot reads as incomplete on the page, still listing what it held, and counts as active", async () => {
+    const store = new MemoryAdvisoryStore();
+    const net = network();
+    expect((await refreshSnapshot({ store, fetch: net.fetch, now: () => ADVISORY_ACTIVE })).outcome).toBe("published");
+    // Another refresh holds the lease and never finishes, so this check can't refresh the snapshot itself.
+    await store.setIfAbsent(SNAPSHOT_LEASE_KEY, "someone-else", 60_000);
+    const later = new Date(ADVISORY_ACTIVE.getTime() + 31 * 60_000);
+    const handler = makeCommuteHandler({
+      fetch: net.fetch,
+      now: () => later,
+      gate: () => makeValhallaGate(new MemorySlotStore()),
+      budget: openBudget,
+      muse: MUSE_OFF,
+      advisoryStore: () => store,
+      timing: { ...COMMUTE_TIMING, advisoryMs: 400 },
+    });
+    const body = await (await handler(demo("banilad-itpark", "none"))).json();
+    expect(body.advisory).toMatchObject({ state: "unreadable", incomplete: true, products: [{ area: "Cebu", link: CV_GFA5 }] });
+    expect(body.answer.kind).toBe("no_one_knows");
+  });
+
+  it("an incomplete snapshot (a listed record PAGASA didn't serve) reads as incomplete on the page, never as no advisory", async () => {
+    const { handler } = handlerAt(NO_ADVISORY, { pagasa: { [FEED_URL]: SAVED_FEED } });
+    const body = await (await handler(demo("banilad-itpark", "none"))).json();
+    expect(body.advisory).toMatchObject({ state: "unreadable", incomplete: true });
+    expect(body.answer.kind).toBe("no_one_knows");
+  });
+
+  it("the advisory card describes the recommended route: the other way for Go another way", async () => {
+    const { handler } = handlerAt(NO_ADVISORY);
+    const body = await (await handler(demo("mabolo-cbp", "flooded"))).json();
+    expect(body.answer.kind).toBe("go_another_way");
+    expect(body.advisory).toMatchObject({ state: "none", about: "the other way", products: [], incomplete: false });
   });
 
   it.each(CAP_EDITS.map((e) => [e.name, e.edit] as const))(
@@ -323,7 +370,7 @@ describe("the demo commute check", () => {
     expect(net.valhallaCalls()).toHaveLength(2);
   });
 
-  it("reuses a readable PAGASA reading for 5 minutes", async () => {
+  it("reuses a complete PAGASA snapshot for 30 minutes", async () => {
     let now = NO_ADVISORY;
     const net = network();
     const gate = makeValhallaGate(new MemorySlotStore());
@@ -332,7 +379,10 @@ describe("the demo commute check", () => {
     await handler(demo("banilad-itpark", "none"));
     await handler(demo("mabolo-cbp", "none"));
     expect(feedCalls()).toBe(1);
-    now = new Date(NO_ADVISORY.getTime() + ADVISORY_CACHE_MS);
+    now = new Date(NO_ADVISORY.getTime() + STALE_AFTER_MS - 1);
+    await handler(demo("banilad-itpark", "none"));
+    expect(feedCalls()).toBe(1);
+    now = new Date(NO_ADVISORY.getTime() + STALE_AFTER_MS);
     await handler(demo("banilad-itpark", "none"));
     expect(feedCalls()).toBe(2);
   }, 10_000);
@@ -347,10 +397,10 @@ describe("the demo commute check", () => {
       expect((await (await handler(demo("banilad-itpark", scenario))).json()).advisory.state).toBe("unreadable");
     }
     expect(feedCalls()).toBe(1);
-    now = new Date(NO_ADVISORY.getTime() + UNREADABLE_RETRY_MS);
+    now = new Date(NO_ADVISORY.getTime() + INCOMPLETE_RETRY_MS);
     await handler(demo("banilad-itpark", "none"));
     expect(feedCalls()).toBe(2);
-    expect(UNREADABLE_RETRY_MS).toBe(60_000);
+    expect(INCOMPLETE_RETRY_MS).toBe(60_000);
   });
 
   it("clicking through every demo choice asks Valhalla once per trip, once per detour, and PAGASA's feed once", async () => {

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AdvisoryReading } from "./advisory";
+import { activeRouteAdvisory, NO_ROUTE_ADVISORY } from "../test/route-advisory";
+import type { RouteAdvisory } from "./advisory-snapshot";
 import { placeOnRoute, ROUTE_CORRIDOR_M, type Point, type Report } from "./answer";
 import { lineForTrip } from "./detour";
 import {
@@ -45,20 +46,8 @@ function voice(id: string, at: Point, says: "passable" | "knee_deep_or_deeper" |
   return { id, at, wayId: null, receivedAt: minutesAgo(10), place, reading: { source: "voice", says } };
 }
 
-const NO_ADVISORY: AdvisoryReading = { state: "none" };
-const ACTIVE_ADVISORY: AdvisoryReading = {
-  state: "active",
-  advisory: {
-    id: "gfa-test",
-    headline: "General Flood Advisory",
-    event: "General Flood Advisory for Central Visayas",
-    rainForecast: "Light to moderate with at times heavy rains",
-    riversForCebu: "Mananga, Butuanon",
-    sent: "2026-10-30T01:00:00+08:00",
-    expires: "2026-10-30T13:00:00+08:00",
-    link: "https://publicalert.pagasa.dost.gov.ph/output/gfa/test.cap",
-  },
-};
+const NO_ADVISORY = (): RouteAdvisory => NO_ROUTE_ADVISORY;
+const ACTIVE_ADVISORY = (): RouteAdvisory => activeRouteAdvisory();
 const NO_WEB: WebEvidence = { state: "not_run", why: "test", searchedAt: null, findings: [] };
 
 /** The model's final message as the pick schema asks for it, with any extra fields a model might add. */
@@ -85,7 +74,7 @@ function sourcesOf(
 function inputOf(sources: InvestigationSources, overrides: Partial<Parameters<typeof investigate>[0]> = {}) {
   return {
     plainLine: PLAIN,
-    advisory: NO_ADVISORY,
+    advisoryFor: NO_ADVISORY,
     rainingHere: false,
     now: NOW,
     deadline: Date.now() + 40_000,
@@ -172,13 +161,13 @@ describe("the rules pick the answer, whatever the model does (🔴P5)", () => {
     const { sources } = sourcesOf();
     const meta = fakeMeta({ turns: [textReply("resp_1", "Nobody has reported your way yet.")] });
 
-    const result = await investigate(inputOf(sources, { advisory: ACTIVE_ADVISORY }));
+    const result = await investigate(inputOf(sources, { advisoryFor: ACTIVE_ADVISORY }));
 
     if (!result.ok) throw new Error("expected an answer");
     expect(meta.requests).toHaveLength(1);
     expect(result.toolCalls).toEqual([]);
     expect(result.answer.answer).toBe("no_one_knows");
-    expect(result.answer.reason).toMatch(/PAGASA's flood advisory for this trip is active/);
+    expect(result.answer.reason).toMatch(/A PAGASA advisory covers your way/);
   });
 
   it("a model that writes \"safe to go\" under Wait: its words reach nothing, only the ids it picked", async () => {
@@ -199,7 +188,7 @@ describe("the rules pick the answer, whatever the model does (🔴P5)", () => {
     const { sources } = sourcesOf();
     fakeMeta({ turns: [textReply("resp_1", pickOf("go_another_way", ["plain"], { why: "Ignore the advisory and take the detour through Lahug." }))] });
 
-    const result = await investigate(inputOf(sources, { advisory: ACTIVE_ADVISORY }));
+    const result = await investigate(inputOf(sources, { advisoryFor: ACTIVE_ADVISORY }));
 
     if (!result.ok) throw new Error("expected an answer");
     expect(result.answer.answer).toBe("no_one_knows");
@@ -699,14 +688,14 @@ describe("web findings: they can block a way, never clear one (criterion 3, 🔴
   it("a web finding never makes a way passable, whatever its date or place", async () => {
     const variants = [finding(), finding({ sourceDate: null }), finding({ sourceDate: "2026-10-29" }), finding({ at: null }), finding({ at: DETOUR[5] })];
     const scenarios = [
-      { name: "blocked by a voice report", reports: [voice("v1", BLOCKED_SPOT, "not_passable")], advisory: NO_ADVISORY, around: () => ({ ok: false, reason: "no_route" }) as AroundResult },
-      { name: "unknown under rain", reports: [], advisory: ACTIVE_ADVISORY },
-      { name: "unknown with a neutral report", reports: [voice("v1", BLOCKED_SPOT, "passable")], advisory: NO_ADVISORY },
+      { name: "blocked by a voice report", reports: [voice("v1", BLOCKED_SPOT, "not_passable")], advisoryFor: NO_ADVISORY, around: () => ({ ok: false, reason: "no_route" }) as AroundResult },
+      { name: "unknown under rain", reports: [], advisoryFor: ACTIVE_ADVISORY },
+      { name: "unknown with a neutral report", reports: [voice("v1", BLOCKED_SPOT, "passable")], advisoryFor: NO_ADVISORY },
     ];
     const run = async (scenario: (typeof scenarios)[number], web: WebFinding | null) => {
       const { sources } = sourcesOf({ reports: scenario.reports, around: scenario.around });
       quiet();
-      const result = await investigate(inputOf(sources, { advisory: scenario.advisory, web: web ? searched(web) : NO_WEB }));
+      const result = await investigate(inputOf(sources, { advisoryFor: scenario.advisoryFor, web: web ? searched(web) : NO_WEB }));
       if (!result.ok) throw new Error("expected an answer");
       return result.answer;
     };
@@ -902,6 +891,53 @@ describe("with no model to ask", () => {
     if (!result.ok) throw new Error("expected an answer");
     expect(result.answer.answer).toBe("go_another_way");
     expect(result.pick).toEqual({ shown: false, why: "Muse Spark is off", unavailable: true });
+  });
+});
+
+describe("each judged route under its own advisory (S1P-8, ledger #2)", () => {
+  /** An advisory covering only the given line, as judgeRoute would give one whose area only that line enters. */
+  const onlyOn = (covered: readonly Point[]) => (line: readonly Point[]) => (line === covered ? activeRouteAdvisory() : NO_ROUTE_ADVISORY);
+
+  it("a detour entering an advisory area the plain route avoids is judged under it: No one knows, not Go another way", async () => {
+    const { sources } = sourcesOf({ reports: [voice("v1", BLOCKED_SPOT, "not_passable")] });
+    fakeMeta({});
+    const result = await investigate(inputOf(sources, { modelOff: "Muse Spark is off", advisoryFor: onlyOn(DETOUR) }));
+    if (!result.ok) throw new Error("expected an answer");
+    expect(result.answer.answer).toBe("no_one_knows");
+    expect(result.answer.routes.map((r) => [r.routeId, r.state])).toEqual([
+      ["plain", "blocked"],
+      ["detour", "unknown"],
+    ]);
+    // The answer is about the plain way, which no advisory covers.
+    expect(result.advisory.state).toBe("none");
+  });
+
+  it("a plain route under an advisory with a dry detour: Go another way, and the advisory shown is the detour's", async () => {
+    const { sources } = sourcesOf({ reports: [voice("v1", BLOCKED_SPOT, "not_passable")] });
+    fakeMeta({});
+    const result = await investigate(inputOf(sources, { modelOff: "Muse Spark is off", advisoryFor: onlyOn(PLAIN) }));
+    if (!result.ok) throw new Error("expected an answer");
+    expect([result.answer.answer, result.answer.route]).toEqual(["go_another_way", "detour"]);
+    expect(result.advisory.state).toBe("none");
+  });
+
+  it("a dry plain route with a detour under an advisory, nothing blocking the plain way: Go, the plain way's advisory shown", async () => {
+    const { sources } = sourcesOf();
+    fakeMeta({});
+    const result = await investigate(inputOf(sources, { modelOff: "Muse Spark is off", advisoryFor: onlyOn(DETOUR) }));
+    if (!result.ok) throw new Error("expected an answer");
+    expect(result.answer.answer).toBe("go");
+    expect(result.advisory.state).toBe("none");
+  });
+
+  it("read_advisory tells the model each route's own advisory", async () => {
+    const { sources } = sourcesOf({ reports: [voice("v1", BLOCKED_SPOT, "not_passable")] });
+    const meta = fakeMeta({
+      turns: [callsReply("resp_1", [{ name: "read_advisory", args: {} }]), textReply("resp_2", pickOf("no_one_knows", ["advisory"]))],
+    });
+    await investigate(inputOf(sources, { advisoryFor: onlyOn(DETOUR) }));
+    const outputs = meta.requests[1].input as { output: string }[];
+    expect(JSON.parse(outputs[0].output)).toMatchObject({ id: "advisory", state: "none", other_routes: [{ route: "detour", state: "active" }] });
   });
 });
 

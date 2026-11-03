@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<alert xmlns="urn:oasis:names:tc:emergency:cap:1.2"><identifier>0b388184-2411-4eed-8933-a3b64b259b02</identifier><sender>PAGASA-DOST</sender><sent>2026-10-23T05:34:32+08:00</sent><status>Actual</status><msgType>Cancel</msgType><scope>Public</scope><references>PAGASA-DOST,fef26327-8053-41e5-a433-8e24347d148f,2026-10-23T05:33:27+08:00</references><info><category>Met</category><event>General Flood Advisory (Moderate)</event><responseType>Monitor</responseType><urgency>Future</urgency><severity>Moderate</severity><certainty>Possible</certainty><expires>2026-10-23T05:44:32+08:00</expires><senderName>PAGASA-DOST</senderName><headline>General Flood Advisory</headline><description>This is a cancellation of the previous alert.</description><instruction/><web>http://www.pagasa.dost.gov.ph/index.php/26-hydromet/1582-flood-forecast-terms-and-symbols</web><contact>PAGASA-DOST</contact><valueName>layer:Google:Region:0.1</valueName><value>Region 2 (Cagayan Valley)</value><area><areaDesc>Cagayan</areaDesc><polygon>17.544357360493,122.19383966217 17.517056105107,121.65297335526 17.6914035175,121.43922758427 17.841954038726,121.31119655133 18.119791968792,121.47173553313 18.313131842547,121.45234277396 18.530970939076,121.05220008975 18.447321817624,120.96087162877 18.579611337753,120.97239650866 18.624809479961,121.15592083304 18.363624153438,121.63075201141 18.284534693434,121.85460153117 18.289253702461,122.01171675271 18.387234603238,122.13363908777 18.380704328247,122.32193902704 18.219594107103,122.30573714349 18.114464382048,122.18206624985 17.79380440239,122.14256584761 17.544357360493,122.19383966217</polygon><geocode><valueName>SAME</valueName><value>021500000</value></geocode></area><area><areaDesc>Batanes</areaDesc><polygon>20.482878224317,122.02360572053 20.452643576969,122.02629775526 20.408589155683,121.96347148931 20.366095173456,121.97386873411 20.348038630495,121.91849970251 20.404843493649,121.92863582449 20.488478973437,122.00314244964 20.482878224317,122.02360572053</polygon><geocode><valueName>SAME</valueName><value>020900000</value></geocode></area></info><Signature xmlns="http://www.w3.org/2000/09/xmldsig#"><SignedInfo><CanonicalizationMethod Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"/><SignatureMethod Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1"/><Reference URI=""><Transforms><Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/></Transforms><DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"/><DigestValue>Mxox5xfqKVL7ivm5Bz/cVfAKBFo=</DigestValue></Reference></SignedInfo><SignatureValue>gMvESh/vSY/KCq378hpSahc241Mn8mVDbSVS4dP5RQ3JTi8FSjSYDRG6kPWER3og
+VNGcN1v5YrXKWtWyLsHEZCOuwAQPnM6jHCXVQqHoR9/mEierp7fnHFUfZm3wy3mz
++1nLsFW8r9iApA2VVFcmQVf8RAs5l/R0u0h/kRgvK+yFPSxEH84IOT4YbbE1/OTT
+bQ/6sdrADYLDLtI8Gn2kzCEMKYJ+wyfrRaj35iYX7afyUr4wWXYnJvVoK7/kIT0z
+ZNUUwyPwLXiSlHUpf5n+aCJZVmlC9FWhJPB2As/nlEnCa/jQLZ6LCy85W2H8EyRF
+VsdTAiiE4Qn25I5Wn7AqgKtzNxUIHx6hxxFQ0kjE7NvOvg5psBAWtycRtVjmcktv
+R975WQvTvVyNoUy3NjTn5a9zhacKi3a7pXID+v1m2c8A4PGwoxqTMVaKWZA9l3DY
+rQcScqGBHdva7g4mCVyV+Ab0yKB0Ho7OBLEZyVIbB0VAx7vo0HdlD/Zi32ia74cH
+ol+AJK66zLb7igyiBclN3MfgLZKvE72GJ2lGhRM+K6b6lCu8hktDC7Llr/FgKXtl
+fLVTvpK2FYypzvjKG9hoSyOUjJxNcTaH89nuxiy+kjt9wszX+9rT9bS0U7eDmbmT
+zWIi5tNEnhkbjdqhD+fLTGvfHTfQ2R7Q/bhkwhpYfdI=</SignatureValue><KeyInfo><KeyValue>
+<RSAKeyValue>
+<Modulus>
+1pm7X28TTIESx7uWklHbVIlO0Y+fUBZ7LynhaRQ9w1rMsMhF0dNEvUdYBKVF1xPz
+SGD0IrbU6Uemw8Xb/sOy263ZOkSxqWIh3UEluOW7s6J3Hgv8UMDZkWDgj3+m2qWT
+UTgbNO3drHGvlRBg6liD15iNusSdSMw/kqmHxe/9tnStpsHo/u57rsH3/ROTvuz2
+yHD2t7I7zo0Kv7mfAAHodU4QoL8/7c3u29szxRu13M4SRkiLKwbgrwlsMCvXhkys
+oEKlX8/SnXDL8iSPExAiP7xVpfbmh8TNiGvtbjH7Ro2EYjUsEcv9qC7G5jLu7Klt
+8TkTobHqES26/F5/u42Ra3rIDunTxczbIHF1qoumAzdsJmFCBc9D1IKTTWKR3D2J
+eAZfpuvMeOEcpRxBayYf2jOBx8iD8gag5cIZWl2/62IfUxTk92A00M5QrzTocNkg
+0U5K1gN5WmhObUN/3fa/Ob5uriELGzRdzXJ+3QE8FpPmSPJZFA//UWmpJqsboO7p
+AhbB8efPIV42nxjwQEbJdkxUOlfAyPMRGcp4RhmaAnX7KmB33j4klYeNktH+OeV8
+S9q/nMJoA/d76K1hCbo9PJTa/UxwZJYh0LEs1YnHP/5wgydZJcyNjmcu7P5ur90L
+qyr2FB0fZYAmWi6SEaA0F7yi2Y0uqV4FP7dfcbfOf+E=
+</Modulus>
+<Exponent>
+AQAB
+</Exponent>
+</RSAKeyValue>
+</KeyValue></KeyInfo></Signature></alert>

@@ -18,14 +18,23 @@ const TripMap = dynamic(() => import("./map"), {
   loading: () => <div className="h-72 w-full rounded-2xl bg-zinc-100 dark:bg-zinc-900" />,
 });
 
+interface PageProduct {
+  counts: boolean;
+  event: string;
+  area: string;
+  sent: string;
+  expires: string;
+  link: string;
+  rainForecast: string | null;
+  rivers: string | null;
+}
+
 interface PageAdvisory {
   state: "active" | "none" | "unreadable";
-  headline?: string | null;
-  rainForecast?: string | null;
-  rivers?: string | null;
-  sent?: string;
-  expires?: string;
-  link?: string;
+  about: "your way" | "the other way";
+  products: PageProduct[];
+  warnings: PageProduct[];
+  incomplete: boolean;
   note: string | null;
 }
 
@@ -100,26 +109,49 @@ function Elapsed({ since }: { since: number }) {
   return <>{Math.max(0, Math.round((now - since) / 1000))}</>;
 }
 
+function Product({ product }: { product: PageProduct }) {
+  return (
+    <li className="space-y-0.5">
+      <p className="font-medium">
+        {product.event} for {product.area}
+        {product.counts ? "" : " (shown only)"}
+      </p>
+      {product.rainForecast && <p>Rain forecast: {product.rainForecast}.</p>}
+      {product.rivers && <p>Rivers named: {product.rivers}.</p>}
+      <p className="text-zinc-600 dark:text-zinc-400">
+        Sent {product.sent}. Expires {product.expires}.
+      </p>
+      <a className="break-all text-sky-700 underline dark:text-sky-400" href={product.link}>
+        PAGASA&apos;s record
+      </a>
+    </li>
+  );
+}
+
 function Advisory({ advisory }: { advisory: PageAdvisory }) {
   return (
     <section className="space-y-1 rounded-2xl border border-zinc-200 px-4 py-3 text-[15px] dark:border-zinc-800">
-      <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">PAGASA flood advisory for this trip</h3>
-      {advisory.state === "active" ? (
+      <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">PAGASA advisories on {advisory.about}</h3>
+      {advisory.incomplete && (
+        <p className="font-medium text-amber-800 dark:text-amber-300">Incomplete: Lusong couldn&apos;t read all of PAGASA&apos;s feed, so it counts an advisory as active.</p>
+      )}
+      {advisory.products.length > 0 && (
+        <ul className="space-y-2">
+          {advisory.products.map((p) => (
+            <Product key={p.link} product={p} />
+          ))}
+        </ul>
+      )}
+      {advisory.note && !advisory.incomplete && <p>{advisory.note}</p>}
+      {advisory.warnings.length > 0 && (
         <>
-          <p className="font-medium">{advisory.headline ?? "General Flood Advisory"}: active</p>
-          {advisory.rainForecast && <p>Rain forecast: {advisory.rainForecast}.</p>}
-          {advisory.rivers && <p>Rivers named in the advisory: {advisory.rivers}.</p>}
-          <p className="text-zinc-600 dark:text-zinc-400">
-            Sent {advisory.sent}. Expires {advisory.expires}.
-          </p>
-          {advisory.link && (
-            <a className="break-all text-sky-700 underline dark:text-sky-400" href={advisory.link}>
-              PAGASA&apos;s record
-            </a>
-          )}
+          <p className="text-zinc-600 dark:text-zinc-400">PAGASA advisories Lusong couldn&apos;t place on the map:</p>
+          <ul className="space-y-2">
+            {advisory.warnings.map((p) => (
+              <Product key={`w-${p.link}`} product={p} />
+            ))}
+          </ul>
         </>
-      ) : (
-        <p className={advisory.state === "unreadable" ? "font-medium text-amber-800 dark:text-amber-300" : ""}>{advisory.note}</p>
       )}
     </section>
   );
