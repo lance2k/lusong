@@ -5,6 +5,8 @@ import {
   fetchRoute,
   makeValhallaGate,
   MAX_ACK_MS,
+  MAX_ROUTE_KM,
+  MAX_TRIP_STRAIGHT_KM,
   MemorySlotStore,
   slotStoreFromEnv,
   UpstashSlotStore,
@@ -66,6 +68,7 @@ describe("the plain motorbike route from Valhalla", () => {
     expect(JSON.parse(String(starts[0].init.body))).toEqual({
       locations: [BANILAD, IT_PARK],
       costing: "motorcycle",
+      costing_options: { motorcycle: { use_ferry: 0 } },
       directions_options: { units: "kilometers" },
     });
   });
@@ -109,6 +112,48 @@ describe("the plain motorbike route from Valhalla", () => {
       reason: "no_route",
     });
     expect(starts).toHaveLength(1);
+  });
+});
+
+describe("trips on one island's roads, up to 150 km (S1)", () => {
+  const FERRY = readFileSync("test/fixtures/valhalla/cebu-tagbilaran-ferry.json", "utf8");
+  const CEBU_CITY_HALL = { lat: 10.29293, lon: 123.90175 };
+  const TAGBILARAN = { lat: 9.65388, lon: 123.86605 };
+
+  it("asks for no ferries in the motorcycle costing", async () => {
+    const { fetch, starts } = valhalla([ok()]);
+    await fetchRoute({ from: BANILAD, to: IT_PARK }, { fetch, gate: gateOn(new MemorySlotStore()) });
+    expect(JSON.parse(String(starts[0].init.body)).costing_options).toEqual({ motorcycle: { use_ferry: 0 } });
+  });
+
+  it("Valhalla's real Cebu City → Tagbilaran reply, asked with use_ferry 0, still takes a ferry (2026-11-03, one draw), and is refused", async () => {
+    expect(JSON.parse(FERRY).trip.summary.has_ferry).toBe(true);
+    const { fetch } = valhalla([() => new Response(FERRY, { status: 200 })]);
+    expect(await fetchRoute({ from: CEBU_CITY_HALL, to: TAGBILARAN }, { fetch, gate: gateOn(new MemorySlotStore()) })).toEqual({ ok: false, reason: "ferry" });
+  });
+
+  it("a ferry on any leg is refused, even when the summary doesn't say so", async () => {
+    const { fetch } = valhalla([() => withLeg((leg) => ({ ...leg, summary: { has_ferry: true } }))]);
+    expect(await fetchRoute({ from: BANILAD, to: IT_PARK }, { fetch, gate: gateOn(new MemorySlotStore()) })).toEqual({ ok: false, reason: "ferry" });
+  });
+
+  it(`ends more than ${MAX_TRIP_STRAIGHT_KM} km apart are refused with no request`, async () => {
+    const { fetch, starts } = valhalla([ok()]);
+    const far = { lat: BANILAD.lat + 101 / 111.195, lon: BANILAD.lon };
+    expect(await fetchRoute({ from: BANILAD, to: far }, { fetch, gate: gateOn(new MemorySlotStore()) })).toEqual({ ok: false, reason: "too_far" });
+    expect(starts).toHaveLength(0);
+  });
+
+  it(`a route of ${MAX_ROUTE_KM + 1} km is refused; one of exactly ${MAX_ROUTE_KM} km is taken`, async () => {
+    const lengthOf = (km: number) => () => {
+      const body = JSON.parse(PLAIN);
+      body.trip.summary.length = km;
+      return Response.json(body);
+    };
+    const long = valhalla([lengthOf(MAX_ROUTE_KM + 1)]);
+    expect(await fetchRoute({ from: BANILAD, to: IT_PARK }, { fetch: long.fetch, gate: gateOn(new MemorySlotStore()) })).toEqual({ ok: false, reason: "too_long" });
+    const edge = valhalla([lengthOf(MAX_ROUTE_KM)]);
+    expect(await fetchRoute({ from: BANILAD, to: IT_PARK }, { fetch: edge.fetch, gate: gateOn(new MemorySlotStore()) })).toMatchObject({ ok: true });
   });
 });
 

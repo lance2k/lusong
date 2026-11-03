@@ -1,4 +1,4 @@
-import type { Point } from "./answer";
+import { distanceM, type Point } from "./answer";
 import { USER_AGENT } from "./advisory";
 import { beforeDeadline } from "./deadline";
 
@@ -109,6 +109,15 @@ export function makeValhallaGate(
   };
 }
 
+/** Ends further apart than this in a straight line are refused before Valhalla is asked. */
+export const MAX_TRIP_STRAIGHT_KM = 100;
+/** A route, plain or a way around, longer than this is refused: Lusong checks commutes, not long-distance trips. */
+export const MAX_ROUTE_KM = 150;
+
+export function endsTooFarApart(from: Point, to: Point): boolean {
+  return distanceM(from, to) > MAX_TRIP_STRAIGHT_KM * 1_000;
+}
+
 export interface Route {
   line: Point[];
   lengthKm: number;
@@ -119,7 +128,7 @@ export interface Route {
 
 export type RouteResult =
   | { ok: true; route: Route }
-  | { ok: false; reason: "unreachable" | "busy" | "gate_unavailable" | "no_route" | "out_of_time" };
+  | { ok: false; reason: "unreachable" | "busy" | "gate_unavailable" | "no_route" | "ferry" | "too_far" | "too_long" | "out_of_time" };
 
 export function decodePolyline6(encoded: string): Point[] {
   const out: Point[] = [];
@@ -153,8 +162,8 @@ export function decodePolyline6(encoded: string): Point[] {
 
 interface ValhallaTrip {
   trip?: {
-    summary?: { length?: number; time?: number };
-    legs?: { shape?: string; maneuvers?: { street_names?: string[] }[] }[];
+    summary?: { length?: number; time?: number; has_ferry?: boolean };
+    legs?: { shape?: string; summary?: { has_ferry?: boolean }; maneuvers?: { street_names?: string[] }[] }[];
   };
   error_code?: number;
 }
@@ -162,7 +171,7 @@ interface ValhallaTrip {
 const onEarth = (p: Point) => Math.abs(p.lat) <= 90 && Math.abs(p.lon) <= 180;
 
 /** Anything not shaped like a Valhalla trip is null, never a thrown error or a half-read route. */
-function readTrip(body: ValhallaTrip): Route | null {
+function readTrip(body: ValhallaTrip): (Route & { hasFerry: boolean }) | null {
   const leg = body.trip?.legs?.[0];
   const summary = body.trip?.summary;
   if (typeof leg?.shape !== "string" || typeof summary?.length !== "number" || typeof summary.time !== "number") return null;
@@ -181,7 +190,8 @@ function readTrip(body: ValhallaTrip): Route | null {
     if (!Array.isArray(names) || !names.every((n) => typeof n === "string")) return null;
     if (names.length > 0 && !streets.includes(names[0])) streets.push(names[0]);
   }
-  return { line, lengthKm: summary.length, timeMin: summary.time / 60, streets };
+  const hasFerry = summary.has_ferry === true || (Array.isArray(body.trip?.legs) ? body.trip.legs : []).some((l) => l?.summary?.has_ferry === true);
+  return { line, lengthKm: summary.length, timeMin: summary.time / 60, streets, hasFerry };
 }
 
 /** Valhalla's code for "No path could be found for input". */
@@ -192,9 +202,13 @@ export async function fetchRoute(
   deps: { fetch: typeof fetch; gate: ValhallaGate; deadline?: number },
 ): Promise<RouteResult> {
   const deadline = deps.deadline ?? Infinity;
+  if (endsTooFarApart(request.from, request.to)) return { ok: false, reason: "too_far" };
   const body = {
     locations: [request.from, request.to],
     costing: "motorcycle",
+    // Valhalla still returns a ferry route with this when there is no road (2026-11-03 Cebu → Tagbilaran probe), so a
+    // reply with a ferry is refused below as well.
+    costing_options: { motorcycle: { use_ferry: 0 } },
     ...(request.excludePolygons ? { exclude_polygons: request.excludePolygons.map((ring) => ring.map((p) => [p.lon, p.lat])) } : {}),
     directions_options: { units: "kilometers" },
   };
@@ -220,8 +234,12 @@ export async function fetchRoute(
     if (res.status >= 500 || res.status === 429) continue;
     const parsed = (await res.json().catch(() => null)) as ValhallaTrip | null;
     if (!res.ok) return { ok: false, reason: parsed?.error_code === NO_PATH ? "no_route" : "unreachable" };
-    const route = parsed && readTrip(parsed);
-    return route ? { ok: true, route } : { ok: false, reason: "unreachable" };
+    const trip = parsed && readTrip(parsed);
+    if (!trip) return { ok: false, reason: "unreachable" };
+    const { hasFerry, ...route } = trip;
+    if (hasFerry) return { ok: false, reason: "ferry" };
+    if (route.lengthKm > MAX_ROUTE_KM) return { ok: false, reason: "too_long" };
+    return { ok: true, route };
   }
   return { ok: false, reason: "unreachable" };
 }

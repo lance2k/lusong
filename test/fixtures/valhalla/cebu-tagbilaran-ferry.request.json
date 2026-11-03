@@ -1,0 +1,21 @@
+{
+ "locations": [
+  {
+   "lat": 10.29293,
+   "lon": 123.90175
+  },
+  {
+   "lat": 9.65388,
+   "lon": 123.86605
+  }
+ ],
+ "costing": "motorcycle",
+ "costing_options": {
+  "motorcycle": {
+   "use_ferry": 0
+  }
+ },
+ "directions_options": {
+  "units": "kilometers"
+ }
+}
