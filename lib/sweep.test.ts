@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
+import { runDelivery } from "./alert-delivery";
 import { MemoryAlertStore } from "./alerts";
 import { createBudget, MemoryBudgetStore, UpstashBudgetStore, type BudgetStore, type SweepLedger } from "./budget";
 import type { Meter } from "./meta";
 import type { SafeFetchResult } from "./safe-fetch";
+import { MemoryWatchStore } from "./watch-store";
 import {
   MemorySweepStore,
   RIDER_FLOOR_MICROS,
@@ -345,6 +347,26 @@ describe("one sweep (S4P-3, S4P-8; no paid call: Wonder is stubbed)", () => {
       await store.releaseSlot(DAY, 2, t1 + 1);
       expect(await store.claimSlot(DAY, t1 + 1, SWEEP_GAP_MS, 4)).toBeNull();
     }
+  });
+
+  it("\"A.S. Fortuna Street\" and \"A.S. Fortuna St.\" on one page are one alert and one send (S4D-10)", async () => {
+    const h = sweepHarness(wonderReply([CANDIDATE, { ...CANDIDATE, place: "A.S. Fortuna St." }]));
+    expect(await h.sweep()).toMatchObject({ discovery: "ran", candidates: 2, refused: 0 });
+    expect(await h.alerts.all(NOW.getTime())).toHaveLength(1);
+    // Spelled differently and placed by the province alone, the two still make one item.
+    const unplaced = sweepHarness(wonderReply([CANDIDATE, { ...CANDIDATE, place: "a.s. fortuna st" }]));
+    await unplaced.sweep({ admit: { ...unplaced.deps.admit, geocode: async () => ({ status: "ok", places: [] }) } });
+    expect(await unplaced.alerts.all(NOW.getTime())).toHaveLength(1);
+
+    const watches = new MemoryWatchStore({ now: () => NOW.getTime() });
+    await watches.create({ id: "w1", gen: "g1", trip: { from: { lat: 10.335, lon: 123.915 }, to: { lat: 10.341, lon: 123.921 } }, window: { startMin: 360, endMin: 480 } }, "code-w1");
+    await watches.redeem("code-w1", "chat-w1");
+    const sent: string[] = [];
+    const deliver = () =>
+      runDelivery({ watches, alerts: h.alerts, advisory: null, channel: { send: async (_chat: string, text: string) => (sent.push(text), { ok: true }) }, now: () => NOW, sleep: async () => {} });
+    await deliver();
+    await deliver();
+    expect(sent).toHaveLength(1);
   });
 
   it("a model reply that isn't the schema yields no candidates and fetches nothing", async () => {

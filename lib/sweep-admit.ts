@@ -302,7 +302,10 @@ export async function admitCandidate(c: Candidate, deps: AdmitDeps & { robots: (
   const spot: Point | null = inside.length > 0 && inside.every((p) => distanceM(p, inside[0]) <= SAME_PLACE_M) ? { lat: inside[0].lat, lon: inside[0].lon } : null;
 
   const official = isOfficialHost(url.hostname);
-  const id = `sweep:${createHash("sha256").update(`${canonical}|${foldedPlace}|${words}`).digest("hex").slice(0, 24)}`;
+  // One road is one item however the page or the model spells it (S4D-10): the geocoder's OSM id when it placed it,
+  // else the road's name as matching normalises it, with the province.
+  const where = spot && inside[0].id.startsWith("osm:") ? inside[0].id : `${named}|${areas.join(",")}`;
+  const id = `sweep:${createHash("sha256").update(`${canonical}|${where}|${words}`).digest("hex").slice(0, 24)}`;
   const alert: Alert = {
     id,
     version: 1,
