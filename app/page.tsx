@@ -9,7 +9,7 @@ export default function Home() {
         <h1 className="text-3xl font-bold tracking-tight">Lusong</h1>
         <p className="text-lg leading-snug text-zinc-700 dark:text-zinc-300">
           Should you ride to work now, and which way? Lusong reads PAGASA&apos;s flood advisory for Cebu and the
-          reports along your motorbike route, and gives one answer: Go, Wait, or No one knows.
+          reports along your motorbike route, and gives one answer: Go, Go another way, Wait, or No one knows.
         </p>
       </header>
 

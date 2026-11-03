@@ -26,7 +26,7 @@ import { Meter } from "./meta";
 import { decodePolyline6 } from "./router";
 import { DEMO_TRIPS } from "./samples";
 import { MemoryKvStore, planWebSearch, runWebSearch, SEARCH_RESERVE_MICROS, WEB_SEARCH_CACHE_MS, type WebFinding, type WebPlan } from "./web-search";
-import { callsReply, fakeMeta, hangs, searchReply, textReply } from "../test/muse-derived";
+import { callsReply, fakeMeta, hangs, searchReply, textReply, type Scripted } from "../test/muse-derived";
 
 const read = (path: string) => readFileSync(path, "utf8");
 const shape = (name: string) => decodePolyline6(JSON.parse(read(`test/fixtures/valhalla/${name}.json`)).trip.legs[0].shape);
@@ -457,9 +457,59 @@ describe("route_around: a way around the model proposes is judged by the same ru
 });
 
 describe("each model turn's time cap", () => {
-  it("leaves 1.5× the slowest turn measured live, and still ends inside the commute check's deadline", () => {
+  // On fake timers, AbortSignal.timeout (a Node timer vitest doesn't fake) is rebuilt on the faked setTimeout.
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError")), ms);
+      return controller.signal;
+    });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  const answersAfter =
+    (ms: number, reply: object): Scripted =>
+    (_body, signal) =>
+      new Promise((resolve, reject) => {
+        const timer = setTimeout(() => resolve(reply), ms);
+        signal?.addEventListener("abort", () => {
+          clearTimeout(timer);
+          reject(signal.reason);
+        });
+      });
+
+  async function pickWhenTurnTwoTakes(ms: number) {
+    const { sources } = sourcesOf({ reports: [voice("v1", BLOCKED_SPOT, "not_passable")] });
+    fakeMeta({
+      turns: [
+        callsReply("resp_1", [{ name: "reports_near_route", args: { route: "plain" } }]),
+        answersAfter(ms, textReply("resp_2", pickOf("go_another_way", ["v1", "detour"]))),
+      ],
+    });
+    const started = Date.now();
+    const running = investigate(inputOf(sources, { deadline: started + COMMUTE_DEADLINE_MS }));
+    await vi.advanceTimersByTimeAsync(COMMUTE_DEADLINE_MS);
+    const result = await running;
+    if (!result.ok) throw new Error("expected an answer");
+    return result.pick;
+  }
+
+  it("keeps a turn as slow as the slowest measured live, with room to spare: an 18.0 s reply was cut off at the old 15 s cap", async () => {
+    expect(await pickWhenTurnTwoTakes(SLOWEST_TURN_MEASURED_MS)).toEqual({ shown: true, evidence: ["v1", "detour"] });
+    expect(await pickWhenTurnTwoTakes(LOOP_ATTEMPT_MS - 1_000)).toEqual({ shown: true, evidence: ["v1", "detour"] });
     expect(LOOP_ATTEMPT_MS).toBeGreaterThanOrEqual(1.5 * SLOWEST_TURN_MEASURED_MS);
+  });
+
+  it("cuts off a turn past the cap inside the check's deadline, labels it timed out, and logs why and on which turn", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(LOOP_ATTEMPT_MS).toBeLessThan(COMMUTE_DEADLINE_MS);
+
+    expect(await pickWhenTurnTwoTakes(LOOP_ATTEMPT_MS + 1_000)).toEqual({ shown: false, why: "timed out", unavailable: true });
+    expect(warn).toHaveBeenCalledWith("Muse Spark's pick not shown: timed out (turn 2)");
   });
 });
 

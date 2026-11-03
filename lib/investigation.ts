@@ -2,7 +2,7 @@ import type { AdvisoryReading } from "./advisory";
 import { decideAnswer, type Answer, type AnswerKind, type Point, type Report, type RouteCandidate } from "./answer";
 import { ATTEMPTS_PER_CALL, MUSE_INPUT_MICROS_PER_TOKEN, MUSE_OUTPUT_MICROS_PER_TOKEN } from "./budget";
 import { detourAvoids } from "./detour";
-import type { Meter } from "./meta";
+import { MetaApiError, type Meter } from "./meta";
 import { respond, type FunctionCall, type FunctionTool, type SparkReply } from "./spark-responses";
 import { inMetroCebu, SEARCH_RESERVE_MICROS, type WebEvidence, type WebFinding, type WebPlan } from "./web-search";
 
@@ -473,6 +473,10 @@ export async function investigate(input: InvestigationInput): Promise<Investigat
   ]);
   const pick: EvidencePick =
     "text" in written ? vetPick(written.text, answer.answer, gathered) : { shown: false, why: written.unavailable, unavailable: true };
+  // The page shows only that the pick is missing, so the reason goes to the logs (production gave none on 2026-11-03).
+  if (!pick.shown && !input.modelOff) {
+    console.warn(`Muse Spark's pick not shown: ${pick.why}${"turn" in written ? ` (turn ${written.turn})` : ""}`);
+  }
   return {
     ok: true,
     answer,
@@ -514,11 +518,12 @@ function contextOf(evidence: Evidence, web: WebEvidence) {
   };
 }
 
-type Written = { text: string } | { unavailable: string };
+/** `turn` is the model turn that ended the loop, 0 when no model was asked. */
+type Written = { text: string } | { unavailable: string; turn: number };
 
 /** The model's final text, or why there is none. */
 async function explain(input: InvestigationInput, evidence: Evidence, runTool: (call: FunctionCall) => Promise<Record<string, unknown>>): Promise<Written> {
-  if (input.modelOff) return { unavailable: input.modelOff };
+  if (input.modelOff) return { unavailable: input.modelOff, turn: 0 };
   let turnInput: Parameters<typeof respond>[0]["input"] = `${INSTRUCTIONS}${CONTEXT_LEAD}${cappedJson(contextOf(evidence, input.web), CONTEXT_MAX_BYTES)}`;
   let previousResponseId: string | undefined;
   let callsSoFar = 0;
@@ -535,15 +540,16 @@ async function explain(input: InvestigationInput, evidence: Evidence, runTool: (
         deadline: input.deadline,
         meter: input.meter,
       });
-    } catch {
-      return { unavailable: Date.now() >= input.deadline ? "timed out" : "model failed" };
+    } catch (err) {
+      // From the error, not the clock: a timer can fire a millisecond before Date.now() reaches the deadline (#23).
+      return { unavailable: err instanceof MetaApiError && err.timedOut ? "timed out" : "model failed", turn };
     }
-    if (reply.status !== "completed") return { unavailable: "reply cut off" };
+    if (reply.status !== "completed") return { unavailable: "reply cut off", turn };
     if (reply.functionCalls.length === 0) return { text: reply.answerText };
-    if (turn === LOOP_TURN_CAP) return { unavailable: "still calling tools at the turn cap" };
+    if (turn === LOOP_TURN_CAP) return { unavailable: "still calling tools at the turn cap", turn };
     callsSoFar += reply.functionCalls.length;
-    if (reply.functionCalls.length > TOOL_CALLS_PER_TURN || callsSoFar > TOOL_CALLS_TOTAL) return { unavailable: "too many tool calls" };
-    if (reply.id === null) return { unavailable: "reply cut off" };
+    if (reply.functionCalls.length > TOOL_CALLS_PER_TURN || callsSoFar > TOOL_CALLS_TOTAL) return { unavailable: "too many tool calls", turn };
+    if (reply.id === null) return { unavailable: "reply cut off", turn };
     const lastTurnNext = turn + 1 === LOOP_TURN_CAP;
     const outputs = [];
     for (const call of reply.functionCalls) {
