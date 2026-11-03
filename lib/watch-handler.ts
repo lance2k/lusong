@@ -228,11 +228,14 @@ export function makeTickHandler(deps: { secret: () => string | undefined; tick: 
 }
 
 /** The tick as deployed: the store and Telegram from the environment, and the real commute check of each trip. */
-export function tickFromEnv(check: (trip: WatchTrip, opts: { deadline: number }) => Promise<ScheduledCheck>) {
+export function tickFromEnv(
+  check: (trip: WatchTrip, opts: { deadline: number }) => Promise<ScheduledCheck>,
+  settleLater?: (work: Promise<unknown>) => void,
+) {
   return async (pageUrl: string): Promise<TickSummary | null> => {
     const store = watchStoreFromEnv();
     const channel = channelFromEnv();
     if (!store || !channel) return null;
-    return runTick({ store, channel, check, now: () => new Date(), pageUrl });
+    return runTick({ store, channel, check, now: () => new Date(), pageUrl, settleLater });
   };
 }

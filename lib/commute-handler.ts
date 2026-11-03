@@ -383,14 +383,18 @@ export function makeCommuteCheck(deps: CommuteDeps) {
     const realTrip = demo ? null : parseReal(parsed);
     if (realTrip === "too_far") return Response.json({ error: TOO_FAR_MESSAGE, routing: "too_far" }, { status: 400 });
     if (!demo && !realTrip) return fail(400, `Send a demo trip, or a real trip whose start and end are both in ${TRIP_AREA_NAME}.`);
-    return admitted(demo ? { demo } : { real: realTrip! }, clientIp(request), deadline);
+    return admitted(demo ? { demo } : { real: realTrip! }, clientIp(request), deadline, true);
   }
 
   async function checkTrip(trip: { from: Point; to: Point }, opts: { deadline: number }): Promise<ScheduledCheck> {
     const real = parseReal({ mode: "real", from: trip.from, to: trip.to });
     if (!real || real === "too_far") return { ok: false, status: 400 };
     // The caller's deadline bounds the settle too, so the check's own deadline is one store call earlier.
-    const response = await admitted({ real }, null, Math.min(opts.deadline - timing.storeCallMs, Date.now() + timing.deadlineMs));
+    const startedAt = Date.now();
+    const deadline = Math.min(opts.deadline - timing.storeCallMs, startedAt + timing.deadlineMs);
+    // The search's cut-off is taken back from the deadline, so with less than the page's whole deadline a search would
+    // have less time than the page's check gives it, and could be cut off and still paid for (#26): it isn't started.
+    const response = await admitted({ real }, null, deadline, deadline - startedAt >= timing.deadlineMs);
     if (!response.ok) return { ok: false, status: response.status };
     const body = (await response.json()) as { answer?: { kind?: unknown }; route?: { line?: unknown } };
     const kind = body.answer?.kind;
@@ -400,9 +404,15 @@ export function makeCommuteCheck(deps: CommuteDeps) {
 
   /**
    * The check after its request is read, for the page and the watcher alike. `deadline` is epoch ms: every step ends by
-   * it, held in the one CheckRun every step reads; only the settle runs past it, cut off at settleBy.
+   * it, held in the one CheckRun every step reads; only the settle runs past it, cut off at settleBy. With `canSearch`
+   * false, a province's stored search is still used, but no search is planned or reserved for.
    */
-  async function admitted(check: { demo: DemoRequest } | { real: RealRequest }, ip: string | null, deadline: number): Promise<Response> {
+  async function admitted(
+    check: { demo: DemoRequest } | { real: RealRequest },
+    ip: string | null,
+    deadline: number,
+    canSearch: boolean,
+  ): Promise<Response> {
     const settleBy = deadline + timing.storeCallMs;
     const at = now();
     const museDeps = muse();
@@ -410,7 +420,7 @@ export function makeCommuteCheck(deps: CommuteDeps) {
     // Planned from the trip's ends, not its route, so the searches run beside the routing.
     const areas = museDeps.enabled ? searchAreasFor(ends.from, ends.to) : [];
     const plans: WebPlan[] = museDeps.enabled
-      ? await planWebSearches(areas, museDeps.searchStore(), at, museDeps.searchBudget(), deadline)
+      ? await planWebSearches(areas, museDeps.searchStore(), at, museDeps.searchBudget(), deadline, canSearch)
       : [{ kind: "off", area: null, why: "Muse Spark is off" }];
     if (Date.now() >= deadline) {
       // Planning took the whole deadline, so nothing is reserved; a search it planned is given back.

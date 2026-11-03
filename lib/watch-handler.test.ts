@@ -10,7 +10,7 @@ import { MemoryReportStore } from "./report-store";
 import { makeValhallaGate, MemorySlotStore, VALHALLA_URL } from "./router";
 import { makeTelegramWebhook, makeTickHandler, makeWatchHandler, sameSecret } from "./watch-handler";
 import { MemoryWatchStore, type WatchStore } from "./watch-store";
-import { runTick, switchOff, TICK_LIMITS, type TickSummary } from "./watch-tick";
+import { runTick, SEND_LEASE_MS, switchOff, TICK_LIMITS, type TickSummary } from "./watch-tick";
 
 const BANILAD = { lat: 10.346, lon: 123.911 };
 const IT_PARK = { lat: 10.3307, lon: 123.9058 };
@@ -347,7 +347,11 @@ describe("POST /api/watch/tick", () => {
     // The route module imports through the "@/" alias, which vitest doesn't resolve, so its limit is read from source.
     const maxDuration = Number(/export const maxDuration = (\d+);/.exec(readFileSync("app/api/watch/tick/route.ts", "utf8"))?.[1]);
     expect(maxDuration).toBe(60);
-    expect(TICK_LIMITS.budgetMs).toBeLessThanOrEqual(maxDuration * 1_000 - 10_000);
+    // 5 s for the response, as the alert sweep and delivery keep under the same 60 s.
+    expect(TICK_LIMITS.budgetMs).toBeLessThanOrEqual(maxDuration * 1_000 - 5_000);
+    // Each check ends with a whole send lease left before the tick's end, so its send fits.
+    expect(TICK_LIMITS.afterCheckMs).toBeGreaterThanOrEqual(SEND_LEASE_MS);
+    expect(TICK_LIMITS.budgetMs - TICK_LIMITS.afterCheckMs).toBeGreaterThanOrEqual(TICK_LIMITS.minCheckMs);
   });
 
   /** Acceptance criterion 4. */

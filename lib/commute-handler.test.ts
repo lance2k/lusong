@@ -1371,7 +1371,8 @@ describe("Muse Spark in a real check (#6 with #7)", () => {
       const { admits, settles, budget } = watched();
       const { checkTrip } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), budget, store, museOn());
 
-      const result = await checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: Date.now() + 60_000 });
+      // The page's whole deadline and its settle: the web search gets the page check's share of it.
+      const result = await checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: Date.now() + COMMUTE_TIMING.deadlineMs + COMMUTE_TIMING.storeCallMs + 1_000 });
 
       expect(result).toEqual({ ok: true, kind: "go_another_way", line: expect.any(Array) });
       expect(admits).toEqual([COMMUTE_RESERVE_MICROS + investigationReserveMicros({ kind: "search" })]);
@@ -1379,6 +1380,31 @@ describe("Muse Spark in a real check (#6 with #7)", () => {
       const toolOutput = JSON.parse((meta.requests[1].input as { output: string }[])[0].output);
       expect(toolOutput.reports.map((r: { id: string }) => r.id)).toEqual([flooded.id]);
       expect(meta.searchRequests).toHaveLength(1);
+    });
+
+    it("one given less than the page's deadline starts no web search, so none is cut off and paid for: nothing is reserved for one, and the answer still comes (#26)", async () => {
+      const store = new MemoryReportStore();
+      const flooded = storedReport(NO_ADVISORY);
+      await seedReport(store, flooded);
+      const meta = fakeMeta({
+        search: [searchReply(closures)],
+        turns: [callsReply("resp_1", [{ name: "reports_near_route", args: { route: "plain" } }]), textReply("resp_2", pickOf("go_another_way", [flooded.id, "detour"]))],
+      });
+      const { admits, settles, budget } = watched();
+      const kv = new MemoryKvStore();
+      const searchBudget = roomy();
+      const searchAdmit = vi.spyOn(searchBudget, "admit");
+      const { checkTrip } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), budget, store, museOn(kv, searchBudget));
+
+      // What a watcher tick gives its first trip: the checks' end, 45 s in.
+      const result = await checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: Date.now() + 45_000 });
+
+      expect(result).toEqual({ ok: true, kind: "go_another_way", line: expect.any(Array) });
+      expect(meta.searchRequests).toHaveLength(0);
+      expect(searchAdmit).not.toHaveBeenCalled();
+      expect(await kv.get(webSearchLeaseKey(CEBU_AREA))).toBeNull();
+      expect(admits).toEqual([COMMUTE_RESERVE_MICROS + investigationReserveMicros({ kind: "cached" })]);
+      expect(settles).toEqual([true]);
     });
 
     it("one whose web search and model never answer ends by the caller's deadline, settle included, as the page's check would: out of time for a way around", async () => {

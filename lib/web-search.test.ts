@@ -7,6 +7,7 @@ import { Meter } from "./meta";
 import {
   MAX_WEB_FINDINGS,
   MemoryKvStore,
+  NO_TIME_TO_SEARCH,
   planWebSearch,
   releaseWebSearch,
   SEARCH_BUDGET_PREFIX,
@@ -254,6 +255,31 @@ describe("one search is shared by every check for a while", () => {
     expect(await planWebSearch(CEBU, broken, NOW, roomy())).toEqual({ kind: "off", area: CEBU, why: "store unreachable" });
     expect(await searchOnce(null)).toEqual({ state: "not_run", why: "no shared store", searchedAt: null, findings: [] });
     expect(meta.searchRequests).toHaveLength(0);
+  });
+
+  it("with no time to search, a stored result is still used, but no search is started, leased or reserved: nothing to settle, and it reads as not searched (#26)", async () => {
+    const meta = fakeMeta({ search: [searchReply(closures([MABOLO]))] });
+    const store = new MemoryKvStore();
+    const budget = roomy();
+    const admit = vi.spyOn(budget, "admit");
+    const setIfAbsent = vi.spyOn(store, "setIfAbsent");
+
+    const plan = await planWebSearch(CEBU, store, NOW, budget, Date.now() + 40_000, false);
+
+    expect(plan).toEqual({ kind: "off", area: CEBU, why: NO_TIME_TO_SEARCH });
+    expect(admit).not.toHaveBeenCalled();
+    expect(setIfAbsent).not.toHaveBeenCalled();
+    expect(await runWebSearch(plan, { store, now: NOW, deadline: Date.now() + 40_000, meter: new Meter() })).toEqual({
+      state: "not_run",
+      why: NO_TIME_TO_SEARCH,
+      searchedAt: null,
+      findings: [],
+    });
+    expect(meta.searchRequests).toHaveLength(0);
+
+    const evidence = { state: "searched", searchedAt: NOW.toISOString(), findings: [] };
+    await store.set(WEB_SEARCH_KEY, JSON.stringify({ expiresAt: NOW.getTime() + 60_000, startedAt: NOW.getTime(), evidence, pages: [] }), 60_000);
+    expect(await planWebSearch(CEBU, store, NOW, budget, Date.now() + 40_000, false)).toEqual({ kind: "cached", area: CEBU, evidence });
   });
 
   it("a stored record past its own expiry is searched again, whatever the store's TTL", async () => {
