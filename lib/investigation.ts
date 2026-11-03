@@ -475,7 +475,8 @@ export async function investigate(input: InvestigationInput): Promise<Investigat
     "text" in written ? vetPick(written.text, answer.answer, gathered) : { shown: false, why: written.unavailable, unavailable: true };
   // The page shows only that the pick is missing, so the reason goes to the logs (production gave none on 2026-11-03).
   if (!pick.shown && !input.modelOff) {
-    console.warn(`Muse Spark's pick not shown: ${pick.why}${"turn" in written ? ` (turn ${written.turn})` : ""}`);
+    const where = "turn" in written ? ` (turn ${written.turn}${written.error ? `: ${written.error}` : ""})` : "";
+    console.warn(`Muse Spark's pick not shown: ${pick.why}${where}`);
   }
   return {
     ok: true,
@@ -518,8 +519,11 @@ function contextOf(evidence: Evidence, web: WebEvidence) {
   };
 }
 
-/** `turn` is the model turn that ended the loop, 0 when no model was asked. */
-type Written = { text: string } | { unavailable: string; turn: number };
+/**
+ * `turn` is the model turn that ended the loop, 0 when no model was asked. `error` names a failed call for the logs:
+ * MetaApiError's message (endpoint and HTTP status, never Meta's body), or another error's name only.
+ */
+type Written = { text: string } | { unavailable: string; turn: number; error?: string };
 
 /** The model's final text, or why there is none. */
 async function explain(input: InvestigationInput, evidence: Evidence, runTool: (call: FunctionCall) => Promise<Record<string, unknown>>): Promise<Written> {
@@ -542,7 +546,8 @@ async function explain(input: InvestigationInput, evidence: Evidence, runTool: (
       });
     } catch (err) {
       // From the error, not the clock: a timer can fire a millisecond before Date.now() reaches the deadline (#23).
-      return { unavailable: err instanceof MetaApiError && err.timedOut ? "timed out" : "model failed", turn };
+      const error = err instanceof MetaApiError ? err.message : err instanceof Error ? err.name : typeof err;
+      return { unavailable: err instanceof MetaApiError && err.timedOut ? "timed out" : "model failed", turn, error };
     }
     if (reply.status !== "completed") return { unavailable: "reply cut off", turn };
     if (reply.functionCalls.length === 0) return { text: reply.answerText };

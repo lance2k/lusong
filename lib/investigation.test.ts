@@ -250,6 +250,44 @@ describe("when Muse Spark fails, the check still answers by the rules", () => {
     expect(result.pick).toEqual(unavailable("model failed"));
   });
 
+  it("a turn Meta refuses logs the turn and the HTTP status, never Meta's reply body", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { sources } = blocked();
+    fakeMeta({
+      turns: [
+        callsReply("resp_1", [{ name: "reports_near_route", args: { route: "plain" } }]),
+        new Response(JSON.stringify({ error: { message: "upstream detail that stays out of the logs" } }), { status: 400 }),
+      ],
+    });
+
+    const result = await investigate(inputOf(sources));
+
+    if (!result.ok) throw new Error("expected an answer");
+    expect(result.pick).toEqual(unavailable("model failed"));
+    expect(warn).toHaveBeenCalledWith("Muse Spark's pick not shown: model failed (turn 2: Meta API /responses failed with HTTP 400)");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("upstream detail");
+    warn.mockRestore();
+  });
+
+  it("a turn whose 200 reply isn't JSON logs the status only, never the text the parser choked on", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { sources } = blocked();
+    fakeMeta({
+      turns: [
+        callsReply("resp_1", [{ name: "reports_near_route", args: { route: "plain" } }]),
+        new Response("upstream detail that is not JSON", { status: 200, headers: { "Content-Type": "application/json" } }),
+      ],
+    });
+
+    const result = await investigate(inputOf(sources));
+
+    if (!result.ok) throw new Error("expected an answer");
+    expect(result.pick).toEqual(unavailable("model failed"));
+    expect(warn).toHaveBeenCalledWith("Muse Spark's pick not shown: model failed (turn 2: Meta API /responses failed with HTTP 200)");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("upstream detail");
+    warn.mockRestore();
+  });
+
   it("a model that doesn't answer by the deadline gives the rules' answer and an unavailable explanation", async () => {
     const { sources } = blocked();
     fakeMeta({ turns: [hangs] });
@@ -509,7 +547,7 @@ describe("each model turn's time cap", () => {
     expect(LOOP_ATTEMPT_MS).toBeLessThan(COMMUTE_DEADLINE_MS);
 
     expect(await pickWhenTurnTwoTakes(LOOP_ATTEMPT_MS + 1_000)).toEqual({ shown: false, why: "timed out", unavailable: true });
-    expect(warn).toHaveBeenCalledWith("Muse Spark's pick not shown: timed out (turn 2)");
+    expect(warn).toHaveBeenCalledWith("Muse Spark's pick not shown: timed out (turn 2: Meta API /responses timed out)");
   });
 });
 
