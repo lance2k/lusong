@@ -2,6 +2,8 @@ export interface PageMuse {
   pick: { shown: boolean; label: string; sentences: string[]; note: string | null };
   web: {
     line: string;
+    /** Which provinces the route enters were searched; `note` says what wasn't, and why. */
+    coverage: { searched: string[]; missed: string[]; note: string | null };
     findings: { place: string; url: string; site: string; sourceDate: string | null; description: string; counted: boolean; note: string }[];
   };
 }
@@ -27,6 +29,7 @@ export function WebFindings({ web }: { web: PageMuse["web"] }) {
     <section className="space-y-2 text-[15px]">
       <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">Road closures on the web</h3>
       <p className="text-zinc-600 dark:text-zinc-400">{web.line}</p>
+      {web.coverage.note && <p className="font-medium text-amber-800 dark:text-amber-300">{web.coverage.note}</p>}
       {web.findings.length > 0 && (
         <ul className="divide-y divide-zinc-200 rounded-2xl border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
           {web.findings.map((f, i) => (

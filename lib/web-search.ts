@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { admit, type AdmittedRun } from "./admission";
-import type { Point } from "./answer";
+import { distanceM, type Point } from "./answer";
 import {
   ATTEMPTS_PER_CALL,
   budgetStoreFromEnv,
@@ -12,16 +12,32 @@ import {
 } from "./budget";
 import type { Meter } from "./meta";
 import { beforeDeadline } from "./deadline";
+import { provinceIndex, type Province } from "./province-index";
 import { respond, type SparkReply } from "./spark-responses";
 
 /**
- * Muse Spark's built-in web search for road closures in Metro Cebu today. "Road closures in Cebu today" isn't trip
- * specific, so one search serves every check for WEB_SEARCH_CACHE_MS, through a store every instance shares.
- * One probe search (2026-10-30, 1 draw) took 23 s, ran 11 search actions and 90,257 input tokens, and ran out of its
- * 3,000 output tokens before answering: about $0.15.
+ * Muse Spark's built-in web search for road closures today, one province at a time. "Road closures in Cebu today" isn't
+ * trip specific, so one province's search serves every check through it for WEB_SEARCH_CACHE_MS, through a store every
+ * instance shares. One probe search (2026-10-30, 1 draw) took 23 s, ran 11 search actions and 90,257 input tokens, and
+ * ran out of its 3,000 output tokens before answering: about $0.15.
  */
 
-export const WEB_SEARCH_KEY = "lusong:muse:road-closures";
+/** A province searched on its own: its result, cache entry and lease are its own. */
+export type SearchArea = Province;
+
+/**
+ * Each province's stored search, beside the old Metro Cebu key `lusong:muse:road-closures`, which 5630d88 still reads and
+ * this code never touches.
+ */
+export const webSearchKey = (area: SearchArea) => `lusong:muse:road-closures:v2:${area.code}`;
+/** Held while one check searches a province, so checks that miss its cache at the same moment don't each pay for a search. */
+export const webSearchLeaseKey = (area: SearchArea) => `${webSearchKey(area)}:lease`;
+
+/** At most this many provinces are searched per check; the page says when the route enters more. */
+export const MAX_SEARCH_AREAS = 2;
+/** The straight line between a trip's ends is checked against the provinces this often. */
+export const SEARCH_SAMPLE_KM = 2;
+
 export const WEB_SEARCH_CACHE_MS = 60 * 60_000;
 /** A failed search is not retried for this long, so a failing search isn't paid for on every check. */
 export const WEB_SEARCH_FAILED_CACHE_MS = 5 * 60_000;
@@ -31,8 +47,6 @@ export const SEARCH_MAX_OUTPUT_TOKENS = 4_000;
 export const SEARCH_ATTEMPT_MS = 35_000;
 export const MAX_WEB_FINDINGS = 8;
 
-/** Held while one check searches, so checks that miss the cache at the same moment don't each pay for a search. */
-export const WEB_SEARCH_LEASE_KEY = "lusong:muse:road-closures:lease";
 /** Both attempts of a search, with room to store it; a search still running past this may overlap another. */
 export const SEARCH_LEASE_MS = ATTEMPTS_PER_CALL * SEARCH_ATTEMPT_MS + 10_000;
 
@@ -60,21 +74,27 @@ export function searchBudgetFromEnv(env: Record<string, string | undefined> = pr
   return createBudget({ store: budgetStoreFromEnv(env, SEARCH_BUDGET_PREFIX), budgetUsd: SEARCH_DAILY_BUDGET_USD, ipLimit: 1 });
 }
 
-/**
- * Metro Cebu, drawn generously by hand from Danao in the north to Carcar in the south and Mactan in the east (not an
- * official boundary). A location the model gives outside it is not used.
- */
-export const METRO_CEBU = { south: 10.05, north: 10.6, west: 123.65, east: 124.1 } as const;
+/** A location the model gives is used only inside the province it searched: anywhere else it is not placed. */
+export function inArea(area: SearchArea, p: { lat: unknown; lon: unknown }): p is Point {
+  if (typeof p.lat !== "number" || typeof p.lon !== "number" || !Number.isFinite(p.lat) || !Number.isFinite(p.lon)) return false;
+  return provinceIndex().provinceOf({ lat: p.lat, lon: p.lon })?.code === area.code;
+}
 
-export function inMetroCebu(p: { lat: unknown; lon: unknown }): p is Point {
-  return (
-    typeof p.lat === "number" &&
-    typeof p.lon === "number" &&
-    p.lat >= METRO_CEBU.south &&
-    p.lat <= METRO_CEBU.north &&
-    p.lon >= METRO_CEBU.west &&
-    p.lon <= METRO_CEBU.east
-  );
+/**
+ * The provinces a trip's searches are planned from, before its route is known, so they run beside the routing: the
+ * straight line between its ends, sampled every SEARCH_SAMPLE_KM. The ends' own provinces come first, then the rest in
+ * order along the line; the first MAX_SEARCH_AREAS are searched.
+ */
+export function searchAreasFor(from: Point, to: Point): SearchArea[] {
+  const steps = Math.max(1, Math.ceil(distanceM(from, to) / (SEARCH_SAMPLE_KM * 1_000)));
+  const line = Array.from({ length: steps + 1 }, (_, i) => ({
+    lat: from.lat + ((to.lat - from.lat) * i) / steps,
+    lon: from.lon + ((to.lon - from.lon) * i) / steps,
+  }));
+  const index = provinceIndex();
+  const ends = [index.provinceOf(from), index.provinceOf(to)].filter((p): p is SearchArea => p !== null);
+  const seen = new Set<string>();
+  return [...ends, ...index.provincesAlong(line)].filter((a) => !seen.has(a.code) && seen.add(a.code));
 }
 
 /** What a source says about a road, from a fixed list: the page describes it in Lusong's words, never the source's. */
@@ -82,10 +102,11 @@ export const CLOSURE_KINDS = ["closed", "flooded", "not_passable", "other_blocki
 export type ClosureKind = (typeof CLOSURE_KINDS)[number];
 
 export interface WebFinding {
+  /** `web-<province code>-<n>`: two provinces' searches each number their findings from 0. */
   id: string;
   /** A place name as the source gives it: checked to read as a name (placeLabel), the only words kept from the search. */
   place: string;
-  /** Null when the model gave no location, or one outside Metro Cebu: shown, never placed on a route. */
+  /** Null when the model gave no location, or one outside the province it searched: shown, never placed on a route. */
   at: Point | null;
   url: string;
   /** YYYY-MM-DD as the source dates it, or null when undated. */
@@ -215,12 +236,14 @@ export function searchStoreFromEnv(env: Record<string, string | undefined> = pro
 
 /** A planned search holds its reservation against the daily search cap until it runs or is released. */
 export type WebPlan =
-  | { kind: "cached"; evidence: WebEvidence }
-  | { kind: "search"; run: AdmittedRun; lease: Lease; startedAt: number }
-  | { kind: "off"; why: string };
+  | { kind: "cached"; area: SearchArea; evidence: WebEvidence }
+  | { kind: "search"; area: SearchArea; run: AdmittedRun; lease: Lease; startedAt: number }
+  /** A null area: no province was planned at all, as when Muse Spark is off. */
+  | { kind: "off"; area: SearchArea | null; why: string };
 
 interface Lease {
   store: KvStore;
+  key: string;
   token: string;
 }
 
@@ -233,7 +256,7 @@ interface Stored {
   pages: string[];
 }
 
-function readStored(text: string): Stored | null {
+function readStored(text: string, area: SearchArea): Stored | null {
   try {
     const stored = JSON.parse(text) as Stored;
     const e = stored?.evidence;
@@ -241,7 +264,7 @@ function readStored(text: string): Stored | null {
     if (!e || !Array.isArray(e.findings) || !["searched", "failed"].includes(e.state)) return null;
     // A record stored under older checks is searched again rather than trusted.
     if (!Array.isArray(stored.pages) || !stored.pages.every((page) => canonicalUrl(page) === page)) return null;
-    if (!e.findings.every((f) => isStoredFinding(f) && stored.pages.includes(f.url))) return null;
+    if (!e.findings.every((f) => isStoredFinding(f, area) && stored.pages.includes(f.url))) return null;
     return stored;
   } catch {
     return null;
@@ -253,35 +276,41 @@ function readStored(text: string): Stored | null {
  * ms) and none starts after it: a step that answers too late is "store unreachable", and a lease or a search
  * reservation that is granted after the deadline is given back in the background.
  */
-export async function planWebSearch(store: KvStore | null, now: Date, searchBudget: Budget, deadline = Infinity): Promise<WebPlan> {
-  if (!store) return { kind: "off", why: "no shared store" };
-  const unreachable: WebPlan = { kind: "off", why: "store unreachable" };
+export async function planWebSearch(
+  area: SearchArea,
+  store: KvStore | null,
+  now: Date,
+  searchBudget: Budget,
+  deadline = Infinity,
+): Promise<WebPlan> {
+  if (!store) return { kind: "off", area, why: "no shared store" };
+  const unreachable: WebPlan = { kind: "off", area, why: "store unreachable" };
   const fresh = async () => {
     if (Date.now() >= deadline) return "late";
-    const text = await beforeDeadline(store.get(WEB_SEARCH_KEY), deadline);
+    const text = await beforeDeadline(store.get(webSearchKey(area)), deadline);
     if (text === "late") return "late";
-    const stored = text === null ? null : readStored(text);
+    const stored = text === null ? null : readStored(text, area);
     return stored && stored.expiresAt > now.getTime() ? stored : null;
   };
   try {
     const cached = await fresh();
     if (cached === "late") return unreachable;
-    if (cached) return { kind: "cached", evidence: cached.evidence };
+    if (cached) return { kind: "cached", area, evidence: cached.evidence };
   } catch {
     return unreachable;
   }
-  const lease: Lease = { store, token: randomUUID() };
+  const lease: Lease = { store, key: webSearchLeaseKey(area), token: randomUUID() };
   // Given back on every path; past the deadline it finishes in the background.
   const giveBackInTime = () => beforeDeadline(giveBack(lease), deadline);
   if (Date.now() >= deadline) return unreachable;
   try {
-    const leasing = store.setIfAbsent(WEB_SEARCH_LEASE_KEY, lease.token, SEARCH_LEASE_MS);
+    const leasing = store.setIfAbsent(lease.key, lease.token, SEARCH_LEASE_MS);
     const held = await beforeDeadline(leasing, deadline);
     if (held === "late") {
       void leasing.then((got) => (got ? giveBack(lease) : undefined), () => {});
       return unreachable;
     }
-    if (!held) return { kind: "off", why: "another check is searching the web right now" };
+    if (!held) return { kind: "off", area, why: "another check is searching the web right now" };
   } catch {
     return unreachable;
   }
@@ -299,7 +328,7 @@ export async function planWebSearch(store: KvStore | null, now: Date, searchBudg
   }
   if (cached) {
     await giveBackInTime();
-    return { kind: "cached", evidence: cached.evidence };
+    return { kind: "cached", area, evidence: cached.evidence };
   }
   if (Date.now() >= deadline) {
     void giveBack(lease);
@@ -317,14 +346,19 @@ export async function planWebSearch(store: KvStore | null, now: Date, searchBudg
   }
   if (!admission.ok) {
     await giveBackInTime();
-    return { kind: "off", why: admission.reason === "budget" ? "today's web search budget is used up" : "the web search budget can't be read" };
+    return { kind: "off", area, why: admission.reason === "budget" ? "today's web search budget is used up" : "the web search budget can't be read" };
   }
-  return { kind: "search", run: admission.run, lease, startedAt: now.getTime() };
+  return { kind: "search", area, run: admission.run, lease, startedAt: now.getTime() };
+}
+
+/** One plan per province, planned side by side; each holds its own lease and its own search reservation. */
+export function planWebSearches(areas: readonly SearchArea[], store: KvStore | null, now: Date, searchBudget: Budget, deadline = Infinity): Promise<WebPlan[]> {
+  return Promise.all(areas.slice(0, MAX_SEARCH_AREAS).map((area) => planWebSearch(area, store, now, searchBudget, deadline)));
 }
 
 async function giveBack(lease: Lease): Promise<void> {
   try {
-    await lease.store.deleteIfEquals(WEB_SEARCH_LEASE_KEY, lease.token);
+    await lease.store.deleteIfEquals(lease.key, lease.token);
   } catch (err) {
     console.error("couldn't give back the web search lease:", err instanceof Error ? err.message : err);
   }
@@ -337,6 +371,10 @@ export async function releaseWebSearch(plan: WebPlan): Promise<void> {
   await giveBack(plan.lease);
 }
 
+export async function releaseWebSearches(plans: readonly WebPlan[]): Promise<void> {
+  await Promise.all(plans.map(releaseWebSearch));
+}
+
 const KEEP_ATTEMPTS = 3;
 
 /**
@@ -344,15 +382,16 @@ const KEEP_ATTEMPTS = 3;
  * this one failed. The write only lands on the value that was read, so a search that outlived its lease can't overwrite
  * one stored between its read and its write; it reads again and decides again.
  */
-async function keep(store: KvStore, record: Stored, now: Date, deadline: number): Promise<void> {
+async function keep(store: KvStore, area: SearchArea, record: Stored, now: Date, deadline: number): Promise<void> {
+  const key = webSearchKey(area);
   for (let attempt = 0; attempt < KEEP_ATTEMPTS; attempt++) {
     if (Date.now() >= deadline) return;
-    const text = await store.get(WEB_SEARCH_KEY);
-    const current = text === null ? null : readStored(text);
+    const text = await store.get(key);
+    const current = text === null ? null : readStored(text, area);
     if (current && current.startedAt > record.startedAt) return;
     if (current && current.evidence.state === "searched" && current.expiresAt > now.getTime() && record.evidence.state !== "searched") return;
     if (Date.now() >= deadline) return;
-    if (await store.compareAndSet(WEB_SEARCH_KEY, text, JSON.stringify(record), record.expiresAt - now.getTime())) return;
+    if (await store.compareAndSet(key, text, JSON.stringify(record), record.expiresAt - now.getTime())) return;
   }
   console.error(`couldn't store the web search: the stored result changed under it ${KEEP_ATTEMPTS} times`);
 }
@@ -361,9 +400,9 @@ function phtDay(t: Date): string {
   return new Date(t.getTime() + 8 * 3_600_000).toISOString().slice(0, 10);
 }
 
-function searchPrompt(now: Date): string {
+function searchPrompt(area: SearchArea, now: Date): string {
   return [
-    `Search the web for roads in Metro Cebu, Philippines, reported closed or not passable because of flooding today, ${phtDay(now)} (Philippine time).`,
+    `Search the web for roads in ${area.name}, Philippines, reported closed or not passable because of flooding today, ${phtDay(now)} (Philippine time).`,
     "Make at most three searches and open at most two pages, then answer with only a JSON object:",
     '{"closures":[{"place":"road or area name","lat":number or null,"lon":number or null,"url":"the page that reports it",' +
       '"date":"YYYY-MM-DD the page gives for it, or null","kind":"closed", "flooded", "not_passable" or "other_blocking"}]}.',
@@ -428,23 +467,30 @@ function closureKind(value: unknown): ClosureKind | null {
   return (CLOSURE_KINDS as readonly unknown[]).includes(value) ? (value as ClosureKind) : null;
 }
 
-function isStoredFinding(f: unknown): f is WebFinding {
+const findingId = (area: SearchArea, n: number) => `web-${area.code}-${n}`;
+
+function isFindingIdOf(area: SearchArea, id: unknown): boolean {
+  const prefix = `web-${area.code}-`;
+  return typeof id === "string" && id.startsWith(prefix) && /^\d+$/.test(id.slice(prefix.length));
+}
+
+function isStoredFinding(f: unknown, area: SearchArea): f is WebFinding {
   if (typeof f !== "object" || f === null) return false;
   const x = f as Record<string, unknown>;
   const at = x.at as { lat: unknown; lon: unknown } | null;
   return (
     Object.keys(x).length === 6 &&
-    typeof x.id === "string" &&
+    isFindingIdOf(area, x.id) &&
     placeLabel(x.place) === x.place &&
     canonicalUrl(x.url) === x.url &&
     (x.sourceDate === null || isoDay(x.sourceDate) === x.sourceDate) &&
     closureKind(x.kind) !== null &&
-    (at === null || (typeof at === "object" && inMetroCebu(at)))
+    (at === null || (typeof at === "object" && inArea(area, at)))
   );
 }
 
 /** The findings in the reply's JSON object whose link is one of `pages`, or null when there is none to read. */
-function findingsIn(text: string, pages: readonly string[]): WebFinding[] | null {
+function findingsIn(text: string, pages: readonly string[], area: SearchArea): WebFinding[] | null {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start < 0 || end < start) return null;
@@ -463,8 +509,8 @@ function findingsIn(text: string, pages: readonly string[]): WebFinding[] | null
     const url = canonicalUrl(item.url);
     const kind = closureKind(item.kind);
     if (!place || !url || !pages.includes(url) || !kind) return;
-    const at = inMetroCebu({ lat: item.lat, lon: item.lon }) ? { lat: item.lat as number, lon: item.lon as number } : null;
-    findings.push({ id: `web-${i}`, place, at, url, sourceDate: isoDay(item.date), kind });
+    const at = inArea(area, { lat: item.lat, lon: item.lon }) ? { lat: item.lat as number, lon: item.lon as number } : null;
+    findings.push({ id: findingId(area, i), place, at, url, sourceDate: isoDay(item.date), kind });
   });
   return findings.slice(0, MAX_WEB_FINDINGS);
 }
@@ -487,7 +533,7 @@ export async function runWebSearch(
   let pages: string[] = [];
   try {
     const reply = await respond({
-      input: searchPrompt(deps.now),
+      input: searchPrompt(plan.area, deps.now),
       tools: [{ type: "web_search" }],
       maxOutputTokens: SEARCH_MAX_OUTPUT_TOKENS,
       attemptTimeoutMs: SEARCH_ATTEMPT_MS,
@@ -495,7 +541,7 @@ export async function runWebSearch(
       meter: plan.run.meter,
     });
     pages = toolPages(reply);
-    const findings = reply.status === "completed" ? findingsIn(reply.answerText, pages) : null;
+    const findings = reply.status === "completed" ? findingsIn(reply.answerText, pages, plan.area) : null;
     if (reply.status !== "completed") evidence = failed("search cut off");
     else if (findings === null) evidence = failed("unreadable reply");
     else evidence = { state: "searched", searchedAt, findings };
@@ -508,7 +554,7 @@ export async function runWebSearch(
   const record: Stored = { expiresAt: deps.now.getTime() + ttl, startedAt: plan.startedAt, evidence, pages };
   const settledAndStored = (async () => {
     await plan.run.settle(true);
-    if (store) await keep(store, record, deps.now, deadline);
+    if (store) await keep(store, plan.area, record, deps.now, deadline);
   })().catch((err) => console.error("couldn't store the web search:", err instanceof Error ? err.message : err));
   if ((await beforeDeadline(settledAndStored, deadline)) === "late") {
     void giveBack(plan.lease);
@@ -516,4 +562,59 @@ export async function runWebSearch(
   }
   await beforeDeadline(giveBack(plan.lease), deadline);
   return evidence;
+}
+
+/** One plan's evidence beside the province it was for. */
+export interface AreaEvidence {
+  area: SearchArea | null;
+  evidence: WebEvidence;
+}
+
+/** Every plan run side by side, each under the same deadlines. */
+export function runWebSearches(
+  plans: readonly WebPlan[],
+  deps: { store: KvStore | null; now: Date; deadline: number; searchBy?: number; meter: Meter },
+): Promise<AreaEvidence[]> {
+  return Promise.all(plans.map(async (plan) => ({ area: plan.area, evidence: await runWebSearch(plan, deps) })));
+}
+
+/**
+ * The provinces' findings as the one evidence the rules and the model read; their ids are already distinct. Searched
+ * when any province was, dated by the oldest search, so no finding reads younger than it is.
+ */
+export function mergeWebEvidence(parts: readonly AreaEvidence[]): WebEvidence {
+  const findings = parts.flatMap((p) => p.evidence.findings);
+  const searchedAts = parts.flatMap((p) => (p.evidence.searchedAt === null ? [] : [p.evidence.searchedAt])).sort();
+  const searched = parts.flatMap((p) => (p.evidence.state === "searched" ? [p.evidence.searchedAt] : [])).sort();
+  if (searched.length > 0) return { state: "searched", searchedAt: searched[0], findings };
+  const first = parts.find((p) => p.evidence.state === "failed") ?? parts[0];
+  if (!first || first.evidence.state === "searched") return { state: "not_run", why: "no province to search", searchedAt: null, findings };
+  return { state: first.evidence.state, why: first.evidence.why, searchedAt: searchedAts[0] ?? null, findings };
+}
+
+/** Why a province a route enters has no search: a plan's own reason, or one of these. */
+export const OVER_THE_CAP = "over the search cap";
+export const OFF_THE_STRAIGHT_LINE = "not on the straight line between the ends";
+
+export interface WebCoverage {
+  searched: SearchArea[];
+  missed: { area: SearchArea; why: string }[];
+}
+
+/** For each province the routes enter, in order: searched, or why not. `candidates` are searchAreasFor's, cap included. */
+export function webCoverage(lines: readonly (readonly Point[])[], parts: readonly AreaEvidence[], candidates: readonly SearchArea[]): WebCoverage {
+  const index = provinceIndex();
+  const seen = new Set<string>();
+  const entered = lines.flatMap((line) => index.provincesAlong(line)).filter((a) => !seen.has(a.code) && seen.add(a.code));
+  const planned = parts.filter((p) => p.area !== null);
+  // A plan for no province at all (Muse Spark off) is why every province went unsearched.
+  const unplanned = parts.find((p) => p.area === null)?.evidence;
+  const coverage: WebCoverage = { searched: [], missed: [] };
+  for (const area of entered) {
+    const evidence = planned.find((p) => p.area!.code === area.code)?.evidence ?? unplanned;
+    if (evidence?.state === "searched") coverage.searched.push(area);
+    else if (evidence) coverage.missed.push({ area, why: evidence.why });
+    else coverage.missed.push({ area, why: candidates.some((c) => c.code === area.code) ? OVER_THE_CAP : OFF_THE_STRAIGHT_LINE });
+  }
+  return coverage;
 }
