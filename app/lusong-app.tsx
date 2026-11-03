@@ -7,14 +7,16 @@ import { AnswerCard } from "./answer-card";
 import { CheckProgress } from "./check-progress";
 import { commuteReducer, initialCommuteState, OWN_TRIP, type CommuteInputs, type CommuteState } from "./commute-state";
 import type { CommuteResult } from "./commute-result";
-import { CREDITS_LINE } from "./credits";
+import { CREDITS_LINE, RAIN_CREDIT_LINE } from "./credits";
 import { Evidence } from "./evidence";
-import { advisoryAreasOf, ALL_LAYERS, areaShapes, fitPadding, legendRows, type LayerId, type LayerToggles } from "./map-layers";
+import { advisoryAreasOf, areaShapes, DEFAULT_LAYERS, fitPadding, legendRows, type LayerId, type LayerToggles } from "./map-layers";
 import { MapLegend } from "./map-legend";
+import { rainRowLines } from "./rain-layer";
 import { tripMapProps } from "./map-props";
 import { CLEAR_FAILED_LINE, outsideLine, useOwnTrip } from "./own-trip";
 import { backMove, PUSHED_KEY, viewFromSearch, type SheetView } from "./sheet-route";
 import { checkRequest } from "./trip";
+import { useRain } from "./use-rain";
 import { IconCamera, IconInfo, IconLayers } from "./ui/icons";
 import { detentPx, Sheet, SheetBody, SheetHeader, type Detent } from "./ui/sheet";
 import { ErrorNote } from "./ui/states";
@@ -80,7 +82,7 @@ function Shell() {
   const vh = useSyncExternalStore(subscribeResize, () => window.innerHeight, () => 844);
   const [detent, setDetent] = useState<Detent>("half");
   const [editing, setEditing] = useState(false);
-  const [layers, setLayers] = useState<LayerToggles>(ALL_LAYERS);
+  const [layers, setLayers] = useState<LayerToggles>(DEFAULT_LAYERS);
   const [focusPin, setFocusPin] = useState<{ id: string; n: number } | null>(null);
   const [focusSignal, setFocusSignal] = useState(0);
   const body = useRef<HTMLDivElement>(null);
@@ -121,6 +123,7 @@ function Shell() {
   const sheetPx = desktop ? 0 : detentPx(detent, vh);
   const base = tripMapProps({ demo: ownTrip ? null : DEMO_TRIPS[trip], draft: own.draft, riderMoved: own.touched, result });
   const areas = areaShapes(advisoryAreasOf(result));
+  const rain = useRain(layers.rain);
 
   function change(inputs: Partial<CommuteInputs>) {
     dispatch({ type: "change", inputs });
@@ -180,7 +183,7 @@ function Shell() {
     }
   }
 
-  const rows = legendRows(result, result?.checkedAt ?? null);
+  const rows = legendRows(result, result?.checkedAt ?? null, rainRowLines(rain.layer, rain.loading));
   const samplesShown = Boolean(result?.reports.some((r) => r.sample));
   const collapsed = view.step !== "idle" && !editing;
 
@@ -195,6 +198,8 @@ function Shell() {
         bottomInset={sheetPx}
         hideBottom={!desktop && detent === "full"}
         focusPin={focusPin}
+        rain={rain.layer?.circles ?? []}
+        onView={rain.onView}
       />
 
       <div className="pointer-events-none fixed inset-x-0 top-0 z-10 flex items-start justify-between gap-2 px-4 pt-7 lg:pl-[432px]">
@@ -287,6 +292,7 @@ function Shell() {
             )}
             <footer className="space-y-3 border-t border-line pt-4 text-small text-ink-2">
               <p>{CREDITS_LINE}</p>
+              <p>{RAIN_CREDIT_LINE}</p>
               <div className="flex flex-wrap gap-x-4">
                 <button type="button" className="min-h-11 font-semibold text-brand underline" onClick={() => openView("report")}>
                   Report a street

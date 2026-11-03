@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { RAIN_CREDIT, type RainReply } from "../lib/rain";
-import { RAIN_BANDS, buildRainLayer, rainBand } from "./rain-layer";
+import { RAIN_BANDS, buildRainLayer, rainBand, rainRowLines } from "./rain-layer";
 
 const okReply = (mms: number[], modelTime: string | null = "2026-11-03T15:00:00.000Z"): RainReply => ({
   status: "ok",
@@ -76,5 +76,36 @@ describe("the layer builder", () => {
     expect(buildRainLayer({ ...base, status: "paused" })).toMatchObject({ circles: [], legend: { notice: "Rain layer paused" } });
     expect(buildRainLayer({ ...base, status: "refused" }).legend.notice).toBe("Zoom in on the Philippines to see rain");
     expect(buildRainLayer({ ...base, status: "down" }).legend.notice).toBe("Rain layer unavailable");
+  });
+});
+
+describe("the legend row's lines", () => {
+  const lines = (reply: RainReply) => rainRowLines(buildRainLayer(reply), false);
+
+  it("before anything is fetched, says it is off and credits Open-Meteo", () => {
+    expect(rainRowLines(null, false)).toEqual(["Off. Switch on to see model rain for the map's view.", RAIN_CREDIT]);
+  });
+
+  it("while the first reply loads, says so", () => {
+    expect(rainRowLines(null, true)[0]).toBe("Loading rain for this view…");
+  });
+
+  it("ok: the model time in PHT with the credit, then every band by word", () => {
+    expect(lines(okReply([0, 1, 3, 9]))).toEqual([
+      "Rain now: model estimate, 3 Nov, 11:00 p.m. PHT. Open-Meteo (CC BY 4.0)",
+      "Light rain: under 2.5 mm · Moderate rain: 2.5 to 7.5 mm · Heavy rain: 7.6 mm or more",
+    ]);
+  });
+
+  it("ok but dry everywhere: says no rain, not an empty map", () => {
+    expect(lines(okReply([0, 0, 0]))[1]).toBe("No rain in this view.");
+  });
+
+  it.each([
+    ["paused", "Rain layer paused"],
+    ["down", "Rain layer unavailable"],
+    ["refused", "Zoom in on the Philippines to see rain"],
+  ] as const)("%s: shows its notice and still credits Open-Meteo", (status, notice) => {
+    expect(lines({ status, points: [], modelTime: null, credit: RAIN_CREDIT })).toEqual([notice, RAIN_CREDIT]);
   });
 });

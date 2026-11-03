@@ -1,5 +1,6 @@
-import { CREDITS_LINE, SAMPLES_LINE, TILES_LINE } from "./credits";
+import { CREDITS_LINE, RAIN_CREDIT_LINE, SAMPLES_LINE, TILES_LINE } from "./credits";
 import type { LayerId, LayerToggles, LegendRow } from "./map-layers";
+import { RAIN_BANDS } from "./rain-layer";
 
 const ROUTE_SWATCH = <span aria-hidden className="block h-1.5 w-8 rounded bg-brand" />;
 const BOTH_ROUTES_SWATCH = (
@@ -20,7 +21,13 @@ const SWATCHES: Record<LegendRow["id"], React.ReactNode> = {
   ),
   areas: <span aria-hidden className="block h-5 w-8 rounded border-2 border-advisory bg-advisory/20" />,
   closures: <span aria-hidden className="block h-5 w-8 rounded border-2 border-dashed border-line" />,
-  rain: <span aria-hidden className="block h-5 w-8 rounded border-2 border-dashed border-line" />,
+  rain: (
+    <span aria-hidden className="flex w-8 gap-0.5">
+      {(["light", "moderate", "heavy"] as const).map((band) => (
+        <span key={band} className="block h-4 w-2.5 rounded-full" style={{ background: RAIN_BANDS[band].fill, opacity: RAIN_BANDS[band].fillOpacity + 0.3 }} />
+      ))}
+    </span>
+  ),
 };
 
 /** The map's layers: a switch, a swatch and its time for each, and the map's credits. */
@@ -39,7 +46,7 @@ export function MapLegend({
     <div className="space-y-4">
       <ul className="divide-y divide-line rounded-card border border-line bg-surface">
         {rows.map((row) => {
-          const toggle = row.id === "routes" || row.id === "reports" || row.id === "areas";
+          const toggle = row.id !== "closures";
           const on = toggle && row.available && layers[row.id as LayerId];
           const inputId = `layer-${row.id}`;
           return (
@@ -71,6 +78,7 @@ export function MapLegend({
       {samplesShown && <p className="text-small text-ink-2">{SAMPLES_LINE}</p>}
       <footer className="space-y-2 text-small text-ink-2">
         <p>{CREDITS_LINE}</p>
+        <p>{RAIN_CREDIT_LINE}</p>
         <p>{TILES_LINE}</p>
       </footer>
     </div>

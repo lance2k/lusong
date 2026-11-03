@@ -9,9 +9,9 @@ export const MODERATE_BELOW_MM = 7.6;
 /** Every band carries a word, so the map never relies on colour alone. `none` is never drawn. */
 export const RAIN_BANDS: Record<RainBand, { label: string; range: string; fill: string; fillOpacity: number }> = {
   none: { label: "No rain", range: "0 mm", fill: "#000000", fillOpacity: 0 },
-  light: { label: "Light rain", range: "under 2.5 mm", fill: "#7fb8e6", fillOpacity: 0.35 },
-  moderate: { label: "Moderate rain", range: "2.5 to 7.5 mm", fill: "#2b6fc4", fillOpacity: 0.5 },
-  heavy: { label: "Heavy rain", range: "7.6 mm or more", fill: "#1b2a8a", fillOpacity: 0.65 },
+  light: { label: "Light rain", range: "under 2.5 mm", fill: "#4fb3ff", fillOpacity: 0.5 },
+  moderate: { label: "Moderate rain", range: "2.5 to 7.5 mm", fill: "#2f6fe8", fillOpacity: 0.6 },
+  heavy: { label: "Heavy rain", range: "7.6 mm or more", fill: "#a21caf", fillOpacity: 0.7 },
 };
 
 export function rainBand(mm: number): RainBand {
@@ -111,4 +111,13 @@ export function buildRainLayer(reply: RainReply): RainLayer {
       bands: LEGEND_BANDS,
     },
   };
+}
+
+/** The legend row's lines for the Rain now layer, in the order a rider reads them. */
+export function rainRowLines(layer: RainLayer | null, loading: boolean): string[] {
+  if (!layer) return [loading ? "Loading rain for this view…" : "Off. Switch on to see model rain for the map's view.", RAIN_CREDIT];
+  const { legend } = layer;
+  if (legend.notice) return [legend.notice, RAIN_CREDIT];
+  const bands = legend.bands.map((b) => `${b.label}: ${b.range}`).join(" · ");
+  return [legend.text, layer.circles.length === 0 ? "No rain in this view." : bands];
 }

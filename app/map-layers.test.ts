@@ -7,6 +7,7 @@ import {
   areaShapes,
   ATTRIBUTION_CONTROL,
   fitPadding,
+  DEFAULT_LAYERS,
   legendRows,
   MAP_OPTIONS,
   movesTheMap,
@@ -127,14 +128,24 @@ describe("PAGASA areas on the map", () => {
 });
 
 describe("the legend's other rows", () => {
-  it("road closures and rain now are shown but can't be switched on yet, and rain names no provider", () => {
+  it("road closures are shown but can't be switched on yet", () => {
+    const row = legendRows(reply(), null).find((r) => r.id === "closures")!;
+    expect(row.available).toBe(false);
+    expect(row.lines).toEqual(["Coming soon"]);
+  });
+
+  it("rain now can be switched on, starts off, and names Open-Meteo, not RainViewer", () => {
+    expect(DEFAULT_LAYERS.rain).toBe(false);
     const rows = legendRows(reply(), null);
-    for (const id of ["closures", "rain"] as const) {
-      const row = rows.find((r) => r.id === id)!;
-      expect(row.available).toBe(false);
-      expect(row.lines).toEqual(["Coming soon"]);
-    }
+    const row = rows.find((r) => r.id === "rain")!;
+    expect(row.available).toBe(true);
+    expect(row.lines).not.toContain("Coming soon");
+    expect(row.lines).toContain("Rain now: model estimate, Open-Meteo (CC BY 4.0)");
     expect(JSON.stringify(rows)).not.toMatch(/RainViewer/i);
+  });
+
+  it("the rain row takes the lines it is given", () => {
+    expect(legendRows(null, null, ["a", "b"]).find((r) => r.id === "rain")!.lines).toEqual(["a", "b"]);
   });
 
   it("reports give their newest and oldest age, from the reply's own words", () => {

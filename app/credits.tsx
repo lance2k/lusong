@@ -21,3 +21,5 @@ export const CHECKING_LINE =
   "Reading PAGASA's flood advisory, getting the motorbike route, gathering reports, checking the web for road closures and, if your way is blocked, looking for another…";
 export const ADVISORY_INCOMPLETE_LINE =
   "Incomplete: Lusong couldn't read all of PAGASA's feed, so it counts an advisory as active.";
+/** Open-Meteo asks for this credit (CC BY 4.0) wherever its rain data is shown. */
+export { RAIN_CREDIT as RAIN_CREDIT_LINE } from "../lib/rain";
