@@ -6,7 +6,9 @@ import { BISAYA_VOICE_ENABLED, VOICE_LANGUAGES, type VoiceLanguage } from "../li
 import type { VoiceReportView } from "../lib/voice-report-handler";
 import { MAX_VOICE_MS } from "../lib/wav";
 import { phoneLocation } from "./phone-location";
-import { startRecording, voiceNoteForm, type Recording } from "./voice-recorder";
+import { RECORDING_STOPPED_LINE, voiceOutcomeLine } from "./report-outcome";
+import { startRecording, voiceNoteForm } from "./voice-recorder";
+import { voiceSession } from "./voice-session";
 
 type State =
   | { step: "idle" }
@@ -36,33 +38,49 @@ function Heard({ report, duplicate }: { report: VoiceReportView; duplicate: bool
   );
 }
 
-export default function VoiceNote() {
+/**
+ * `shown` is false while the rider is elsewhere: a note being sent still lands here and is also told through
+ * `notify`, and a recording is stopped and dropped, never sent half-made.
+ */
+export default function VoiceNote({ shown = true, notify }: { shown?: boolean; notify?: (line: string) => void } = {}) {
   const [state, setState] = useState<State>({ step: "idle" });
+  const seen = useRef({ shown, notify });
+  /** The latest render's finish, for the 30 s timer, which outlives the render that set it. */
+  const latestFinish = useRef<() => Promise<void>>(async () => {});
+  useEffect(() => {
+    seen.current = { shown, notify };
+    latestFinish.current = finish;
+  });
   const [now, setNow] = useState(0);
   /** Nothing is picked for the rider: the language is theirs to declare, and Lusong goes by it. */
   const [language, setLanguage] = useState<VoiceLanguage | null>(null);
-  const recording = useRef<Recording | null>(null);
+  const [session] = useState(() => voiceSession((signal) => startRecording({ signal })));
   /** Set synchronously, so a second tap can't start a second recording or a second paid read. */
   const busy = useRef(false);
   /** The language picked when recording started: the one the note is sent with. */
   const recordedIn = useRef<VoiceLanguage | null>(null);
 
-  /** Aborted when the page goes away, so a recording still starting then is let go as soon as it is. */
-  const mounted = useRef<AbortController | null>(null);
+  useEffect(() => () => void session.leave(), [session]);
 
+  function settle(next: Extract<State, { step: "done" | "failed" }>) {
+    setState(next);
+    if (!seen.current.shown) seen.current.notify?.(voiceOutcomeLine(next.step === "done" ? { report: next.report } : { message: next.message }));
+  }
+
+  // Leaving lets go of a microphone still being set up, and drops a recording under way and says so. A note already
+  // being sent is left to land.
   useEffect(() => {
-    const page = new AbortController();
-    mounted.current = page;
-    return () => {
-      page.abort();
-      recording.current?.cancel();
-    };
-  }, []);
+    if (shown || !session.leave()) return;
+    busy.current = false;
+    seen.current.notify?.(RECORDING_STOPPED_LINE);
+    // Not cleared on a quick return: the button must not stay on "Stop and send" with nothing recording.
+    setTimeout(() => setState({ step: "idle" }), 0);
+  }, [shown, session]);
 
   useEffect(() => {
     if (state.step !== "recording") return;
     const tick = setInterval(() => setNow(Date.now()), 200);
-    const hardStop = setTimeout(() => void finish(), MAX_VOICE_MS);
+    const hardStop = setTimeout(() => void latestFinish.current(), MAX_VOICE_MS);
     return () => {
       clearInterval(tick);
       clearTimeout(hardStop);
@@ -73,13 +91,16 @@ export default function VoiceNote() {
     if (busy.current || !language) return;
     busy.current = true;
     recordedIn.current = language;
-    const page = mounted.current;
+    let rec;
     try {
-      recording.current = await startRecording({ signal: page?.signal });
+      rec = await session.start();
     } catch {
       busy.current = false;
-      if (page?.signal.aborted) return;
       setState({ step: "failed", message: "Lusong needs the microphone to record a voice note. Allow it and tap record again." });
+      return;
+    }
+    if (!rec) {
+      busy.current = false;
       return;
     }
     const startedAt = Date.now();
@@ -88,10 +109,10 @@ export default function VoiceNote() {
   }
 
   async function finish() {
-    const rec = recording.current;
     const language = recordedIn.current;
-    if (!rec || !language) return;
-    recording.current = null;
+    if (!language) return;
+    const rec = session.take();
+    if (!rec) return;
     try {
       const audio = await rec.stop();
       setState({ step: "locating" });
@@ -99,7 +120,7 @@ export default function VoiceNote() {
       try {
         at = await phoneLocation();
       } catch (err) {
-        setState({ step: "failed", message: err instanceof Error ? err.message : "Something went wrong." });
+        settle({ step: "failed", message: err instanceof Error ? err.message : "Something went wrong." });
         return;
       }
       setState({ step: "sending" });
@@ -107,9 +128,9 @@ export default function VoiceNote() {
         const res = await fetch("/api/report/voice", { method: "POST", body: voiceNoteForm(audio, at, language) });
         const body = await res.json();
         if (!res.ok) throw new Error(body.error ?? "Something went wrong.");
-        setState({ step: "done", report: body.report, duplicate: body.duplicate });
+        settle({ step: "done", report: body.report, duplicate: body.duplicate });
       } catch (err) {
-        setState({ step: "failed", message: err instanceof Error ? err.message : "Something went wrong." });
+        settle({ step: "failed", message: err instanceof Error ? err.message : "Something went wrong." });
       }
     } finally {
       busy.current = false;

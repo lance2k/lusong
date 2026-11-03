@@ -9,6 +9,7 @@ import {
   fitPadding,
   legendRows,
   MAP_OPTIONS,
+  movesTheMap,
   pinSpec,
   routeStyles,
   textBlock,
@@ -22,14 +23,22 @@ const RING: [number, number][] = [
   [10.36, 123.95],
   [10.3, 123.95],
 ];
-const HOLE: [number, number][] = [
+/** Inside RING: a nested polygon of its own, not a hole. */
+const NESTED: [number, number][] = [
   [10.32, 123.88],
   [10.34, 123.88],
   [10.34, 123.9],
 ];
+/** Overlapping RING's east edge. */
+const OVERLAPPING: [number, number][] = [
+  [10.33, 123.93],
+  [10.37, 123.93],
+  [10.37, 124.0],
+  [10.33, 124.0],
+];
 const AREA: AdvisoryArea = {
   kind: "General Flood Advisory",
-  rings: [RING, HOLE],
+  rings: [RING, NESTED, OVERLAPPING],
   sent: "2026-11-03T13:12:00+08:00",
   expires: "2026-11-03T19:12:00+08:00",
   headline: "General Flood Advisory for Cebu",
@@ -40,19 +49,20 @@ function reply(extra: Partial<LegendReply> = {}): LegendReply {
 }
 
 describe("PAGASA areas on the map", () => {
-  it("a reply with polygons draws one shaded shape per area, rings kept as [lat, lon] with the hole, and a tooltip of headline and times", () => {
+  it("every CAP polygon of an area is drawn as its own shaded shape, never a hole (S3D-3)", () => {
     const shapes = areaShapes(advisoryAreasOf(reply({ advisoryAreas: [AREA] })));
-    expect(shapes).toHaveLength(1);
-    expect(shapes[0].rings).toEqual([RING, HOLE]);
-    expect(shapes[0].className).toBe("lusong-area lusong-area-general-flood-advisory");
-    expect(shapes[0].tooltip).toEqual([
-      "General Flood Advisory for Cebu",
-      "Sent 3 Nov, 1:12 p.m. PHT · expires 3 Nov, 7:12 p.m. PHT",
-    ]);
+    expect(shapes.map((s) => s.ring)).toEqual([RING, NESTED, OVERLAPPING]);
+    for (const shape of shapes) {
+      expect(shape.className).toBe("lusong-area lusong-area-general-flood-advisory");
+      expect(shape.tooltip).toEqual(["General Flood Advisory for Cebu", "Sent 3 Nov, 1:12 p.m. PHT · expires 3 Nov, 7:12 p.m. PHT"]);
+    }
+    // The map gives each shape its own L.polygon, so no ring of one area becomes a hole in another.
+    const source = readFileSync(new URL("./map.tsx", import.meta.url), "utf8");
+    expect(source).toMatch(/for \(const area of areas\) \{\s*L\.polygon\(area\.ring, /);
   });
 
   it("times the server already wrote as text are shown as they are", () => {
-    const [shape] = areaShapes([{ ...AREA, sent: "3 Nov, 1:12 p.m. PHT", expires: null }]);
+    const [shape] = areaShapes([{ ...AREA, rings: [RING], sent: "3 Nov, 1:12 p.m. PHT", expires: null }]);
     expect(shape.tooltip[1]).toBe("Sent 3 Nov, 1:12 p.m. PHT");
   });
 
@@ -78,14 +88,14 @@ describe("PAGASA areas on the map", () => {
 
   it("with one drawn area and one listed only, the map draws one and the legend names both", () => {
     const r = reply({ advisoryAreas: [AREA, { ...AREA, rings: [], headline: "Listed only" }] });
-    expect(areaShapes(advisoryAreasOf(r))).toHaveLength(1);
+    expect(areaShapes(advisoryAreasOf(r))).toHaveLength(3);
     const row = legendRows(r, null).find((x) => x.id === "areas")!;
     expect(row.available).toBe(true);
     expect(row.lines).toEqual(expect.arrayContaining(["General Flood Advisory for Cebu", "Listed only"]));
   });
 
   it("PAGASA's own +08:00 times are shown in PHT like the rest of the page", () => {
-    const [shape] = areaShapes([{ ...AREA, sent: "2026-11-03T21:12:00+08:00", expires: "2026-11-04T03:00:00+08:00" }]);
+    const [shape] = areaShapes([{ ...AREA, rings: [RING], sent: "2026-11-03T21:12:00+08:00", expires: "2026-11-04T03:00:00+08:00" }]);
     expect(shape.tooltip[1]).toBe("Sent 3 Nov, 9:12 p.m. PHT · expires 4 Nov, 3:00 a.m. PHT");
   });
 
@@ -237,5 +247,23 @@ describe("area tooltips are text, never HTML (duck round 1, finding 2)", () => {
     const source = readFileSync(new URL("./map.tsx", import.meta.url), "utf8");
     expect(source).toMatch(/bindTooltip\(textBlock\(area\.tooltip, document\)/);
     expect(source).not.toMatch(/area\.tooltip\.join/);
+  });
+});
+
+describe("what counts as the rider moving the map (S3D-7)", () => {
+  const key = (k: string, mods: Partial<Record<"altKey" | "ctrlKey" | "metaKey", boolean>> = {}) => ({ key: k, altKey: false, ctrlKey: false, metaKey: false, ...mods });
+
+  it("Tab and other keys that move nothing keep the map refitting; arrow-key panning and +/- zoom stop it", () => {
+    for (const k of ["Tab", "Shift", "Enter", "Escape", " ", "a"]) expect(movesTheMap(key(k)), k).toBe(false);
+    for (const k of ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "+", "=", "-", "_"]) expect(movesTheMap(key(k)), k).toBe(true);
+    // Leaflet ignores its keys under a modifier (a browser zoom, a shortcut), so the map didn't move.
+    expect(movesTheMap(key("ArrowLeft", { ctrlKey: true }))).toBe(false);
+    expect(movesTheMap(key("-", { metaKey: true }))).toBe(false);
+  });
+
+  it("the map's keydown goes through that test rather than counting every key", () => {
+    const source = readFileSync(new URL("./map.tsx", import.meta.url), "utf8");
+    expect(source).toMatch(/addEventListener\("keydown", keyed\)/);
+    expect(source).toMatch(/const keyed = \(e: KeyboardEvent\) => \{\s*if \(movesTheMap\(e\)\) moved\(\);/);
   });
 });

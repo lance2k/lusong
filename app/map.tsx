@@ -9,6 +9,7 @@ import {
   ALL_LAYERS,
   ATTRIBUTION_CONTROL,
   MAP_OPTIONS,
+  movesTheMap,
   pinSpec,
   routeStyles,
   TILE_ATTRIBUTION,
@@ -141,10 +142,36 @@ export default function TripMap({
   const markers = useRef(new Map<string, L.Marker>());
   const tap = useRef(onTap);
   const pad = useRef(padding);
+  /** The points the current frame fits, kept so a resize or a new padding can fit them again. */
+  const framed = useRef<Point[] | null>(null);
+  /** The rider panned or zoomed since the last frame: a resize or a sheet move then leaves the view alone. */
+  const userMoved = useRef(false);
 
   useEffect(() => {
     tap.current = onTap;
     pad.current = padding;
+  });
+
+  /** Fits the framed points into the part of the map the sheet and the top band leave showing. */
+  const fit = useRef(() => {
+    const m = map.current;
+    if (!m) return;
+    m.invalidateSize();
+    const points = framed.current;
+    if (!points) {
+      m.setView(latLng(PHILIPPINES_VIEW.centre), PHILIPPINES_VIEW.zoom);
+      return;
+    }
+    const size = m.getSize();
+    const { topLeft, bottomRight } = pad.current;
+    // Padding that leaves no room would give Leaflet a negative area to fit into, and a non-finite view.
+    const roomy = size.x - topLeft[0] - bottomRight[0] > 40 && size.y - topLeft[1] - bottomRight[1] > 40;
+    m.fitBounds(L.latLngBounds(points.map(latLng)), {
+      paddingTopLeft: roomy ? topLeft : [24, 24],
+      paddingBottomRight: roomy ? bottomRight : [24, 24],
+      // A single end would otherwise zoom to the street's last tile level.
+      maxZoom: 15,
+    });
   });
 
   useEffect(() => {
@@ -155,11 +182,39 @@ export default function TripMap({
     m.on("click", (e: L.LeafletMouseEvent) => tap.current?.({ lat: e.latlng.lat, lon: e.latlng.lng }));
     groups.current = { areas: L.layerGroup(), routes: L.layerGroup(), ends: L.layerGroup().addTo(m), reports: L.layerGroup() };
     map.current = m;
-    // The box can be laid out after Leaflet first measures it (the stylesheet arrives with the map's own chunk).
-    const resized = new ResizeObserver(() => m.invalidateSize());
-    resized.observe(box.current!);
+    const el = box.current!;
+    const moved = () => {
+      userMoved.current = true;
+    };
+    const keyed = (e: KeyboardEvent) => {
+      if (movesTheMap(e)) moved();
+    };
+    const pinched = (e: TouchEvent) => {
+      if (e.touches.length > 1) moved();
+    };
+    m.on("dragstart", moved);
+    el.addEventListener("wheel", moved, { passive: true });
+    el.addEventListener("dblclick", moved);
+    el.addEventListener("keydown", keyed);
+    el.addEventListener("touchstart", pinched, { passive: true });
+    el.querySelector(".leaflet-control-zoom")?.addEventListener("pointerdown", moved);
+    // A new size (a rotated phone, a resized window, the stylesheet arriving late) refits, unless the rider has moved the map.
+    let pending = 0;
+    const resized = new ResizeObserver(() => {
+      cancelAnimationFrame(pending);
+      pending = requestAnimationFrame(() => {
+        if (userMoved.current) m.invalidateSize();
+        else fit.current();
+      });
+    });
+    resized.observe(el);
     return () => {
+      cancelAnimationFrame(pending);
       resized.disconnect();
+      el.removeEventListener("wheel", moved);
+      el.removeEventListener("dblclick", moved);
+      el.removeEventListener("keydown", keyed);
+      el.removeEventListener("touchstart", pinched);
       m.remove();
       map.current = null;
       groups.current = null;
@@ -175,7 +230,7 @@ export default function TripMap({
     for (const group of Object.values(g)) group.clearLayers();
     markers.current.clear();
     for (const area of areas) {
-      L.polygon(area.rings, { className: area.className, weight: 1.5, interactive: true })
+      L.polygon(area.ring, { className: area.className, weight: 1.5, interactive: true })
         .bindTooltip(textBlock(area.tooltip, document), { sticky: true, className: "lusong-area-tip" })
         .addTo(g.areas);
     }
@@ -203,29 +258,23 @@ export default function TripMap({
 
   const frameKey = JSON.stringify(frame);
   useEffect(() => {
-    const points: Point[] | null = JSON.parse(frameKey);
-    if (!map.current) return;
-    map.current.invalidateSize();
-    if (!points) {
-      map.current.setView(latLng(PHILIPPINES_VIEW.centre), PHILIPPINES_VIEW.zoom);
-      return;
-    }
-    const size = map.current.getSize();
-    const { topLeft, bottomRight } = pad.current;
-    // Padding that leaves no room would give Leaflet a negative area to fit into, and a non-finite view.
-    const roomy = size.x - topLeft[0] - bottomRight[0] > 40 && size.y - topLeft[1] - bottomRight[1] > 40;
-    map.current.fitBounds(L.latLngBounds(points.map(latLng)), {
-      paddingTopLeft: roomy ? topLeft : [24, 24],
-      paddingBottomRight: roomy ? bottomRight : [24, 24],
-      // A single end would otherwise zoom to the street's last tile level.
-      maxZoom: 15,
-    });
+    framed.current = JSON.parse(frameKey);
+    userMoved.current = false;
+    fit.current();
   }, [frameKey]);
+
+  // The sheet moved or the layout changed: the same frame is fitted to the room now showing.
+  const padKey = JSON.stringify(padding);
+  useEffect(() => {
+    if (!userMoved.current) fit.current();
+  }, [padKey]);
 
   useEffect(() => {
     if (!focusPin || !map.current) return;
     const marker = markers.current.get(focusPin.id);
     if (!marker) return;
+    // The rider asked for this pin, so a later sheet move must not fit the map away from it.
+    userMoved.current = true;
     map.current.flyTo(marker.getLatLng(), Math.max(map.current.getZoom(), 16), { duration: 0.6 });
     map.current.once("moveend", () => marker.openPopup());
   }, [focusPin]);

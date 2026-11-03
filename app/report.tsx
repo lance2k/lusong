@@ -1,10 +1,11 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Role } from "@/lib/answer";
 import { readExifTimeText, withExifTime } from "@/lib/exif";
 import type { ReportView } from "@/lib/report-handler";
 import { phoneLocation } from "./phone-location";
+import { photoOutcomeLine } from "./report-outcome";
 
 const MAX_SIDE = 1600;
 const JPEG_QUALITY = 0.85;
@@ -61,8 +62,20 @@ function Reading({ state }: { state: Extract<State, { step: "done" }> }) {
   );
 }
 
-export default function ReportStreet() {
+/**
+ * `shown` is false while the rider is elsewhere (another view or tab): the component stays mounted so a send still
+ * lands here, and its outcome is also told through `notify`.
+ */
+export default function ReportStreet({ shown = true, notify }: { shown?: boolean; notify?: (line: string) => void } = {}) {
   const [state, setState] = useState<State>({ step: "idle" });
+  const seen = useRef({ shown, notify });
+  useEffect(() => {
+    seen.current = { shown, notify };
+  });
+  function finish(next: Extract<State, { step: "done" | "failed" }>) {
+    setState(next);
+    if (!seen.current.shown) seen.current.notify?.(photoOutcomeLine(next.step === "done" ? { report: next.report } : { message: next.message }));
+  }
   const input = useRef<HTMLInputElement>(null);
   /** Set synchronously, so a second pick can't start a second paid read. */
   const inFlight = useRef(false);
@@ -80,7 +93,7 @@ export default function ReportStreet() {
       try {
         [at, photo] = await Promise.all([phoneLocation(), prepared]);
       } catch (err) {
-        setState({ step: "failed", message: err instanceof Error ? err.message : "Something went wrong." });
+        finish({ step: "failed", message: err instanceof Error ? err.message : "Something went wrong." });
         return;
       }
       setState({ step: "reading", startedAt: Date.now() });
@@ -92,9 +105,9 @@ export default function ReportStreet() {
         const res = await fetch("/api/report", { method: "POST", body: form });
         const body = await res.json();
         if (!res.ok) throw new Error(body.error ?? "Something went wrong.");
-        setState({ step: "done", report: body.report, duplicate: body.duplicate });
+        finish({ step: "done", report: body.report, duplicate: body.duplicate });
       } catch (err) {
-        setState({ step: "failed", message: err instanceof Error ? err.message : "Something went wrong." });
+        finish({ step: "failed", message: err instanceof Error ? err.message : "Something went wrong." });
       }
     } finally {
       inFlight.current = false;
