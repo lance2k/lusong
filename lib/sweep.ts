@@ -53,6 +53,8 @@ export const SWEEP_LIMITS: SweepLimits = { budgetMs: 55_000, wonderAttemptMs: 40
 
 /** One store call's own timeout (UpstashSweepStore and the budget store). */
 const STORE_CALL_MS = 5_000;
+/** Wonder is never started with less than this (S4D-9). */
+export const MIN_WONDER_MS = 30_000;
 /** Left after Wonder for the settlement and the one atomic candidate write (S4D-5). */
 export const PERSIST_RESERVE_MS = 2 * STORE_CALL_MS;
 /** Left after a page's admission for its alert write and its mark. */
@@ -81,6 +83,11 @@ export interface SweepStore {
    * sweep was at least `gapMs` ago. The slot number, or null.
    */
   claimSlot(day: string, nowMs: number, gapMs: number, max: number): Promise<number | null>;
+  /**
+   * Atomic: undoes the claim `claimSlot(day, nowMs, …)` made of slot `n`, deleting the slot and putting back the last
+   * sweep's time it replaced (S4D-9). A slot or time another claim has since changed is left alone.
+   */
+  releaseSlot(day: string, n: number, nowMs: number): Promise<void>;
   saveCandidates(run: string, candidates: Candidate[]): Promise<void>;
   /** The open run's candidates, if one is still within CANDIDATES_TTL_MS. */
   openRun(): Promise<{ run: string; candidates: StoredCandidate[] } | null>;
@@ -99,7 +106,7 @@ return 1
 `;
 
 export class MemorySweepStore implements SweepStore {
-  private slots = new Set<string>();
+  private slots = new Map<string, { at: number; previous: number }>();
   private last = 0;
   private open: { run: string; candidates: StoredCandidate[]; until: number } | null = null;
   constructor(private readonly clock: () => number = Date.now) {}
@@ -108,11 +115,18 @@ export class MemorySweepStore implements SweepStore {
     if (nowMs - this.last < gapMs) return null;
     for (let n = 1; n <= max; n++) {
       if (this.slots.has(`${day}:${n}`)) continue;
-      this.slots.add(`${day}:${n}`);
+      this.slots.set(`${day}:${n}`, { at: nowMs, previous: this.last });
       this.last = nowMs;
       return n;
     }
     return null;
+  }
+
+  async releaseSlot(day: string, n: number, nowMs: number) {
+    const slot = this.slots.get(`${day}:${n}`);
+    if (!slot || slot.at !== nowMs) return;
+    this.slots.delete(`${day}:${n}`);
+    if (this.last === nowMs) this.last = slot.previous;
   }
 
   async saveCandidates(run: string, candidates: Candidate[]) {
@@ -138,7 +152,7 @@ const CLAIM_SLOT_SCRIPT = `
 local now = tonumber(ARGV[1])
 if now - tonumber(redis.call('GET', KEYS[1]) or '0') < tonumber(ARGV[2]) then return 0 end
 for n = 1, tonumber(ARGV[3]) do
-  if redis.call('SET', KEYS[2] .. n, ARGV[1], 'NX', 'PX', ARGV[4]) then
+  if redis.call('SET', KEYS[2] .. n, ARGV[1] .. ':' .. (redis.call('GET', KEYS[1]) or '0'), 'NX', 'PX', ARGV[4]) then
     redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[4])
     return n
   end
@@ -147,6 +161,19 @@ return 0
 `;
 
 const SLOT_TTL_MS = 2 * 24 * 3_600_000;
+
+/** KEYS: last sweep time, the slot. ARGV: the claim's time, the slot TTL. The slot's value is "<claimed at>:<previous>". */
+const RELEASE_SLOT_SCRIPT = `
+local v = redis.call('GET', KEYS[2])
+if not v then return 0 end
+local at, previous = string.match(v, '^(%d+):(%d+)$')
+if at ~= ARGV[1] then return 0 end
+redis.call('DEL', KEYS[2])
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  if previous == '0' then redis.call('DEL', KEYS[1]) else redis.call('SET', KEYS[1], previous, 'PX', ARGV[2]) end
+end
+return 1
+`;
 
 export class UpstashSweepStore implements SweepStore {
   constructor(
@@ -177,6 +204,10 @@ export class UpstashSweepStore implements SweepStore {
   async claimSlot(day: string, nowMs: number, gapMs: number, max: number) {
     const n = Number(await this.command(["EVAL", CLAIM_SLOT_SCRIPT, 2, `${this.prefix}:sweep:last`, `${this.prefix}:sweep:slot:${day}:`, nowMs, gapMs, max, SLOT_TTL_MS]));
     return n > 0 ? n : null;
+  }
+
+  async releaseSlot(day: string, n: number, nowMs: number) {
+    await this.command(["EVAL", RELEASE_SLOT_SCRIPT, 2, `${this.prefix}:sweep:last`, `${this.prefix}:sweep:slot:${day}:${n}`, nowMs, SLOT_TTL_MS]);
   }
 
   async saveCandidates(run: string, candidates: Candidate[]) {
@@ -331,9 +362,10 @@ async function discover(deps: SweepDeps, limits: SweepLimits, deadline: number, 
     summary.discovery = "unavailable";
     return null;
   }
-  // Wonder is started only with its whole timeout and the persist reserve left, so what it finds is always saved.
-  const roomForWonder = () => deadline - Date.now() >= limits.wonderAttemptMs + PERSIST_RESERVE_MS;
-  if (!roomForWonder()) {
+  // Wonder's timeout is what is left after the persist reserve, and it is never started with less than MIN_WONDER_MS:
+  // checked before the slot is claimed (with room for the claim and the ledger's admission), and again after (S4D-9).
+  const wonderMs = () => Math.min(limits.wonderAttemptMs, deadline - Date.now() - PERSIST_RESERVE_MS);
+  if (wonderMs() < MIN_WONDER_MS + 2 * STORE_CALL_MS) {
     summary.discovery = "late";
     return null;
   }
@@ -345,6 +377,15 @@ async function discover(deps: SweepDeps, limits: SweepLimits, deadline: number, 
     return null;
   }
   summary.slot = slot;
+  // Short of time after all: the slot and the gap go back, so a slow store never spends the day's sweeps unasked.
+  const giveBackSlot = async () => {
+    const back = await withinMs(deps.sweeps.releaseSlot(day, slot, now.getTime()), Math.min(STORE_CALL_MS, deadline - Date.now())).catch(() => "late" as const);
+    if (back === "late") console.error("sweep: the unused slot couldn't be given back in time");
+    summary.discovery = "late";
+    summary.slot = null;
+    return null;
+  };
+  if (wonderMs() < MIN_WONDER_MS + STORE_CALL_MS) return giveBackSlot();
   const id = randomUUID();
   const admitted = await deps.ledger.admitSweep({
     id,
@@ -358,11 +399,13 @@ async function discover(deps: SweepDeps, limits: SweepLimits, deadline: number, 
     return null;
   }
 
-  if (!roomForWonder()) {
-    await deps.ledger.settleSweep({ id, day, chargeMicros: 0 }).catch((err) => console.error("sweep: settle failed:", err instanceof Error ? err.message : err));
-    summary.discovery = "late";
-    return null;
+  if (wonderMs() < MIN_WONDER_MS) {
+    await withinMs(deps.ledger.settleSweep({ id, day, chargeMicros: 0 }), Math.min(STORE_CALL_MS, deadline - Date.now())).catch((err) =>
+      console.error("sweep: settle failed:", err instanceof Error ? err.message : err),
+    );
+    return giveBackSlot();
   }
+  const attemptMs = wonderMs();
   const meter = new Meter();
   let reply: unknown = null;
   try {
@@ -375,7 +418,7 @@ async function discover(deps: SweepDeps, limits: SweepLimits, deadline: number, 
         max_output_tokens: SWEEP_MAX_OUTPUT_TOKENS,
         text: { format: { type: "json_schema", name: "sweep_candidates", schema: CANDIDATE_SCHEMA, strict: true } },
       },
-      limits.wonderAttemptMs,
+      attemptMs,
       deadline - PERSIST_RESERVE_MS,
       meter,
     );

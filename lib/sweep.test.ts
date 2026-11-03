@@ -6,7 +6,6 @@ import type { Meter } from "./meta";
 import type { SafeFetchResult } from "./safe-fetch";
 import {
   MemorySweepStore,
-  PERSIST_RESERVE_MS,
   RIDER_FLOOR_MICROS,
   runSweep,
   SWEEP_DAILY_CAP_MICROS,
@@ -254,7 +253,7 @@ describe("one sweep (S4P-3, S4P-8; no paid call: Wonder is stubbed)", () => {
   it("candidates survive a cut-off invocation: the next one admits them without asking Wonder again", async () => {
     const h = sweepHarness(wonderReply([CANDIDATE, { ...CANDIDATE, url: "https://mandauecity.gov.ph/advisories/other" }]));
     // No time is left for admission after discovery.
-    expect(await h.sweep({ limits: { budgetMs: PERSIST_RESERVE_MS + 500, wonderAttemptMs: 0, minAdmitMs: 5_000 } })).toMatchObject({ discovery: "ran", admitted: 0, left: 2 });
+    expect(await h.sweep({ limits: { minAdmitMs: SWEEP_LIMITS.budgetMs } })).toMatchObject({ discovery: "ran", admitted: 0, left: 2 });
     expect(await h.sweep()).toMatchObject({ discovery: "continued", admitted: 1, refused: 1, left: 0 });
     expect(h.calls).toHaveLength(1);
     // Every candidate decided: the next invocation is a new discovery, which isn't due yet.
@@ -298,6 +297,53 @@ describe("one sweep (S4P-3, S4P-8; no paid call: Wonder is stubbed)", () => {
       expect(h.calls).toHaveLength(1);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("2 s store calls across 5 runs never use up a slot without a Wonder call (S4D-9)", async () => {
+    vi.useFakeTimers({ now: NOW });
+    try {
+      const h = sweepHarness();
+      const slowly = <T extends object>(store: T): T =>
+        new Proxy(store, {
+          get(target, key, receiver) {
+            const value = Reflect.get(target, key, receiver);
+            if (typeof value !== "function") return value;
+            return async (...args: unknown[]) => {
+              await new Promise((resolve) => setTimeout(resolve, 2_000));
+              return value.apply(target, args);
+            };
+          },
+        });
+      const sweeps = slowly(h.sweeps);
+      const ledger = slowly(h.ledger);
+      const slots: (number | null)[] = [];
+      for (let run = 0; run < 5; run++) {
+        const running = h.sweep({ sweeps, ledger, now: () => new Date(Date.now()) });
+        await vi.runAllTimersAsync();
+        slots.push((await running).slot);
+        vi.setSystemTime(Date.now() + SWEEP_GAP_MS);
+      }
+      // Every slot taken went to a Wonder call; the fifth run finds the day's four used.
+      expect(slots).toEqual([1, 2, 3, 4, null]);
+      expect(h.calls).toHaveLength(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a slot claimed and then given back leaves the next claim as if it never happened (S4D-9)", async () => {
+    for (const [, make] of sweepStores) {
+      const store = make();
+      const t0 = Date.parse("2026-11-04T00:00:00Z");
+      expect(await store.claimSlot(DAY, t0, SWEEP_GAP_MS, 4)).toBe(1);
+      const t1 = t0 + SWEEP_GAP_MS;
+      expect(await store.claimSlot(DAY, t1, SWEEP_GAP_MS, 4)).toBe(2);
+      await store.releaseSlot(DAY, 2, t1);
+      // Slot 2 is free again and the gap counts from the first sweep, not the released claim.
+      expect(await store.claimSlot(DAY, t1, SWEEP_GAP_MS, 4)).toBe(2);
+      await store.releaseSlot(DAY, 2, t1 + 1);
+      expect(await store.claimSlot(DAY, t1 + 1, SWEEP_GAP_MS, 4)).toBeNull();
     }
   });
 
