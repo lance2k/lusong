@@ -6,15 +6,21 @@ const DEFAULT_RETRY_WAIT_MS = 500;
 /** A retry is only worth starting if this much time is left after its wait. */
 const MIN_ATTEMPT_MS = 2000;
 
-/** Carries only the status, never the upstream body, so nothing from Meta leaks to a client. */
+/**
+ * Carries only the status, never the upstream body, so nothing from Meta leaks to a client. `timedOut` is set when the
+ * call ran out of time (its attempt's timeout, or the deadline), so callers need not compare clocks to say why (#23).
+ */
 export class MetaApiError extends Error {
   constructor(
     readonly endpoint: string,
     readonly status: number,
+    readonly timedOut = false,
   ) {
-    super(`Meta API ${endpoint} failed${status ? ` with HTTP ${status}` : ""}`);
+    super(`Meta API ${endpoint} ${timedOut ? "timed out" : "failed"}${status ? ` with HTTP ${status}` : ""}`);
   }
 }
+
+const isTimeout = (err: unknown) => err instanceof DOMException && err.name === "TimeoutError";
 
 /**
  * Muse Spark stopped at max_completion_tokens before writing its answer (finish_reason "length"; the
@@ -167,7 +173,7 @@ async function postJson(
 ): Promise<unknown> {
   for (let attempt = 1; ; attempt++) {
     const remaining = deadline - Date.now();
-    if (remaining <= 0) throw new MetaApiError(endpoint, 0);
+    if (remaining <= 0) throw new MetaApiError(endpoint, 0, true);
     let res: Response;
     try {
       res = await fetch(`${BASE_URL}${endpoint}`, {
@@ -177,14 +183,15 @@ async function postJson(
       });
     } catch (err) {
       meter.failedAttempt();
-      const timedOut = err instanceof DOMException && err.name === "TimeoutError";
+      const timedOut = isTimeout(err);
       if (attempt === 1 && !timedOut && deadline - Date.now() > MIN_ATTEMPT_MS) continue;
-      throw new MetaApiError(endpoint, 0);
+      throw new MetaApiError(endpoint, 0, timedOut);
     }
     if (res.ok) {
-      const reply = await res.json().catch(() => {
+      // The attempt's timeout also covers reading the body.
+      const reply = await res.json().catch((err: unknown) => {
         meter.failedAttempt();
-        throw new MetaApiError(endpoint, res.status);
+        throw new MetaApiError(endpoint, res.status, isTimeout(err));
       });
       meter.reply(operation, reply);
       return reply;
