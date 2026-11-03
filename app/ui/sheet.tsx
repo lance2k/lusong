@@ -133,7 +133,7 @@ export const SheetBody = forwardRef<HTMLDivElement, { children: ReactNode }>(fun
 export const SheetHeader = forwardRef<HTMLHeadingElement, { id: string; title: string; onBack: () => void; close?: boolean }>(
   function SheetHeader({ id, title, onBack, close }, ref) {
     return (
-      <header className="sticky top-0 z-10 -mx-4 mb-3 flex items-center gap-2 bg-transparent px-4 pb-2 pt-1">
+      <header className="glass sticky top-0 z-10 -mx-4 mb-3 flex items-center gap-2 px-4 pb-2 pt-1">
         <button
           type="button"
           onClick={onBack}

@@ -101,11 +101,17 @@ function Shell() {
   }, [savedTrip]);
 
   // A view's heading takes focus when it opens; closing it returns focus to whatever opened it.
+  const commuteScroll = useRef(0);
   useEffect(() => {
-    if (sheetView) viewHeading.current?.focus();
-    else if (shownView.current) {
+    if (sheetView) {
+      // The view starts at its top; the commute's place in its own content is kept for the way back.
+      if (!shownView.current) commuteScroll.current = body.current?.scrollTop ?? 0;
+      body.current?.scrollTo({ top: 0 });
+      viewHeading.current?.focus({ preventScroll: true });
+    } else if (shownView.current) {
+      body.current?.scrollTo({ top: commuteScroll.current });
       const back = opener.current && document.contains(opener.current) ? opener.current : document.getElementById(WHERE_HEADING);
-      back?.focus();
+      back?.focus({ preventScroll: true });
       opener.current = null;
     }
     shownView.current = sheetView;
@@ -150,6 +156,7 @@ function Shell() {
     const inputs = state.inputs;
     dispatch({ type: "start", at: Date.now() });
     setEditing(false);
+    body.current?.scrollTo({ top: 0 });
     if (detent === "peek") setDetent("half");
     try {
       const res = await fetch("/api/commute", {
