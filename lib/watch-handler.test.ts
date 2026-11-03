@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { FakeChannel } from "../test/fake-channel";
-import { FEED, SAVED } from "../test/pagasa-fixtures";
+import { SAVED, SAVED_FEED } from "../test/pagasa-fixtures";
 import { watchStores } from "../test/watch-stores";
 import { FEED_URL } from "./advisory";
 import { createBudget, MemoryBudgetStore, type Budget } from "./budget";
@@ -98,7 +98,9 @@ describe("POST /api/watch", () => {
 
   it.each([
     ["no trip", { action: "on", window: { start: "06:00", end: "08:00" } }],
-    ["an end outside Metro Cebu", { action: "on", from: BANILAD, to: { lat: 35.68, lon: 139.76 }, window: { start: "06:00", end: "08:00" } }],
+    ["an end outside the Philippines", { action: "on", from: BANILAD, to: { lat: 35.68, lon: 139.76 }, window: { start: "06:00", end: "08:00" } }],
+    ["ends more than 100 km apart", { action: "on", from: BANILAD, to: { lat: 11.27, lon: 123.911 }, window: { start: "06:00", end: "08:00" } }],
+    ["an end in Sabah, inside the trip box but outside the Philippines", { action: "on", from: BANILAD, to: { lat: 5.84, lon: 118.11 }, window: { start: "06:00", end: "08:00" } }],
     ["a window that ends before it starts", { action: "on", from: BANILAD, to: IT_PARK, window: { start: "08:00", end: "06:00" } }],
     ["a window over 4 hours", { action: "on", from: BANILAD, to: IT_PARK, window: { start: "05:00", end: "09:30" } }],
     ["an unknown action", { action: "explode" }],
@@ -301,7 +303,7 @@ function savedNetwork() {
   const fetch = vi.fn(async (url: string | URL) => {
     const u = String(url);
     calls.push(u);
-    const pagasa: Record<string, string> = { [FEED_URL]: FEED, ...SAVED };
+    const pagasa: Record<string, string> = { [FEED_URL]: SAVED_FEED, ...SAVED };
     if (u in pagasa) return new Response(pagasa[u]);
     if (u === `${VALHALLA_URL}/route`) return new Response(readFileSync("test/fixtures/valhalla/banilad-itpark-plain.json", "utf8"));
     throw new TypeError("fetch failed");

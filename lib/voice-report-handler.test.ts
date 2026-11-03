@@ -286,7 +286,7 @@ describe("refused before anything is spent: no reservation, no Meta call, nothin
 
   it.each([
     ["no location", { lat: "", lon: "" }],
-    ["a location in Metro Manila, outside Metro Cebu", { lat: 14.5547, lon: 121.0244 }],
+    ["a location in Sabah, inside the trip box but outside the Philippines", { lat: 5.84, lon: 118.11 }],
   ])("%s", async (_why, pin) => {
     const calls = stubMeta();
     const { budget, admits } = meteredBudget();

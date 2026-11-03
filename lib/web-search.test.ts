@@ -17,13 +17,19 @@ import {
   SEARCH_MAX_OUTPUT_TOKENS,
   WEB_SEARCH_CACHE_MS,
   WEB_SEARCH_FAILED_CACHE_MS,
-  WEB_SEARCH_KEY,
-  WEB_SEARCH_LEASE_KEY,
+  webSearchKey,
+  webSearchLeaseKey,
   SEARCH_LEASE_MS,
+  searchAreasFor,
   UpstashKvStore,
   type KvStore,
 } from "./web-search";
 import { fakeMeta, META_RESPONSES_URL, searchReply } from "../test/muse-derived";
+import { setProvinceIndexForTests, type Province } from "./province-index";
+
+const CEBU = { code: "0702200000", name: "Cebu" };
+const WEB_SEARCH_KEY = webSearchKey(CEBU);
+const WEB_SEARCH_LEASE_KEY = webSearchLeaseKey(CEBU);
 
 const NOW = new Date("2026-10-30T02:00:00Z"); // 10:00 PHT, 2026-10-30
 /** A search budget with room for many searches. */
@@ -33,7 +39,7 @@ const closures = (items: object[]) => JSON.stringify({ closures: items });
 const MABOLO = { place: "Juan Luna Ave, Mabolo", lat: 10.3175, lon: 123.9146, url: "https://example.ph/mabolo-flood", date: "2026-10-30", kind: "flooded", summary: "Passable to all types of vehicles." };
 
 async function searchOnce(store: KvStore | null, at: Date = NOW, deadline = Date.now() + 40_000) {
-  return runWebSearch(await planWebSearch(store, at, roomy()), { store, now: at, deadline, meter: new Meter() });
+  return runWebSearch(await planWebSearch(CEBU, store, at, roomy()), { store, now: at, deadline, meter: new Meter() });
 }
 
 beforeEach(() => {
@@ -43,7 +49,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("the web search for road closures in Metro Cebu today", () => {
+describe("the web search for road closures in one province today", () => {
   it("asks Muse Spark once with web_search, a capped output and today's date in Philippine time", async () => {
     const meta = fakeMeta({ search: [searchReply(closures([MABOLO]))] });
 
@@ -60,12 +66,12 @@ describe("the web search for road closures in Metro Cebu today", () => {
       state: "searched",
       searchedAt: NOW.toISOString(),
       findings: [
-        { id: "web-0", place: "Juan Luna Ave, Mabolo", at: { lat: 10.3175, lon: 123.9146 }, url: "https://example.ph/mabolo-flood", sourceDate: "2026-10-30", kind: "flooded" },
+        { id: "web-0702200000-0", place: "Juan Luna Ave, Mabolo", at: { lat: 10.3175, lon: 123.9146 }, url: "https://example.ph/mabolo-flood", sourceDate: "2026-10-30", kind: "flooded" },
       ],
     });
   });
 
-  it("a finding without a location, or with one outside Metro Cebu, is kept with no location", async () => {
+  it("a finding without a location, or with one outside the province searched, is kept with no location", async () => {
     fakeMeta({
       search: [
         searchReply(
@@ -100,7 +106,7 @@ describe("the web search for road closures in Metro Cebu today", () => {
 
     const web = await searchOnce(new MemoryKvStore());
 
-    expect(web.findings.map((f) => f.id)).toEqual(["web-3"]);
+    expect(web.findings.map((f) => f.id)).toEqual(["web-0702200000-3"]);
   });
 
   describe("a finding's link counts only if the search tool itself opened or cited that page (review 🔴T7-8)", () => {
@@ -113,7 +119,7 @@ describe("the web search for road closures in Metro Cebu today", () => {
 
       const web = await searchOnce(new MemoryKvStore());
 
-      expect(web.findings.map((f) => [f.id, f.url])).toEqual([["web-0", opened]]);
+      expect(web.findings.map((f) => [f.id, f.url])).toEqual([["web-0702200000-0", opened]]);
     });
 
     it("a link with a sentence in its host, path, query or fragment that the tool never opened is dropped", async () => {
@@ -154,7 +160,7 @@ describe("the web search for road closures in Metro Cebu today", () => {
 
     const web = await searchOnce(new MemoryKvStore());
 
-    expect(web.findings.map((f) => [f.id, f.kind])).toEqual([["web-0", "closed"], ["web-1", "flooded"], ["web-2", "not_passable"], ["web-3", "other_blocking"]]);
+    expect(web.findings.map((f) => [f.id, f.kind])).toEqual([["web-0702200000-0", "closed"], ["web-0702200000-1", "flooded"], ["web-0702200000-2", "not_passable"], ["web-0702200000-3", "other_blocking"]]);
   });
 
   it("a place must read as a place name: a sentence, a long text or odd characters drop the finding (review 🔴2)", async () => {
@@ -216,12 +222,12 @@ describe("one search is shared by every check for a while", () => {
 
     const first = await searchOnce(store, now);
     now = new Date(NOW.getTime() + WEB_SEARCH_CACHE_MS - 1);
-    expect(await planWebSearch(store, now, roomy())).toEqual({ kind: "cached", evidence: first });
+    expect(await planWebSearch(CEBU, store, now, roomy())).toEqual({ kind: "cached", area: CEBU, evidence: first });
     expect(await searchOnce(store, now)).toEqual(first);
     expect(meta.searchRequests).toHaveLength(1);
 
     now = new Date(NOW.getTime() + WEB_SEARCH_CACHE_MS);
-    const again = await planWebSearch(store, now, roomy());
+    const again = await planWebSearch(CEBU, store, now, roomy());
     expect(again).toMatchObject({ kind: "search" });
     await runWebSearch(again, { store, now, deadline: Date.now() + 40_000, meter: new Meter() });
     expect(meta.searchRequests).toHaveLength(2);
@@ -234,9 +240,9 @@ describe("one search is shared by every check for a while", () => {
 
     await searchOnce(store, now);
     now = new Date(NOW.getTime() + WEB_SEARCH_FAILED_CACHE_MS - 1);
-    expect(await planWebSearch(store, now, roomy())).toMatchObject({ kind: "cached", evidence: { state: "failed" } });
+    expect(await planWebSearch(CEBU, store, now, roomy())).toMatchObject({ kind: "cached", area: CEBU, evidence: { state: "failed" } });
     now = new Date(NOW.getTime() + WEB_SEARCH_FAILED_CACHE_MS);
-    expect(await planWebSearch(store, now, roomy())).toMatchObject({ kind: "search" });
+    expect(await planWebSearch(CEBU, store, now, roomy())).toMatchObject({ kind: "search" });
   });
 
   it("with no shared store, or one that can't be read, there is no search: each check would pay for its own", async () => {
@@ -244,8 +250,8 @@ describe("one search is shared by every check for a while", () => {
     const down = () => Promise.reject(new Error("down"));
     const broken: KvStore = { get: down, set: down, setIfAbsent: down, deleteIfEquals: down, compareAndSet: down };
 
-    expect(await planWebSearch(null, NOW, roomy())).toEqual({ kind: "off", why: "no shared store" });
-    expect(await planWebSearch(broken, NOW, roomy())).toEqual({ kind: "off", why: "store unreachable" });
+    expect(await planWebSearch(CEBU, null, NOW, roomy())).toEqual({ kind: "off", area: CEBU, why: "no shared store" });
+    expect(await planWebSearch(CEBU, broken, NOW, roomy())).toEqual({ kind: "off", area: CEBU, why: "store unreachable" });
     expect(await searchOnce(null)).toEqual({ state: "not_run", why: "no shared store", searchedAt: null, findings: [] });
     expect(meta.searchRequests).toHaveLength(0);
   });
@@ -255,33 +261,33 @@ describe("one search is shared by every check for a while", () => {
     const evidence = { state: "searched", searchedAt: NOW.toISOString(), findings: [] };
     await store.set(WEB_SEARCH_KEY, JSON.stringify({ expiresAt: NOW.getTime(), evidence }), 24 * 3_600_000);
 
-    expect(await planWebSearch(store, NOW, roomy())).toMatchObject({ kind: "search" });
+    expect(await planWebSearch(CEBU, store, NOW, roomy())).toMatchObject({ kind: "search" });
   });
 
   it("a stored finding that fails today's checks, such as one kept with a free summary and no kind, is searched again", async () => {
     const store = new MemoryKvStore();
-    const finding = { id: "web-0", place: "Juan Luna Ave, Mabolo", at: null, url: "https://example.ph/m", sourceDate: null, summary: "Passable to all types of vehicles." };
+    const finding = { id: "web-0702200000-0", place: "Juan Luna Ave, Mabolo", at: null, url: "https://example.ph/m", sourceDate: null, summary: "Passable to all types of vehicles." };
     const evidence = { state: "searched", searchedAt: NOW.toISOString(), findings: [finding] };
     const record = (findings: object[]) => JSON.stringify({ expiresAt: NOW.getTime() + 60_000, startedAt: NOW.getTime(), evidence: { ...evidence, findings }, pages: [finding.url] });
     await store.set(WEB_SEARCH_KEY, record([{ ...finding, summary: undefined, kind: "closed" }]), 60_000);
-    expect(await planWebSearch(store, NOW, roomy())).toMatchObject({ kind: "cached" });
+    expect(await planWebSearch(CEBU, store, NOW, roomy())).toMatchObject({ kind: "cached" });
 
     await store.set(WEB_SEARCH_KEY, record([finding]), 60_000);
-    expect(await planWebSearch(store, NOW, roomy())).toMatchObject({ kind: "search" });
+    expect(await planWebSearch(CEBU, store, NOW, roomy())).toMatchObject({ kind: "search" });
   });
 
   it("a stored finding whose link isn't among the pages its search opened, or a record without them, is searched again (review 🔴T7-8)", async () => {
     const store = new MemoryKvStore();
-    const finding = { id: "web-0", place: "Juan Luna Ave, Mabolo", at: null, url: "https://example.ph/m", sourceDate: null, kind: "closed" };
+    const finding = { id: "web-0702200000-0", place: "Juan Luna Ave, Mabolo", at: null, url: "https://example.ph/m", sourceDate: null, kind: "closed" };
     const record = (extra: object) =>
       JSON.stringify({ expiresAt: NOW.getTime() + 60_000, startedAt: NOW.getTime(), evidence: { state: "searched", searchedAt: NOW.toISOString(), findings: [finding] }, ...extra });
 
     await store.set(WEB_SEARCH_KEY, record({ pages: ["https://example.ph/m"] }), 60_000);
-    expect(await planWebSearch(store, NOW, roomy())).toMatchObject({ kind: "cached" });
+    expect(await planWebSearch(CEBU, store, NOW, roomy())).toMatchObject({ kind: "cached" });
 
     for (const extra of [{ pages: ["https://example.ph/other"] }, {}, { pages: "https://example.ph/m" }, { pages: ["https://example.ph/m#Start-your-trip-now"] }]) {
       await store.set(WEB_SEARCH_KEY, record(extra), 60_000);
-      expect(await planWebSearch(store, NOW, roomy())).toMatchObject({ kind: "search" });
+      expect(await planWebSearch(CEBU, store, NOW, roomy())).toMatchObject({ kind: "search" });
       await store.deleteIfEquals(WEB_SEARCH_LEASE_KEY, (await store.get(WEB_SEARCH_LEASE_KEY))!);
     }
   });
@@ -307,7 +313,7 @@ describe("one search is shared by every check for a while", () => {
     const store = new MemoryKvStore();
     await store.set(WEB_SEARCH_KEY, "{not json", 60_000);
 
-    expect(await planWebSearch(store, NOW, roomy())).toMatchObject({ kind: "search" });
+    expect(await planWebSearch(CEBU, store, NOW, roomy())).toMatchObject({ kind: "search" });
   });
 
   it("a search whose result can't be stored still answers this check", async () => {
@@ -315,7 +321,7 @@ describe("one search is shared by every check for a while", () => {
     const down = () => Promise.reject(new Error("down"));
     const readOnly: KvStore = { get: async () => null, set: down, setIfAbsent: async () => true, deleteIfEquals: async () => {}, compareAndSet: down };
 
-    expect(await searchOnce(readOnly)).toMatchObject({ state: "searched", findings: [{ id: "web-0" }] });
+    expect(await searchOnce(readOnly)).toMatchObject({ state: "searched", findings: [{ id: "web-0702200000-0" }] });
   });
 });
 
@@ -330,10 +336,10 @@ const stored = async (store: KvStore) => JSON.parse((await store.get(WEB_SEARCH_
  */
 async function olderPausedWhileNewerStores(store: KvStore) {
   const later = new Date(NOW.getTime() + SEARCH_LEASE_MS);
-  const older = await planWebSearch(store, NOW, roomy());
+  const older = await planWebSearch(CEBU, store, NOW, roomy());
   if (older.kind !== "search") throw new Error(`the older check planned ${older.kind}`);
   await store.deleteIfEquals(WEB_SEARCH_LEASE_KEY, older.lease.token);
-  const newer = await planWebSearch(store, later, roomy());
+  const newer = await planWebSearch(CEBU, store, later, roomy());
   expect(newer.kind).toBe("search");
   const realFetch = globalThis.fetch;
   const { fetchMock } = fakeMeta({ search: [searchReply(OLDER), searchReply(NEWER)] });
@@ -378,13 +384,13 @@ describe("one search at a time, and the newest result kept (review 🟡3)", () =
     const store = new MemoryKvStore();
     const meta = fakeMeta({ search: [searchReply(closures([MABOLO]))] });
 
-    const plans = await Promise.all([1, 2, 3].map(() => planWebSearch(store, NOW, roomy())));
+    const plans = await Promise.all([1, 2, 3].map(() => planWebSearch(CEBU, store, NOW, roomy())));
     const results = await Promise.all(plans.map((plan) => run(plan, store, NOW)));
 
     expect(plans.map((p) => p.kind).sort()).toEqual(["off", "off", "search"]);
     expect(plans.filter((p) => p.kind === "off")).toEqual([
-      { kind: "off", why: "another check is searching the web right now" },
-      { kind: "off", why: "another check is searching the web right now" },
+      { kind: "off", area: CEBU, why: "another check is searching the web right now" },
+      { kind: "off", area: CEBU, why: "another check is searching the web right now" },
     ]);
     expect(meta.searchRequests).toHaveLength(1);
     expect(results.filter((r) => r.state === "searched")).toHaveLength(1);
@@ -395,11 +401,11 @@ describe("one search at a time, and the newest result kept (review 🟡3)", () =
     const store = new MemoryKvStore(() => now.getTime());
     fakeMeta({ search: [searchReply("no JSON")] });
 
-    await run(await planWebSearch(store, now, roomy()), store, now);
+    await run(await planWebSearch(CEBU, store, now, roomy()), store, now);
     expect(await store.get(WEB_SEARCH_LEASE_KEY)).toBeNull();
 
     now = new Date(NOW.getTime() + WEB_SEARCH_FAILED_CACHE_MS);
-    const refused = await planWebSearch(store, now, roomy());
+    const refused = await planWebSearch(CEBU, store, now, roomy());
     expect(refused).toMatchObject({ kind: "search" });
     await releaseWebSearch(refused);
     expect(await store.get(WEB_SEARCH_LEASE_KEY)).toBeNull();
@@ -409,7 +415,7 @@ describe("one search at a time, and the newest result kept (review 🟡3)", () =
     const store = new MemoryKvStore();
     const spent = createBudget({ store: new MemoryBudgetStore(), budgetUsd: 0.000_001, ipLimit: 1 });
 
-    expect(await planWebSearch(store, NOW, spent)).toMatchObject({ kind: "off" });
+    expect(await planWebSearch(CEBU, store, NOW, spent)).toMatchObject({ kind: "off" });
     expect(await store.get(WEB_SEARCH_LEASE_KEY)).toBeNull();
   });
 
@@ -425,7 +431,7 @@ describe("one search at a time, and the newest result kept (review 🟡3)", () =
       compareAndSet: (k, e, v, t) => inner.compareAndSet(k, e, v, t),
     };
 
-    expect(await planWebSearch(store, NOW, roomy())).toEqual({ kind: "cached", evidence: fresh.evidence });
+    expect(await planWebSearch(CEBU, store, NOW, roomy())).toEqual({ kind: "cached", area: CEBU, evidence: fresh.evidence });
     expect(await inner.get(WEB_SEARCH_LEASE_KEY)).toBeNull();
   });
 
@@ -433,16 +439,16 @@ describe("one search at a time, and the newest result kept (review 🟡3)", () =
     const store = new MemoryKvStore();
     store.setIfAbsent = () => Promise.reject(new Error("down"));
 
-    expect(await planWebSearch(store, NOW, roomy())).toEqual({ kind: "off", why: "store unreachable" });
+    expect(await planWebSearch(CEBU, store, NOW, roomy())).toEqual({ kind: "off", area: CEBU, why: "store unreachable" });
   });
 
   describe(`a search still running after its ${SEARCH_LEASE_MS / 1000} s lease lapses`, () => {
     async function overlapping(first: "older" | "newer", older: string, newer: string) {
       let now = NOW;
       const store = new MemoryKvStore(() => now.getTime());
-      const a = await planWebSearch(store, now, roomy());
+      const a = await planWebSearch(CEBU, store, now, roomy());
       now = new Date(NOW.getTime() + SEARCH_LEASE_MS);
-      const b = await planWebSearch(store, now, roomy());
+      const b = await planWebSearch(CEBU, store, now, roomy());
       expect([a.kind, b.kind]).toEqual(["search", "search"]);
       const order = first === "newer" ? [newer, older] : [older, newer];
       fakeMeta({ search: order.map((text) => searchReply(text)) });
@@ -576,10 +582,10 @@ describe(`today's web search spend is capped at $${SEARCH_DAILY_BUDGET_USD}, apa
     const meta = fakeMeta({ search: [] });
     const store = new MemoryKvStore();
 
-    const plan = await planWebSearch(store, NOW, capped(SEARCH_RESERVE_MICROS - 1));
+    const plan = await planWebSearch(CEBU, store, NOW, capped(SEARCH_RESERVE_MICROS - 1));
     const web = await runWebSearch(plan, { store, now: NOW, deadline: Date.now() + 40_000, meter: new Meter() });
 
-    expect(plan).toEqual({ kind: "off", why: "today's web search budget is used up" });
+    expect(plan).toEqual({ kind: "off", area: CEBU, why: "today's web search budget is used up" });
     expect(web).toEqual({ state: "not_run", why: "today's web search budget is used up", searchedAt: null, findings: [] });
     expect(meta.searchRequests).toHaveLength(0);
   });
@@ -589,9 +595,9 @@ describe(`today's web search spend is capped at $${SEARCH_DAILY_BUDGET_USD}, apa
       const budget = capped(SEARCH_RESERVE_MICROS + PROBE_SEARCH_COST + room);
       const meta = fakeMeta({ search: [searchReply(closures([])), searchReply(closures([]))] });
       const meter = new Meter();
-      const first = await planWebSearch(new MemoryKvStore(), NOW, budget);
+      const first = await planWebSearch(CEBU, new MemoryKvStore(), NOW, budget);
       await runWebSearch(first, { store: null, now: NOW, deadline: Date.now() + 40_000, meter });
-      const second = await planWebSearch(new MemoryKvStore(), NOW, budget);
+      const second = await planWebSearch(CEBU, new MemoryKvStore(), NOW, budget);
       await runWebSearch(second, { store: null, now: NOW, deadline: Date.now() + 40_000, meter });
 
       expect(meta.searchRequests).toHaveLength(searches);
@@ -603,24 +609,72 @@ describe(`today's web search spend is capped at $${SEARCH_DAILY_BUDGET_USD}, apa
   it("a search that never runs, because the check was refused, gives its reservation back", async () => {
     const budget = capped(SEARCH_RESERVE_MICROS);
 
-    const plan = await planWebSearch(new MemoryKvStore(), NOW, budget);
+    const plan = await planWebSearch(CEBU, new MemoryKvStore(), NOW, budget);
     expect(plan).toMatchObject({ kind: "search" });
     await releaseWebSearch(plan);
 
-    expect(await planWebSearch(new MemoryKvStore(), NOW, budget)).toMatchObject({ kind: "search" });
+    expect(await planWebSearch(CEBU, new MemoryKvStore(), NOW, budget)).toMatchObject({ kind: "search" });
   });
 
   it("a cached search touches no budget", async () => {
     const store = new MemoryKvStore();
     fakeMeta({ search: [searchReply(closures([]))] });
-    await runWebSearch(await planWebSearch(store, NOW, roomy()), { store, now: NOW, deadline: Date.now() + 40_000, meter: new Meter() });
+    await runWebSearch(await planWebSearch(CEBU, store, NOW, roomy()), { store, now: NOW, deadline: Date.now() + 40_000, meter: new Meter() });
 
-    expect(await planWebSearch(store, NOW, capped(1))).toMatchObject({ kind: "cached" });
+    expect(await planWebSearch(CEBU, store, NOW, capped(1))).toMatchObject({ kind: "cached" });
   });
 
   it("a search budget that can't be reached means no search", async () => {
     const unreachable = createBudget({ store: null, budgetUsd: 3, ipLimit: 1 });
 
-    expect(await planWebSearch(new MemoryKvStore(), NOW, unreachable)).toEqual({ kind: "off", why: "the web search budget can't be read" });
+    expect(await planWebSearch(CEBU, new MemoryKvStore(), NOW, unreachable)).toEqual({ kind: "off", area: CEBU, why: "the web search budget can't be read" });
+  });
+});
+
+describe("which provinces a trip's searches cover", () => {
+  afterEach(() => setProvinceIndexForTests(null));
+  const A: Province = { code: "1", name: "A" };
+  const B: Province = { code: "2", name: "B" };
+  const C: Province = { code: "3", name: "C" };
+  /** Three bands of longitude: A west of 123.9, B to 124.0, C east of it. */
+  const bands = (p: { lon: number }) => (p.lon < 123.9 ? A : p.lon < 124.0 ? B : C);
+  const fake = () =>
+    setProvinceIndexForTests({
+      inPhilippines: () => true,
+      provinceOf: bands,
+      provincesAlong: (line) => [...new Map(line.map((p) => [bands(p).code, bands(p)])).values()],
+    });
+
+  it("the ends' provinces come first, then the ones the straight line between them crosses, sampled every 2 km", () => {
+    fake();
+    // 15 km due east at 10.3° N: the line crosses B, which neither end is in.
+    expect(searchAreasFor({ lat: 10.3, lon: 123.85 }, { lat: 10.3, lon: 124.05 }).map((a) => a.name)).toEqual(["A", "C", "B"]);
+    expect(searchAreasFor({ lat: 10.3, lon: 123.95 }, { lat: 10.3, lon: 123.96 }).map((a) => a.name)).toEqual(["B"]);
+  });
+
+  it("with the province polygons, a Cebu City trip searches Cebu and a Cubao → Makati trip Metro Manila, its NCR districts one area", () => {
+    expect(searchAreasFor({ lat: 10.346, lon: 123.911 }, { lat: 10.3307, lon: 123.9058 }).map((a) => a.name)).toEqual(["Cebu"]);
+    expect(searchAreasFor({ lat: 14.62291, lon: 121.05326 }, { lat: 14.57049, lon: 121.02722 }).map((a) => a.name)).toEqual(["Metro Manila"]);
+  });
+
+  it("a stored finding numbered for another province is searched again, never read as this one's", async () => {
+    const store = new MemoryKvStore();
+    const finding = { id: "web-1300000000-0", place: "EDSA", at: null, url: "https://example.ph/edsa", sourceDate: null, kind: "flooded" };
+    const record = JSON.stringify({ expiresAt: NOW.getTime() + 60_000, startedAt: NOW.getTime(), evidence: { state: "searched", searchedAt: NOW.toISOString(), findings: [finding] }, pages: [finding.url] });
+    await store.set(WEB_SEARCH_KEY, record, 60_000);
+    expect(await planWebSearch(CEBU, store, NOW, roomy())).toMatchObject({ kind: "search" });
+    await store.set(WEB_SEARCH_KEY, record.replace("web-1300000000-0", "web-0702200000-0"), 60_000);
+    expect(await planWebSearch(CEBU, store, NOW, roomy())).toMatchObject({ kind: "cached" });
+  });
+
+  it("the prompt names the province searched", async () => {
+    const { searchRequests } = fakeMeta({ search: [searchReply(closures([]))] });
+    await runWebSearch(await planWebSearch({ code: "1300000000", name: "Metro Manila" }, new MemoryKvStore(), NOW, roomy()), {
+      store: null,
+      now: NOW,
+      deadline: Date.now() + 40_000,
+      meter: new Meter(),
+    });
+    expect(String(searchRequests[0].input)).toContain("roads in Metro Manila, Philippines");
   });
 });

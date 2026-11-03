@@ -4,6 +4,7 @@ import { MusePick, WebFindings } from "./commute-muse";
 
 describe("Muse Spark on the commute page", () => {
   const LABEL = "Muse Spark picked this evidence";
+  const FULL = { searched: ["Cebu"], missed: [], note: null };
 
   it("the picked evidence is shown in Lusong's sentences, labelled, as plain text", () => {
     const html = renderToStaticMarkup(
@@ -28,6 +29,7 @@ describe("Muse Spark on the commute page", () => {
       <WebFindings
         web={{
           line: "Searched the web at 29 Oct, 12:00 p.m. PHT",
+          coverage: FULL,
           findings: [{ place: "Colon St", url: "https://example.ph/colon", site: "example.ph", sourceDate: null, description: "Flooded, says an undated page on example.ph.", counted: false, note: "Shown, not counted: it has no date and no place on the map." }],
         }}
       />,
@@ -38,12 +40,20 @@ describe("Muse Spark on the commute page", () => {
     expect(html).toContain("Flooded, says an undated page on example.ph.");
   });
 
+  it("says when the search covered only part of the route, and nothing when it covered all of it", () => {
+    const note = "The web search covered only part of this route: Cebu. Not searched: Bohol (the search failed).";
+    const web = (coverage: typeof FULL | { searched: string[]; missed: string[]; note: string }) => ({ line: "Searched the web at 29 Oct, 12:00 p.m. PHT", coverage, findings: [] });
+    expect(renderToStaticMarkup(<WebFindings web={web({ searched: ["Cebu"], missed: ["Bohol"], note })} />)).toContain(note);
+    expect(renderToStaticMarkup(<WebFindings web={web(FULL)} />)).not.toContain("Not searched");
+  });
+
   it("a finding's link reads as its site alone: no path or query of the link is visible text (review 🔴T7-8)", () => {
     const url = "https://example.ph/start-your-trip-now?the-road-is=open";
     const html = renderToStaticMarkup(
       <WebFindings
         web={{
           line: "Searched the web at 29 Oct, 12:00 p.m. PHT",
+          coverage: FULL,
           findings: [{ place: "Colon St", url, site: "example.ph", sourceDate: null, description: "Flooded, says an undated page on example.ph.", counted: false, note: "Shown, not counted: it has no date and no place on the map." }],
         }}
       />,

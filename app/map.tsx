@@ -5,7 +5,7 @@ import "leaflet/dist/leaflet.css";
 import "./map.css";
 import { useEffect, useRef } from "react";
 import type { Point } from "../lib/answer";
-import { METRO_CEBU_VIEW, pinPopup } from "./map-props";
+import { PHILIPPINES_VIEW, pinPopup } from "./map-props";
 
 export interface MapPin {
   id: string;
@@ -26,7 +26,7 @@ export interface TripMapProps {
   route: Point[] | null;
   detour: Point[] | null;
   pins: MapPin[];
-  /** The map fits these points whenever they change; null puts it back on the fixed Metro Cebu view. */
+  /** The map fits these points whenever they change; null puts it back on the fixed view of the Philippines. */
   frame: Point[] | null;
   /** Given only while the commuter is tapping their own trip. */
   onTap?: (at: Point) => void;
@@ -106,7 +106,7 @@ export default function TripMap({ ends, route, detour, pins, frame, onTap }: Tri
   }, [onTap]);
 
   useEffect(() => {
-    const m = L.map(box.current!, { scrollWheelZoom: false }).setView(latLng(METRO_CEBU_VIEW.centre), METRO_CEBU_VIEW.zoom);
+    const m = L.map(box.current!, { scrollWheelZoom: false }).setView(latLng(PHILIPPINES_VIEW.centre), PHILIPPINES_VIEW.zoom);
     L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
@@ -137,8 +137,9 @@ export default function TripMap({ ends, route, detour, pins, frame, onTap }: Tri
   useEffect(() => {
     const points: Point[] | null = JSON.parse(frameKey);
     if (!map.current) return;
-    if (!points) map.current.setView(latLng(METRO_CEBU_VIEW.centre), METRO_CEBU_VIEW.zoom);
-    else map.current.fitBounds(L.latLngBounds(points.map(latLng)), { padding: [28, 28] });
+    if (!points) map.current.setView(latLng(PHILIPPINES_VIEW.centre), PHILIPPINES_VIEW.zoom);
+    // A single end would otherwise zoom to the street's last tile level.
+    else map.current.fitBounds(L.latLngBounds(points.map(latLng)), { padding: [28, 28], maxZoom: 15 });
   }, [frameKey]);
 
   return (

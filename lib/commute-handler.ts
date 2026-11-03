@@ -1,5 +1,15 @@
 import { admit } from "./admission";
-import { readAdvisory, type AdvisoryReading } from "./advisory";
+import { advisoryAreasFor } from "./advisory-areas";
+import {
+  advisoryStoreFromEnv,
+  judgeRoute,
+  MemoryAdvisoryStore,
+  snapshotForCheck,
+  type AdvisoryStore,
+  type ProductView,
+  type RouteAdvisory,
+  type SnapshotReading,
+} from "./advisory-snapshot";
 import { placeOnRoute, ROUTE_CORRIDOR_M, type AnswerKind, type Point, type Report } from "./answer";
 import { budgetFromEnv, type Budget } from "./budget";
 import { clientIp } from "./check-handler";
@@ -15,19 +25,37 @@ import {
   type InvestigationResult,
 } from "./investigation";
 import type { Meter } from "./meta";
-import { fetchRoute, ROUTE_WORST_MS, type Route, type RouteResult, type ValhallaGate } from "./router";
+import {
+  endsTooFarApart,
+  fetchRoute,
+  MAX_ROUTE_KM,
+  MAX_TRIP_STRAIGHT_KM,
+  ROUTE_WORST_MS,
+  type Route,
+  type RouteResult,
+  type ValhallaGate,
+} from "./router";
 import { beforeDeadline, readBody } from "./deadline";
-import { inTripBound } from "./trip-bound";
+import { inServerTripBound } from "./province-index";
+import { TRIP_AREA_NAME } from "./trip-bound";
 import { reportStoreFromEnv, toReport, type ReportStore } from "./report-store";
 import { DEMO_TRIPS, sampleReports, scenariosFor, type DemoTripId, type SampleReport, type ScenarioId } from "./samples";
 import {
-  planWebSearch,
-  releaseWebSearch,
-  runWebSearch,
+  mergeWebEvidence,
+  OFF_THE_STRAIGHT_LINE,
+  OVER_THE_CAP,
+  planWebSearches,
+  releaseWebSearches,
+  runWebSearches,
+  SEARCH_RESERVE_MICROS,
+  searchAreasFor,
   searchBudgetFromEnv,
   searchStoreFromEnv,
+  webCoverage,
   type ClosureKind,
   type KvStore,
+  type SearchArea,
+  type WebCoverage,
   type WebEvidence,
   type WebFinding,
   type WebPlan,
@@ -53,6 +81,8 @@ export interface CommuteTiming {
   storeCallMs: number;
   /** The web search's model call ends with this much of the deadline left, beyond a way around: for the model's pick. */
   modelRoomMs: number;
+  /** An inline refresh of PAGASA's snapshot ends this long after it starts; ADVISORY_TIME_MS unless a test shortens it. */
+  advisoryMs?: number;
 }
 export const MODEL_ROOM_MS = 15_000;
 export const COMMUTE_TIMING: CommuteTiming = { deadlineMs: COMMUTE_DEADLINE_MS, routeWorstMs: ROUTE_WORST_MS, storeCallMs: 5_000, modelRoomMs: MODEL_ROOM_MS };
@@ -72,10 +102,11 @@ function museFromEnv(): MuseDeps {
 
 /** A demo trip's plain route, or its detour around a set of spots, is reused this long: the roads don't change, and Valhalla is a shared free server. */
 export const ROUTE_CACHE_MS = 10 * 60_000;
-/** A readable PAGASA reading is reused this long, so a busy demo doesn't fetch the feed on every check. */
-export const ADVISORY_CACHE_MS = 5 * 60_000;
-/** An unreadable reading is reused this long, so demo clicks while PAGASA is down don't each fetch it again. */
-export const UNREADABLE_RETRY_MS = 60_000;
+/**
+ * A check that finds PAGASA's snapshot missing or stale refreshes it inline for at most this long; past it the check
+ * reads the snapshot as incomplete. The old reader's 15 s, plus room for a cold snapshot's first records.
+ */
+export const ADVISORY_TIME_MS = 20_000;
 
 /** Lusong's fixed answer words: the page's title and the watcher's message use these only. */
 export const TITLES: Record<AnswerKind, string> = {
@@ -88,11 +119,18 @@ export const TITLES: Record<AnswerKind, string> = {
 /** A route that doesn't reach the trip's own ends is never judged: part of a trip can't answer for all of it. */
 type PlainResult = RouteResult | { ok: false; reason: "off_trip" };
 
+const ISLAND_MESSAGE =
+  "Lusong found no road between these two places. They may be on different islands; Lusong checks trips on one island's roads.";
+const TOO_FAR_MESSAGE = `These two places are more than ${MAX_TRIP_STRAIGHT_KM} km apart. Lusong checks commutes up to ${MAX_ROUTE_KM} km by road.`;
+
 const ROUTE_ERRORS: Record<Exclude<PlainResult, { ok: true }>["reason"], string> = {
   unreachable: "Lusong couldn't reach the routing server, so it can't give an answer. Try again in a minute.",
   busy: "The routing server is busy with other checks, so Lusong can't give an answer. Try again in a few seconds.",
   gate_unavailable: "Lusong can't pace its requests to the routing server right now, so it sent none and can't give an answer.",
-  no_route: "The routing server found no motorbike route for this trip, so Lusong can't give an answer.",
+  no_route: ISLAND_MESSAGE,
+  ferry: ISLAND_MESSAGE,
+  too_far: TOO_FAR_MESSAGE,
+  too_long: `This trip is longer than ${MAX_ROUTE_KM} km by road. Lusong checks commutes up to ${MAX_ROUTE_KM} km.`,
   out_of_time: "Lusong ran out of time asking the routing server, so it can't give an answer. Try again in a minute.",
   off_trip: "The routing server's route doesn't reach this trip's start and end, so Lusong can't give an answer.",
 };
@@ -110,12 +148,25 @@ const WEB_WHY: Record<string, string> = {
   "unreadable reply": "the search's reply couldn't be read",
   "no shared store": "there is no shared store to keep it in",
   "store unreachable": "the shared store couldn't be reached",
+  "another check is searching the web right now": "another check was searching it and hadn't finished",
+  "today's web search budget is used up": "today's web search budget is used up",
+  "Muse Spark is off": "Muse Spark is off",
+  [OVER_THE_CAP]: "Lusong searches at most two provinces a check",
+  [OFF_THE_STRAIGHT_LINE]: "the route enters it away from the straight line the search was planned from",
 };
 
 const CLOSURE_WORDS: Record<ClosureKind, string> = { closed: "Closed", flooded: "Flooded", not_passable: "Not passable", other_blocking: "Blocked" };
 
+/** Said when the route enters a province no search covered, whatever the reason. */
+function coverageNote(coverage: WebCoverage): string | null {
+  if (coverage.missed.length === 0) return null;
+  const missed = coverage.missed.map((m) => `${m.area.name} (${WEB_WHY[m.why] ?? m.why})`).join("; ");
+  const covered = coverage.searched.length > 0 ? `The web search covered only part of this route: ${coverage.searched.map((a) => a.name).join(" and ")}.` : "The web search didn't cover this route.";
+  return `${covered} Not searched: ${missed}.`;
+}
+
 /** A web finding is shown as Lusong's description of its checked fields; the source's own words are never kept. */
-function webForPage(web: WebEvidence, now: Date) {
+function webForPage(web: WebEvidence, coverage: WebCoverage, now: Date) {
   const line =
     web.state === "searched" ? `Searched the web at ${phtTime(web.searchedAt)}` : `Web search skipped: ${WEB_WHY[web.why] ?? web.why}.`;
   const note = (f: WebFinding) => {
@@ -126,6 +177,7 @@ function webForPage(web: WebEvidence, now: Date) {
   };
   return {
     line,
+    coverage: { searched: coverage.searched.map((a) => a.name), missed: coverage.missed.map((m) => m.area.name), note: coverageNote(coverage) },
     findings: web.findings.map((f) => {
       const site = new URL(f.url).hostname;
       const page = f.sourceDate ? `a page on ${site} dated ${f.sourceDate}` : `an undated page on ${site}`;
@@ -140,7 +192,7 @@ function webForPage(web: WebEvidence, now: Date) {
  */
 function pickForPage(
   result: Extract<InvestigationResult, { ok: true }>,
-  facts: { now: Date; advisory: AdvisoryReading; rainingHere: boolean; pickable: ReadonlySet<string> },
+  facts: { now: Date; advisory: RouteAdvisory; rainingHere: boolean; pickable: ReadonlySet<string> },
 ) {
   const label = "Muse Spark picked this evidence";
   const hidden = { shown: false, label, sentences: [] as string[], note: !result.pick.shown && result.pick.unavailable ? PICK_UNAVAILABLE : null };
@@ -181,10 +233,10 @@ function pointFrom(value: unknown): Point | null {
   if (typeof value !== "object" || value === null) return null;
   const { lat, lon } = value as Record<string, unknown>;
   if (typeof lat !== "number" || typeof lon !== "number" || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-  return inTripBound({ lat, lon }) ? { lat, lon } : null;
+  return inServerTripBound({ lat, lon }) ? { lat, lon } : null;
 }
 
-function parseReal(body: unknown): RealRequest | null {
+function parseReal(body: unknown): RealRequest | "too_far" | null {
   if (typeof body !== "object" || body === null) return null;
   const b = body as Record<string, unknown>;
   if (b.mode !== "real") return null;
@@ -192,6 +244,7 @@ function parseReal(body: unknown): RealRequest | null {
   const to = pointFrom(b.to);
   if (!from || !to) return null;
   if (b.rainingHere !== undefined && typeof b.rainingHere !== "boolean") return null;
+  if (endsTooFarApart(from, to)) return "too_far";
   return { from, to, rainingHere: b.rainingHere === true };
 }
 
@@ -200,29 +253,36 @@ type CheckedReport =
   | (SampleReport & { photoUrl?: undefined })
   | (Report & { sample: false; origin: null; credit: null; sourceUrl: null; photoUrl: string | null });
 
-function advisoryForPage(reading: AdvisoryReading) {
-  switch (reading.state) {
-    case "active": {
-      const a = reading.advisory;
-      return {
-        state: "active" as const,
-        headline: a.event ?? a.headline,
-        rainForecast: a.rainForecast,
-        rivers: a.riversForCebu,
-        sent: phtTime(a.sent),
-        expires: phtTime(a.expires),
-        link: a.link,
-        note: null,
-      };
-    }
-    case "none":
-      return { state: "none" as const, note: "No General Flood Advisory for Cebu in PAGASA's feed right now." };
-    case "unreadable":
-      return {
-        state: "unreadable" as const,
-        note: "Lusong couldn't read PAGASA's flood advisory feed, so it counts an advisory as active.",
-      };
-  }
+const ADVISORY_NOTES: Record<RouteAdvisory["state"], string | null> = {
+  active: null,
+  none: "No PAGASA advisory in its feed covers this way right now.",
+  unreadable: "Lusong couldn't read all of PAGASA's advisories, so it counts one as active.",
+};
+
+function productForPage(p: ProductView) {
+  return {
+    kind: p.kind,
+    counts: p.counts,
+    event: p.event,
+    area: p.areas.join(", "),
+    sent: phtTime(p.sent),
+    expires: phtTime(p.expires),
+    link: p.link,
+    rainForecast: p.rainForecast,
+    rivers: p.rivers,
+  };
+}
+
+/** The advisory card describes the route the answer recommends: the plain way, or the detour for Go another way. */
+function advisoryForPage(advisory: RouteAdvisory, routeId: string) {
+  return {
+    state: advisory.state,
+    about: routeId === "plain" ? ("your way" as const) : ("the other way" as const),
+    products: advisory.covering.map(productForPage),
+    warnings: advisory.warnings.map(productForPage),
+    incomplete: advisory.incomplete !== null,
+    note: ADVISORY_NOTES[advisory.state],
+  };
 }
 
 function thinNote(kind: AnswerKind, reportCount: number, voiceOnly: boolean): string {
@@ -242,6 +302,8 @@ type CommuteDeps = {
   reports?: () => ReportStore | null;
   muse?: MuseDeps;
   timing?: CommuteTiming;
+  /** The shared store holding PAGASA's snapshot; without one, each handler keeps its own in memory. */
+  advisoryStore?: () => AdvisoryStore | null;
 };
 
 /** What a scheduled check learns: the answer's kind, or the HTTP status a page would have been given instead. */
@@ -270,7 +332,8 @@ export function makeCommuteCheck(deps: CommuteDeps) {
   const now = deps.now ?? (() => new Date());
   const routes = new Map<DemoTripId, { route: Route; at: number }>();
   const detours = new Map<string, { result: RouteResult; at: number }>();
-  let advisoryCache: { reading: AdvisoryReading; at: number } | null = null;
+  const localAdvisoryStore = new MemoryAdvisoryStore();
+  const advisoryStore = () => (deps.advisoryStore ?? advisoryStoreFromEnv)() ?? localAdvisoryStore;
 
   async function routeFor(trip: DemoTripId, t: number, deadline: number): Promise<PlainResult> {
     const cached = routes.get(trip);
@@ -290,18 +353,12 @@ export function makeCommuteCheck(deps: CommuteDeps) {
       { ...DEMO_TRIPS[trip], excludePolygons: spots.map((p) => boxAround(p)) },
       { fetch: doFetch, gate: deps.gate(), deadline },
     );
-    if (result.ok || result.reason === "no_route") detours.set(key, { result, at: t });
+    if (result.ok || result.reason === "no_route" || result.reason === "ferry" || result.reason === "too_long") detours.set(key, { result, at: t });
     return result;
   }
 
-  async function advisoryAt(at: Date): Promise<AdvisoryReading> {
-    if (advisoryCache) {
-      const keep = advisoryCache.reading.state === "unreadable" ? UNREADABLE_RETRY_MS : ADVISORY_CACHE_MS;
-      if (at.getTime() - advisoryCache.at < keep) return advisoryCache.reading;
-    }
-    const reading = await readAdvisory({ fetch: doFetch, now: at });
-    advisoryCache = { reading, at: at.getTime() };
-    return reading;
+  function advisoryAt(at: Date, deadline: number): Promise<SnapshotReading> {
+    return snapshotForCheck({ store: advisoryStore(), fetch: doFetch, now: at, deadline: Math.min(deadline, Date.now() + (timing.advisoryMs ?? ADVISORY_TIME_MS)) });
   }
 
   async function POST(request: Request): Promise<Response> {
@@ -319,13 +376,14 @@ export function makeCommuteCheck(deps: CommuteDeps) {
     }
     const demo = parseDemo(parsed);
     const realTrip = demo ? null : parseReal(parsed);
-    if (!demo && !realTrip) return fail(400, "Send a demo trip, or a real trip whose start and end are both in Metro Cebu.");
+    if (realTrip === "too_far") return Response.json({ error: TOO_FAR_MESSAGE, routing: "too_far" }, { status: 400 });
+    if (!demo && !realTrip) return fail(400, `Send a demo trip, or a real trip whose start and end are both in ${TRIP_AREA_NAME}.`);
     return admitted(demo ? { demo } : { real: realTrip! }, clientIp(request), deadline);
   }
 
   async function checkTrip(trip: { from: Point; to: Point }, opts: { deadline: number }): Promise<ScheduledCheck> {
     const real = parseReal({ mode: "real", from: trip.from, to: trip.to });
-    if (!real) return { ok: false, status: 400 };
+    if (!real || real === "too_far") return { ok: false, status: 400 };
     // The caller's deadline bounds the settle too, so the check's own deadline is one store call earlier.
     const response = await admitted({ real }, null, Math.min(opts.deadline - timing.storeCallMs, Date.now() + timing.deadlineMs));
     if (!response.ok) return { ok: false, status: response.status };
@@ -341,13 +399,20 @@ export function makeCommuteCheck(deps: CommuteDeps) {
     const settleBy = deadline + timing.storeCallMs;
     const at = now();
     const museDeps = muse();
-    const plan: WebPlan = museDeps.enabled ? await planWebSearch(museDeps.searchStore(), at, museDeps.searchBudget(), deadline) : { kind: "off", why: "Muse Spark is off" };
+    const ends = "demo" in check ? DEMO_TRIPS[check.demo.trip] : check.real;
+    // Planned from the trip's ends, not its route, so the searches run beside the routing.
+    const areas = museDeps.enabled ? searchAreasFor(ends.from, ends.to) : [];
+    const plans: WebPlan[] = museDeps.enabled
+      ? await planWebSearches(areas, museDeps.searchStore(), at, museDeps.searchBudget(), deadline)
+      : [{ kind: "off", area: null, why: "Muse Spark is off" }];
     if (Date.now() >= deadline) {
       // Planning took the whole deadline, so nothing is reserved; a search it planned is given back.
-      void releaseWebSearch(plan).catch(() => {});
+      void releaseWebSearches(plans).catch(() => {});
       return fail(503, OUT_OF_TIME);
     }
-    const reserveMicros = COMMUTE_RESERVE_MICROS + (museDeps.enabled ? investigationReserveMicros(plan) : 0);
+    const searches = plans.filter((p) => p.kind === "search").length;
+    // One admission holds the model's loop and every planned search, so a check can't start a search it can't pay for.
+    const reserveMicros = COMMUTE_RESERVE_MICROS + (museDeps.enabled ? investigationReserveMicros({ kind: "cached" }) + searches * SEARCH_RESERVE_MICROS : 0);
     const admitting = admit(budget(), { clientIp: ip, reserveMicros, now: at });
     const admission = await beforeDeadline(admitting, deadline);
     if (admission === "late") {
@@ -358,15 +423,16 @@ export function makeCommuteCheck(deps: CommuteDeps) {
         },
         () => {},
       );
-      void releaseWebSearch(plan).catch(() => {});
+      void releaseWebSearches(plans).catch(() => {});
       return fail(503, OUT_OF_TIME);
     }
     if (!admission.ok) {
-      await beforeDeadline(releaseWebSearch(plan), settleBy);
+      await beforeDeadline(releaseWebSearches(plans), settleBy);
       return admission.response();
     }
     const run: CheckRun = {
-      plan,
+      areas,
+      plans,
       store: museDeps.enabled ? museDeps.searchStore() : null,
       modelOff: museDeps.enabled ? undefined : "Muse Spark is off",
       meter: admission.run.meter,
@@ -380,7 +446,7 @@ export function makeCommuteCheck(deps: CommuteDeps) {
       return response;
     } finally {
       // A settle cut off here keeps the reservation charged: the safe side. A search the check never ran is given back.
-      await beforeDeadline(Promise.all([admission.run.settle(answered), run.searched ? null : releaseWebSearch(plan)]), settleBy);
+      await beforeDeadline(Promise.all([admission.run.settle(answered), run.searched ? null : releaseWebSearches(plans)]), settleBy);
     }
   }
 
@@ -458,11 +524,12 @@ export function makeCommuteCheck(deps: CommuteDeps) {
     // The search ends early enough to leave a way around and the model's pick their time.
     const searchDeadline = run.deadline - timing.routeWorstMs - timing.modelRoomMs;
     run.searched = true;
-    const [advisory, routed, web] = await Promise.all([
-      beforeDeadline(advisoryAt(at), run.deadline),
+    const [advisory, routed, webParts] = await Promise.all([
+      beforeDeadline(advisoryAt(at, run.deadline), run.deadline),
       check.plain(),
-      runWebSearch(run.plan, { store: run.store, now: at, deadline: run.deadline, searchBy: searchDeadline, meter: run.meter }),
+      runWebSearches(run.plans, { store: run.store, now: at, deadline: run.deadline, searchBy: searchDeadline, meter: run.meter }),
     ]);
+    const web = mergeWebEvidence(webParts);
     if (advisory === "late") return fail(503, OUT_OF_TIME);
     if (!routed.ok) return Response.json({ error: ROUTE_ERRORS[routed.reason], routing: routed.reason }, { status: 503 });
 
@@ -474,7 +541,7 @@ export function makeCommuteCheck(deps: CommuteDeps) {
 
     const result = await investigate({
       plainLine,
-      advisory,
+      advisoryFor: (line) => judgeRoute(advisory, line, at),
       rainingHere: check.rainingHere,
       now: at,
       deadline: run.deadline,
@@ -491,7 +558,8 @@ export function makeCommuteCheck(deps: CommuteDeps) {
           }
           const around = await check.around(spots);
           if (!around.ok) {
-            if (around.reason === "no_route") return { ok: false, reason: "no_route" };
+            // A way around by ferry, or past the length cap, is no way around on this island's roads.
+            if (around.reason === "no_route" || around.reason === "ferry" || around.reason === "too_long") return { ok: false, reason: "no_route" };
             routingFailure = around.reason;
             return { ok: false, reason: "failed" };
           }
@@ -568,9 +636,13 @@ export function makeCommuteCheck(deps: CommuteDeps) {
         streets: detour.streets,
         line: detour.line,
       },
-      advisory: advisoryForPage(advisory),
+      advisory: advisoryForPage(result.advisory, answer.route),
+      advisoryAreas: advisoryAreasFor(advisory, judgedLines.map((l) => l.line), at),
       reports: sent,
-      muse: { pick: pickForPage(result, { now: at, advisory, rainingHere: check.rainingHere, pickable }), web: webForPage(result.web, at) },
+      muse: {
+        pick: pickForPage(result, { now: at, advisory: result.advisory, rainingHere: check.rainingHere, pickable }),
+        web: webForPage(result.web, webCoverage([route.line, ...(detour ? [detour.line] : [])], webParts, run.areas), at),
+      },
       mmdaCredit: MMDA_CREDIT,
     });
   }
@@ -578,11 +650,14 @@ export function makeCommuteCheck(deps: CommuteDeps) {
 
 /** One admitted check's Muse Spark run and its deadline (epoch ms), threaded through every step. */
 interface CheckRun {
-  plan: WebPlan;
+  /** The provinces the searches were planned from, past the cap included. */
+  areas: SearchArea[];
+  /** One per province searched, or one "off" plan when none is. */
+  plans: WebPlan[];
   store: KvStore | null;
   modelOff?: string;
   meter: Meter;
   deadline: number;
-  /** Set once runWebSearch has the plan; until then the handler gives the plan back itself. */
+  /** Set once runWebSearches has the plans; until then the handler gives them back itself. */
   searched: boolean;
 }

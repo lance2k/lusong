@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FEED_URL } from "./advisory";
 import { createBudget, MemoryBudgetStore, type Budget, type BudgetStore } from "./budget";
 import {
-  ADVISORY_CACHE_MS,
   COMMUTE_DEADLINE_MS,
   COMMUTE_RESERVE_MICROS,
   COMMUTE_TIMING,
@@ -12,26 +11,32 @@ import {
   MUSE_OFF,
   ROUTE_CACHE_MS,
   SETTLE_ROOM_MS,
-  UNREADABLE_RETRY_MS,
   type CommuteTiming,
   type MuseDeps,
 } from "./commute-handler";
 import { investigationReserveMicros, PICK_UNAVAILABLE } from "./investigation";
 import { sampleReports, scenariosFor, type DemoTripId } from "./samples";
-import { MemoryKvStore, planWebSearch, SEARCH_RESERVE_MICROS, WEB_SEARCH_LEASE_KEY, type KvStore } from "./web-search";
+import { MemoryKvStore, planWebSearch, SEARCH_RESERVE_MICROS, webSearchKey, webSearchLeaseKey, type KvStore } from "./web-search";
 import { callsReply, fakeMeta, hangs, searchReply, textReply } from "../test/muse-derived";
 import { cutEnd, cutStart, derivedReply } from "../test/valhalla-derived";
-import { CAP_EDITS, CV_GFA5, FEED, feedWith, SAVED } from "../test/pagasa-fixtures";
+import { CAP_EDITS, CV_GFA5, feedWith, SAVED, SAVED_FEED } from "../test/pagasa-fixtures";
+import { INCOMPLETE_RETRY_MS, MemoryAdvisoryStore, refreshSnapshot, SNAPSHOT_LEASE_KEY, STALE_AFTER_MS } from "./advisory-snapshot";
 import { decodePolyline6, makeValhallaGate, MemorySlotStore, VALHALLA_URL, type SlotStore } from "./router";
 import { distanceM, placeOnRoute, ROUTE_CORRIDOR_M, type Point } from "./answer";
 import { MemoryReportStore, UpstashReportStore, type ReportStore, type StoredPhotoReport, type StoredVoiceReport } from "./report-store";
 import { seedReport } from "../test/seed-report";
 import { randomUUID } from "node:crypto";
+import { setProvinceIndexForTests, type Province, type ProvinceIndex } from "./province-index";
+import { MAX_ROUTE_KM } from "./router";
 
 const read = (path: string) => readFileSync(path, "utf8");
+/** Every Cebu demo and real trip below lies in Cebu province, so its one search area. */
+const CEBU_AREA = { code: "0702200000", name: "Cebu" };
+const WEB_SEARCH_LEASE_KEY = webSearchLeaseKey(CEBU_AREA);
 const ROUTES: Record<string, string> = {
   "10.346,123.911": read("test/fixtures/valhalla/banilad-itpark-plain.json"),
   "10.3143,123.9147": read("test/fixtures/valhalla/mabolo-cbp-plain.json"),
+  "14.62291,121.05326": read("test/fixtures/valhalla/cubao-makati-plain.json"),
 };
 /** Valhalla's saved replies with blocked spots excluded (2026-10-30 01:16 and 02:24 PHT), each beside the request it answered. */
 const recorded = (name: string, status: number) => ({
@@ -44,6 +49,8 @@ const DETOUR_RECORDS = [
   recorded("mabolo-cbp-excluded", 200),
   /** IT Park itself excluded: Valhalla's real "No path could be found". */
   recorded("banilad-itpark-destination-excluded", 400),
+  /** Araneta City Cubao → Makati City Hall with its EDSA sample's box excluded (2026-11-03 21:22 PHT). */
+  recorded("cubao-makati-excluded", 200),
 ];
 const NO_ROUTE = DETOUR_RECORDS[2].reply;
 const EXCLUDED_REQUEST = DETOUR_RECORDS[0].request;
@@ -61,7 +68,7 @@ function detourRecordFor(sent: { locations: unknown; exclude_polygons: number[][
 
 /** 20:00 PHT on 2026-10-25: the Central Visayas advisory sent at 17:27 is active. */
 const ADVISORY_ACTIVE = new Date("2026-10-25T20:00:00+08:00");
-/** Noon on 2026-10-29: no GFA entry in the feed's last 24 h, so no advisory. */
+/** Noon on 2026-10-29: every saved region's newest record is a Final all-clear, so no advisory. */
 const NO_ADVISORY = new Date("2026-10-29T12:00:00+08:00");
 
 type Options = {
@@ -72,6 +79,8 @@ type Options = {
   pagasa?: Record<string, string>;
   /** A reply to send instead of the saved plain route or the saved detour (derived fixtures). */
   plainReply?: string;
+  /** The HTTP status sent with plainReply. */
+  plainStatus?: number;
   detourReply?: string;
   /** A reply to one detour request in particular; undefined leaves it to the options above. */
   detourReplyFor?: (sent: { exclude_polygons: number[][][] }) => string | undefined;
@@ -91,7 +100,7 @@ function network(opts: Options = {}) {
     const u = String(url);
     calls.push({ url: u, at: performance.now(), body: init?.body ? String(init.body) : undefined });
     if (u === FEED_URL && opts.feed === "down") throw new TypeError("fetch failed");
-    const pagasa = opts.pagasa ?? { [FEED_URL]: FEED, ...SAVED };
+    const pagasa = opts.pagasa ?? { [FEED_URL]: SAVED_FEED, ...SAVED };
     if (u in pagasa) return new Response(pagasa[u]);
     if (u === `${VALHALLA_URL}/route`) {
       if (opts.valhallaDelayMs) await new Promise((resolve) => setTimeout(resolve, opts.valhallaDelayMs));
@@ -104,7 +113,7 @@ function network(opts: Options = {}) {
       }
       if (!sent.exclude_polygons) {
         if (opts.plainDelayMs) await new Promise((resolve) => setTimeout(resolve, opts.plainDelayMs));
-        return new Response(opts.plainReply ?? ROUTES[from], { status: 200 });
+        return new Response(opts.plainReply ?? ROUTES[from], { status: opts.plainReply ? (opts.plainStatus ?? 200) : 200 });
       }
       if (opts.detourHangs) {
         const signal = init!.signal!;
@@ -207,15 +216,28 @@ describe("the demo commute check", () => {
   it("shows the advisory's forecast, rivers and times, the route's length and time, and the MMDA credit", async () => {
     const { handler } = handlerAt(ADVISORY_ACTIVE);
     const body = await (await handler(demo("banilad-itpark", "none"))).json();
-    expect(body.advisory).toMatchObject({
+    expect(body.advisory).toEqual({
       state: "active",
-      rainForecast: "light to moderate rains and thunderstorms",
-      rivers: "Kotkot, Mananga, Guinabasan, Balamban and Sabangdaku",
-      sent: "25 Oct, 5:27 p.m. PHT",
-      expires: "26 Oct, 5:27 a.m. PHT",
+      about: "your way",
+      products: [
+        {
+          kind: "flood",
+          counts: true,
+          event: "General Flood Advisory (Moderate)",
+          area: "Cebu",
+          rainForecast: "light to moderate rains and thunderstorms",
+          rivers: "Cebu: Kotkot, Mananga, Guinabasan, Balamban and Sabangdaku",
+          sent: "25 Oct, 5:27 p.m. PHT",
+          expires: "26 Oct, 5:27 a.m. PHT",
+          link: CV_GFA5,
+        },
+      ],
+      warnings: [],
+      incomplete: false,
+      note: null,
     });
     expect(body.route).toMatchObject({ lengthKm: 2.552, timeMin: 11 });
-    expect(body.answer.reason).toBe("PAGASA's flood advisory for Cebu is active, and nobody has reported your way.");
+    expect(body.answer.reason).toBe("A PAGASA advisory covers your way, and nobody has reported your way.");
     expect(body.mmdaCredit).toContain("MMDA");
   });
 
@@ -242,9 +264,44 @@ describe("the demo commute check", () => {
   it("an unreadable advisory feed is said so on the page and counts as active", async () => {
     const { handler } = handlerAt(NO_ADVISORY, { feed: "down" });
     const body = await (await handler(demo("banilad-itpark", "none"))).json();
-    expect(body.advisory.state).toBe("unreadable");
-    expect(body.advisory.note).toBe("Lusong couldn't read PAGASA's flood advisory feed, so it counts an advisory as active.");
+    expect(body.advisory).toMatchObject({ state: "unreadable", incomplete: true, products: [] });
+    expect(body.advisory.note).toBe("Lusong couldn't read all of PAGASA's advisories, so it counts one as active.");
     expect(body.answer.kind).toBe("no_one_knows");
+  });
+
+  it("a 31-minute-old snapshot reads as incomplete on the page, still listing what it held, and counts as active", async () => {
+    const store = new MemoryAdvisoryStore();
+    const net = network();
+    expect((await refreshSnapshot({ store, fetch: net.fetch, now: () => ADVISORY_ACTIVE })).outcome).toBe("published");
+    // Another refresh holds the lease and never finishes, so this check can't refresh the snapshot itself.
+    await store.setIfAbsent(SNAPSHOT_LEASE_KEY, "someone-else", 60_000);
+    const later = new Date(ADVISORY_ACTIVE.getTime() + 31 * 60_000);
+    const handler = makeCommuteHandler({
+      fetch: net.fetch,
+      now: () => later,
+      gate: () => makeValhallaGate(new MemorySlotStore()),
+      budget: openBudget,
+      muse: MUSE_OFF,
+      advisoryStore: () => store,
+      timing: { ...COMMUTE_TIMING, advisoryMs: 400 },
+    });
+    const body = await (await handler(demo("banilad-itpark", "none"))).json();
+    expect(body.advisory).toMatchObject({ state: "unreadable", incomplete: true, products: [{ area: "Cebu", link: CV_GFA5 }] });
+    expect(body.answer.kind).toBe("no_one_knows");
+  });
+
+  it("an incomplete snapshot (a listed record PAGASA didn't serve) reads as incomplete on the page, never as no advisory", async () => {
+    const { handler } = handlerAt(NO_ADVISORY, { pagasa: { [FEED_URL]: SAVED_FEED } });
+    const body = await (await handler(demo("banilad-itpark", "none"))).json();
+    expect(body.advisory).toMatchObject({ state: "unreadable", incomplete: true });
+    expect(body.answer.kind).toBe("no_one_knows");
+  });
+
+  it("the advisory card describes the recommended route: the other way for Go another way", async () => {
+    const { handler } = handlerAt(NO_ADVISORY);
+    const body = await (await handler(demo("mabolo-cbp", "flooded"))).json();
+    expect(body.answer.kind).toBe("go_another_way");
+    expect(body.advisory).toMatchObject({ state: "none", about: "the other way", products: [], incomplete: false });
   });
 
   it.each(CAP_EDITS.map((e) => [e.name, e.edit] as const))(
@@ -313,7 +370,7 @@ describe("the demo commute check", () => {
     expect(net.valhallaCalls()).toHaveLength(2);
   });
 
-  it("reuses a readable PAGASA reading for 5 minutes", async () => {
+  it("reuses a complete PAGASA snapshot for 30 minutes", async () => {
     let now = NO_ADVISORY;
     const net = network();
     const gate = makeValhallaGate(new MemorySlotStore());
@@ -322,7 +379,10 @@ describe("the demo commute check", () => {
     await handler(demo("banilad-itpark", "none"));
     await handler(demo("mabolo-cbp", "none"));
     expect(feedCalls()).toBe(1);
-    now = new Date(NO_ADVISORY.getTime() + ADVISORY_CACHE_MS);
+    now = new Date(NO_ADVISORY.getTime() + STALE_AFTER_MS - 1);
+    await handler(demo("banilad-itpark", "none"));
+    expect(feedCalls()).toBe(1);
+    now = new Date(NO_ADVISORY.getTime() + STALE_AFTER_MS);
     await handler(demo("banilad-itpark", "none"));
     expect(feedCalls()).toBe(2);
   }, 10_000);
@@ -337,10 +397,10 @@ describe("the demo commute check", () => {
       expect((await (await handler(demo("banilad-itpark", scenario))).json()).advisory.state).toBe("unreadable");
     }
     expect(feedCalls()).toBe(1);
-    now = new Date(NO_ADVISORY.getTime() + UNREADABLE_RETRY_MS);
+    now = new Date(NO_ADVISORY.getTime() + INCOMPLETE_RETRY_MS);
     await handler(demo("banilad-itpark", "none"));
     expect(feedCalls()).toBe(2);
-    expect(UNREADABLE_RETRY_MS).toBe(60_000);
+    expect(INCOMPLETE_RETRY_MS).toBe(60_000);
   });
 
   it("clicking through every demo choice asks Valhalla once per trip, once per detour, and PAGASA's feed once", async () => {
@@ -607,6 +667,9 @@ describe("a route must reach the trip's own start and end (🔴1)", () => {
 /** The demo Banilad → IT Park trip's ends, sent as a real trip: the saved Valhalla replies answer for them. */
 const BANILAD = { lat: 10.346, lon: 123.911 };
 const IT_PARK = { lat: 10.3307, lon: 123.9058 };
+/** Sandakan, Sabah, and a point 3 km off: inside the trip box, outside the Philippines. */
+const SANDAKAN = { lat: 5.84, lon: 118.11 };
+const SANDAKAN_AIRPORT = { lat: 5.86, lon: 118.09 };
 const real = (from = BANILAD, to = IT_PARK, rainingHere = false) => check({ mode: "real", from, to, rainingHere });
 
 /** A real photo report, NPLV, 40 min old, at the same spot as the demo's flooded sample (so the saved detour answers). */
@@ -750,7 +813,7 @@ describe("a real commute check (#6)", () => {
     ["no start", { mode: "real", to: IT_PARK }],
     ["a start that isn't a number", { mode: "real", from: { lat: "10.3", lon: 123.9 }, to: IT_PARK }],
     ["an end outside the Philippines", { mode: "real", from: BANILAD, to: { lat: 35.68, lon: 139.76 } }],
-    ["an end north of Metro Cebu", { mode: "real", from: BANILAD, to: { lat: 10.95, lon: 124.0 } }],
+    ["two ends in Sabah, inside the trip box but outside the Philippines", { mode: "real", from: SANDAKAN, to: SANDAKAN_AIRPORT }],
     ["a rain tap that isn't true or false", { mode: "real", from: BANILAD, to: IT_PARK, rainingHere: "yes" }],
   ])("%s is refused before any request", async (_why, body) => {
     const store = new MemoryReportStore();
@@ -761,18 +824,11 @@ describe("a real commute check (#6)", () => {
     expect(recent).not.toHaveBeenCalled();
   });
 
-  it("a trip outside Metro Cebu is refused before any request: the advisory Lusong reads is Cebu's only", async () => {
-    const store = new MemoryReportStore();
-    const recent = vi.spyOn(store, "recent");
-    const { handler, calls } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), store);
-    // Quezon City to Makati, Metro Manila: PAGASA's Cebu advisory says nothing about it.
-    const res = await handler(real({ lat: 14.676, lon: 121.0437 }, { lat: 14.5547, lon: 121.0244 }));
-    expect(res.status).toBe(400);
-    expect(calls).toHaveLength(0);
-    expect(recent).not.toHaveBeenCalled();
-    // Toledo City, Cebu province but outside Metro Cebu, to Cebu IT Park.
-    expect((await handler(real({ lat: 10.3773, lon: 123.6386 }, IT_PARK))).status).toBe(400);
-    expect(calls).toHaveLength(0);
+  it("trips outside Metro Cebu are taken now: Quezon City → Makati, and Toledo City → Cebu IT Park", async () => {
+    const { handler, valhallaCalls } = handlerAt(NO_ADVISORY);
+    expect((await handler(real({ lat: 14.676, lon: 121.0437 }, { lat: 14.5547, lon: 121.0244 }))).status).not.toBe(400);
+    expect((await handler(real({ lat: 10.3773, lon: 123.6386 }, IT_PARK))).status).not.toBe(400);
+    expect(valhallaCalls()).toHaveLength(2);
   });
 
   it("a Lapu-Lapu → Cebu IT Park trip is taken", async () => {
@@ -1020,7 +1076,7 @@ describe("Muse Spark in the demo check (#7)", () => {
     const onRoute = JSON.stringify({
       closures: [{ place: "Gov. M. Cuenco Ave", lat: spot.lat, lon: spot.lon, url: "https://example.ph/cuenco", date: "2026-10-29", kind: "flooded", summary: words, note: words }],
     });
-    fakeMeta({ search: [searchReply(onRoute)], turns: [textReply("resp_1", pickOf("go_another_way", ["web-0"]))] });
+    fakeMeta({ search: [searchReply(onRoute)], turns: [textReply("resp_1", pickOf("go_another_way", ["web-0702200000-0"]))] });
     const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), new MemoryReportStore(), museOn());
 
     const text = await (await handler(demo("banilad-itpark", "none"))).text();
@@ -1163,7 +1219,7 @@ describe("Muse Spark in the demo check (#7)", () => {
     expect((await handler(demo("banilad-itpark", "flooded"))).status).toBe(503);
 
     expect(meta.fetchMock).not.toHaveBeenCalled();
-    expect(await planWebSearch(kv, NO_ADVISORY, searchBudget)).toMatchObject({ kind: "search" });
+    expect(await planWebSearch(CEBU_AREA, kv, NO_ADVISORY, searchBudget)).toMatchObject({ kind: "search" });
   });
 
   it("past today's web search cap the check runs without web search and says so", async () => {
@@ -1175,7 +1231,11 @@ describe("Muse Spark in the demo check (#7)", () => {
 
     expect(meta.searchRequests).toHaveLength(0);
     expect(body.answer.kind).toBe("go_another_way");
-    expect(body.muse.web).toEqual({ line: "Web search skipped: today's web search budget is used up.", findings: [] });
+    expect(body.muse.web).toEqual({
+      line: "Web search skipped: today's web search budget is used up.",
+      coverage: { searched: [], missed: ["Cebu"], note: "The web search didn't cover this route. Not searched: Cebu (today's web search budget is used up)." },
+      findings: [],
+    });
   });
 
   it("with Muse Spark off the check reserves 1 µ$, calls no model, and says the explanation is unavailable", async () => {
@@ -1537,7 +1597,7 @@ describe("Muse Spark in a real check (#6 with #7)", () => {
     expect(meta.fetchMock).not.toHaveBeenCalled();
     expect(valhallaCalls()).toHaveLength(0);
     expect(settles).toEqual([false]);
-    expect(await planWebSearch(kv, NO_ADVISORY, searchBudget)).toMatchObject({ kind: "search" });
+    expect(await planWebSearch(CEBU_AREA, kv, NO_ADVISORY, searchBudget)).toMatchObject({ kind: "search" });
   });
 
   describe("a real check that stalls returns by the deadline with its reservation settled", () => {
@@ -1562,7 +1622,7 @@ describe("Muse Spark in a real check (#6 with #7)", () => {
       expect(valhallaCalls()).toHaveLength(0);
       expect(meta.fetchMock).not.toHaveBeenCalled();
       expect(settles).toEqual([false]);
-      expect(await planWebSearch(kv, NO_ADVISORY, searchBudget)).toMatchObject({ kind: "search" });
+      expect(await planWebSearch(CEBU_AREA, kv, NO_ADVISORY, searchBudget)).toMatchObject({ kind: "search" });
     }, 10_000);
 
     it("a routing server that never answers, with a web search that never answers: no answer, out of time", async () => {
@@ -1810,11 +1870,306 @@ describe("a scheduled check of a stored trip (#10's watcher)", () => {
     expect(await checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: Date.now() + 20_000 })).toEqual({ ok: false, status: 503 });
   });
 
-  it("refuses a stored trip outside Metro Cebu without asking admission", async () => {
+  it("refuses a stored trip outside the Philippines without asking admission", async () => {
     const budget = openBudget();
     const admit = vi.spyOn(budget, "admit");
     const { checkTrip } = scheduledAt(NO_ADVISORY, budget);
     expect(await checkTrip({ from: BANILAD, to: { lat: 35.68, lon: 139.76 } }, { deadline: Date.now() + 20_000 })).toEqual({ ok: false, status: 400 });
     expect(admit).not.toHaveBeenCalled();
+  });
+});
+
+describe("nationwide trips (S1)", () => {
+  afterEach(() => {
+    setProvinceIndexForTests(null);
+    vi.unstubAllGlobals();
+  });
+  process.env.MODEL_API_KEY = "test-key";
+
+  const ISLAND = "Lusong found no road between these two places. They may be on different islands; Lusong checks trips on one island's roads.";
+  const CEBU_CITY_HALL = { lat: 10.29293, lon: 123.90175 };
+  const TAGBILARAN = { lat: 9.65388, lon: 123.86605 };
+  const roomy = () => createBudget({ store: new MemoryBudgetStore(), budgetUsd: 100, ipLimit: 1 });
+  const museOn = (kv = new MemoryKvStore(), searchBudget: Budget = roomy()): MuseDeps => ({ enabled: true, searchStore: () => kv, searchBudget: () => searchBudget });
+  const pickOf = (answer: string, evidence: unknown[]) => JSON.stringify({ answer, evidence });
+  /** NO_ADVISORY's day in PHT, so a finding dated this counts. */
+  const TODAY = "2026-10-29";
+
+  /** Banilad → IT Park split in two at 10.338° N: Banilad in the north province, IT Park and the flooded sample's spot in the south. */
+  const NORTH: Province = { code: "9900000001", name: "North Test Province" };
+  const SOUTH: Province = { code: "9900000002", name: "South Test Province" };
+  const MIDDLE: Province = { code: "9900000003", name: "Middle Test Province" };
+  const split = (p: Point): Province => (p.lat >= 10.338 ? NORTH : SOUTH);
+  const splitIndex: ProvinceIndex = {
+    inPhilippines: () => true,
+    provinceOf: split,
+    provincesAlong: (line) => [...new Map(line.map((p) => [split(p).code, split(p)])).values()],
+  };
+  /**
+   * Search replies picked by the province each prompt names, since two searches run side by side in no fixed order:
+   * enough scripted requests for every attempt of every province.
+   */
+  const byProvince = (replies: Record<string, () => object | Response>) =>
+    Array.from({ length: 6 }, () => (body: Record<string, unknown>) => {
+      const name = Object.keys(replies).find((n) => String(body.input).includes(n));
+      if (!name) throw new Error(`no scripted search for ${String(body.input)}`);
+      return replies[name]();
+    });
+  const closure = (place: string, at: Point | null, url: string, kind = "flooded") => ({ place, lat: at?.lat ?? null, lon: at?.lon ?? null, url, date: TODAY, kind });
+  const SPOT = { lat: 10.335398, lon: 123.910908 };
+
+  describe("the trip bound", () => {
+    it("a Sabah end is refused by the server's province check: inside the phone's box, outside the Philippines (fake index)", async () => {
+      setProvinceIndexForTests({ ...splitIndex, inPhilippines: (p) => !(p.lat < 7.4 && p.lon < 119.3) });
+      const { handler, calls } = handlerAt(NO_ADVISORY);
+      const res = await handler(real(SANDAKAN, SANDAKAN_AIRPORT));
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe("Send a demo trip, or a real trip whose start and end are both in the Philippines.");
+      expect(calls).toHaveLength(0);
+    });
+
+    it("ends 101 km apart are refused before routing and before admission; 99 km apart are routed", async () => {
+      // South-west down Cebu island: due north of Banilad at this distance is open sea, outside every province.
+      const far = { lat: 9.5983, lon: 123.3788 };
+      const near = { lat: 9.6167, lon: 123.3919 };
+      expect(distanceM(BANILAD, near)).toBeLessThan(100_000);
+      expect(distanceM(BANILAD, far)).toBeGreaterThan(101_000);
+      expect(distanceM(BANILAD, far)).toBeLessThan(102_000);
+      const budget = openBudget();
+      const admit = vi.spyOn(budget, "admit");
+      const { handler, valhallaCalls } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), budget);
+
+      const res = await handler(real(BANILAD, far));
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "These two places are more than 100 km apart. Lusong checks commutes up to 150 km by road.",
+        routing: "too_far",
+      });
+      expect(valhallaCalls()).toHaveLength(0);
+      expect(admit).not.toHaveBeenCalled();
+
+      await handler(real(BANILAD, near));
+      expect(valhallaCalls()).toHaveLength(1);
+    });
+
+    it(`a ${MAX_ROUTE_KM + 1} km route is refused after routing`, async () => {
+      const long = JSON.parse(ROUTES["10.346,123.911"]);
+      long.trip.summary.length = MAX_ROUTE_KM + 1;
+      const { handler } = handlerAt(NO_ADVISORY, { plainReply: JSON.stringify(long) });
+      const res = await handler(real());
+      expect(res.status).toBe(503);
+      expect(await res.json()).toEqual({ error: "This trip is longer than 150 km by road. Lusong checks commutes up to 150 km.", routing: "too_long" });
+    });
+
+    it("Valhalla is asked for no ferries, and its real Cebu City → Tagbilaran reply, which still takes one, is refused with the island message", async () => {
+      const { handler, valhallaCalls } = handlerAt(NO_ADVISORY, { plainReply: read("test/fixtures/valhalla/cebu-tagbilaran-ferry.json") });
+      const res = await handler(real(CEBU_CITY_HALL, TAGBILARAN));
+      expect(JSON.parse(valhallaCalls()[0].body!).costing_options).toEqual({ motorcycle: { use_ferry: 0 } });
+      expect(res.status).toBe(503);
+      expect(await res.json()).toEqual({ error: ISLAND, routing: "ferry" });
+    });
+
+    it("Valhalla's no-path error (442, its real reply) gets the island message", async () => {
+      const { handler } = handlerAt(NO_ADVISORY, { plainReply: NO_ROUTE, plainStatus: 400 });
+      const res = await handler(real());
+      expect(res.status).toBe(503);
+      expect(await res.json()).toEqual({ error: ISLAND, routing: "no_route" });
+    });
+
+    it("a way around that takes a ferry is no way around: Wait, not Go another way", async () => {
+      const { handler } = handlerAt(NO_ADVISORY, { detourReply: read("test/fixtures/valhalla/cebu-tagbilaran-ferry.json") });
+      const body = await (await handler(demo("mabolo-cbp", "flooded"))).json();
+      expect(body.answer.kind).toBe("wait");
+      expect(body.detour).toBeNull();
+    });
+  });
+
+  describe("web search by province", () => {
+    it("two provinces' searches both number a finding 0; the second province's finding blocks the route, and each is placed only in its own province", async () => {
+      setProvinceIndexForTests(splitIndex);
+      const meta = fakeMeta({
+        search: byProvince({
+          [NORTH.name]: () => searchReply(JSON.stringify({ closures: [closure("Banilad Road", { lat: 10.345, lon: 123.95 }, "https://north.example.ph/a", "closed")] })),
+          [SOUTH.name]: () =>
+            searchReply(
+              JSON.stringify({
+                closures: [closure("Gov. M. Cuenco Ave", SPOT, "https://south.example.ph/b"), closure("Placed in the north", { lat: 10.345, lon: 123.911 }, "https://south.example.ph/c")],
+              }),
+            ),
+        }),
+        turns: [textReply("resp_1", pickOf("go_another_way", [`web-${SOUTH.code}-0`]))],
+      });
+      const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), new MemoryReportStore(), museOn());
+
+      const body = await (await handler(demo("banilad-itpark", "none"))).json();
+
+      expect(meta.searchRequests.map((r) => String(r.input).match(/roads in (.+?), Philippines/)![1]).sort()).toEqual([NORTH.name, SOUTH.name]);
+      expect(body.answer.kind).toBe("go_another_way");
+      expect(body.answer.reason).toContain("Gov. M. Cuenco Ave");
+      expect(body.muse.web.findings.map((f: { place: string; counted: boolean }) => [f.place, f.counted])).toEqual([
+        ["Banilad Road", true],
+        ["Gov. M. Cuenco Ave", true],
+        ["Placed in the north", false],
+      ]);
+      expect(body.muse.pick.sentences).toEqual(["A page on south.example.ph dated 2026-10-29 reports Gov. M. Cuenco Ave flooded."]);
+      expect(body.muse.web.coverage).toEqual({ searched: [NORTH.name, SOUTH.name], missed: [], note: null });
+    });
+
+    it("one admission reserves the loop and both planned searches", async () => {
+      setProvinceIndexForTests(splitIndex);
+      const admits: number[] = [];
+      const inner = openBudget();
+      const watched: Budget = { admit: (ip, at, reserve) => (admits.push(reserve!), inner.admit(ip, at, reserve)), settle: (a, u, ok) => inner.settle(a, u, ok) };
+      const empty = searchReply(JSON.stringify({ closures: [] }));
+      fakeMeta({ search: [empty, empty], turns: [textReply("resp_1", pickOf("go", ["plain"]))] });
+      const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), watched, new MemoryReportStore(), museOn());
+
+      expect((await handler(demo("banilad-itpark", "none"))).status).toBe(200);
+
+      expect(admits).toEqual([COMMUTE_RESERVE_MICROS + investigationReserveMicros({ kind: "cached" }) + 2 * SEARCH_RESERVE_MICROS]);
+    });
+
+    const empty = () => searchReply(JSON.stringify({ closures: [] }));
+    it.each([
+      ["failed", () => new Response("{}", { status: 500 }), "the search failed"],
+      ["was cut off by its deadline", () => searchReply(null), "the search ran out of room before it answered"],
+    ] as const)("partial coverage is shown when a province's search %s", async (_why, south, words) => {
+      setProvinceIndexForTests(splitIndex);
+      fakeMeta({ search: byProvince({ [NORTH.name]: empty, [SOUTH.name]: south }), turns: [textReply("resp_1", pickOf("go", ["plain"]))] });
+      const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), new MemoryReportStore(), museOn());
+
+      const body = await (await handler(demo("banilad-itpark", "none"))).json();
+
+      expect(body.muse.web.coverage).toEqual({
+        searched: [NORTH.name],
+        missed: [SOUTH.name],
+        note: `The web search covered only part of this route: ${NORTH.name}. Not searched: ${SOUTH.name} (${words}).`,
+      });
+    });
+
+    it("partial coverage is shown when another check holds a province's lease and hasn't finished", async () => {
+      setProvinceIndexForTests(splitIndex);
+      const kv = new MemoryKvStore();
+      await kv.set(webSearchLeaseKey(SOUTH), "another-check", 60_000);
+      const meta = fakeMeta({ search: [empty()], turns: [textReply("resp_1", pickOf("go", ["plain"]))] });
+      const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), new MemoryReportStore(), museOn(kv));
+
+      const body = await (await handler(demo("banilad-itpark", "none"))).json();
+
+      expect(meta.searchRequests.map((r) => String(r.input).includes(NORTH.name))).toEqual([true]);
+      expect(body.muse.web.coverage.note).toBe(
+        `The web search covered only part of this route: ${NORTH.name}. Not searched: ${SOUTH.name} (another check was searching it and hadn't finished).`,
+      );
+    });
+
+    it("partial coverage is shown when the search budget has room for one province only", async () => {
+      setProvinceIndexForTests(splitIndex);
+      const oneSearch = createBudget({ store: new MemoryBudgetStore(), budgetUsd: (1.5 * SEARCH_RESERVE_MICROS) / 1e6, ipLimit: 1 });
+      const meta = fakeMeta({ search: [empty()], turns: [textReply("resp_1", pickOf("go", ["plain"]))] });
+      const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), new MemoryReportStore(), museOn(new MemoryKvStore(), oneSearch));
+
+      const body = await (await handler(demo("banilad-itpark", "none"))).json();
+
+      expect(meta.searchRequests).toHaveLength(1);
+      expect(body.muse.web.coverage.searched).toHaveLength(1);
+      expect(body.muse.web.coverage.note).toMatch(/^The web search covered only part of this route: .+\. Not searched: .+ \(today's web search budget is used up\)\.$/);
+    });
+
+    it("partial coverage is shown for a province past the two-search cap", async () => {
+      // The line enters three provinces; the ends' two are searched and the middle one is over the cap.
+      setProvinceIndexForTests({ ...splitIndex, provincesAlong: () => [NORTH, MIDDLE, SOUTH] });
+      const meta = fakeMeta({ search: [empty(), empty()], turns: [textReply("resp_1", pickOf("go", ["plain"]))] });
+      const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), new MemoryReportStore(), museOn());
+
+      const body = await (await handler(demo("banilad-itpark", "none"))).json();
+
+      expect(meta.searchRequests).toHaveLength(2);
+      expect(body.muse.web.coverage).toEqual({
+        searched: [NORTH.name, SOUTH.name],
+        missed: [MIDDLE.name],
+        note: `The web search covered only part of this route: ${NORTH.name} and ${SOUTH.name}. Not searched: ${MIDDLE.name} (Lusong searches at most two provinces a check).`,
+      });
+    });
+
+    it("partial coverage is shown for a province the route enters away from the straight line the search was planned from", async () => {
+      setProvinceIndexForTests({ ...splitIndex, provincesAlong: (line) => (line.length > 2 ? [NORTH, MIDDLE, SOUTH] : [NORTH, SOUTH]) });
+      fakeMeta({ search: [empty(), empty()], turns: [textReply("resp_1", pickOf("go", ["plain"]))] });
+      const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), new MemoryReportStore(), museOn());
+
+      const body = await (await handler(demo("banilad-itpark", "none"))).json();
+
+      expect(body.muse.web.coverage.missed).toEqual([MIDDLE.name]);
+      expect(body.muse.web.coverage.note).toContain(`${MIDDLE.name} (the route enters it away from the straight line the search was planned from)`);
+    });
+
+    it("a Manila check after a Cebu check doesn't reuse Cebu's search: each province has its own cache entry", async () => {
+      const kv = new MemoryKvStore();
+      const cebuFinding = JSON.stringify({ closures: [closure("Gov. M. Cuenco Ave", SPOT, "https://example.ph/cuenco")] });
+      const meta = fakeMeta({
+        search: [searchReply(cebuFinding), searchReply(JSON.stringify({ closures: [] }))],
+        turns: [textReply("resp_1", pickOf("go_another_way", ["detour"])), textReply("resp_2", pickOf("go", ["plain"]))],
+      });
+      const { handler } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), new MemoryReportStore(), museOn(kv));
+
+      const cebu = await (await handler(demo("banilad-itpark", "none"))).json();
+      const manila = await (await handler(demo("cubao-makati", "none"))).json();
+
+      expect(meta.searchRequests.map((r) => String(r.input).match(/roads in (.+?), Philippines/)![1])).toEqual(["Cebu", "Metro Manila"]);
+      expect(cebu.muse.web.findings.map((f: { place: string }) => f.place)).toEqual(["Gov. M. Cuenco Ave"]);
+      expect(manila.muse.web.findings).toEqual([]);
+      expect(manila.answer.kind).toBe("go");
+      expect(await kv.get(webSearchKey(CEBU_AREA))).not.toBeNull();
+      expect(await kv.get(webSearchKey({ code: "1300000000", name: "Metro Manila" }))).not.toBeNull();
+      expect(await kv.get("lusong:muse:road-closures")).toBeNull();
+    });
+  });
+
+  describe("the Metro Manila demo trip, on its saved Valhalla replies", () => {
+    it("No reports ⇒ Go, on the saved route along EDSA", async () => {
+      const { handler } = handlerAt(NO_ADVISORY);
+      const res = await handler(demo("cubao-makati", "none"));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.trip).toEqual({ id: "cubao-makati", label: "Araneta City Cubao → Makati City Hall" });
+      expect(body.answer.kind).toBe("go");
+      expect(body.route.lengthKm).toBe(9.893);
+      expect(body.route.streets).toContain("EDSA");
+      expect(body.reports).toEqual([]);
+    });
+
+    it("A flooded spot reported on EDSA ⇒ Go another way by the saved detour, the sample labelled a sample", async () => {
+      const { handler, valhallaCalls } = handlerAt(NO_ADVISORY);
+      const body = await (await handler(demo("cubao-makati", "flooded"))).json();
+      expect(body.answer.kind).toBe("go_another_way");
+      expect(body.answer.reason).toContain("EDSA (Epifanio de los Santos Avenue)");
+      expect(body.detour.lengthKm).toBe(9.851);
+      expect(body.detour.streets).toEqual(expect.arrayContaining(["P. Guevarra Street", "Shaw Boulevard"]));
+      expect(body.reports).toHaveLength(1);
+      expect(body.reports[0]).toMatchObject({ id: "sample-quiapo-2024-edsa", sample: true, onRoute: true, onDetour: false });
+      expect(valhallaCalls()).toHaveLength(2);
+    });
+
+    it("offers No reports and A flooded spot reported only; an unclear photo is refused before any request", async () => {
+      expect(scenariosFor("cubao-makati").map((s) => s.label)).toEqual(["No reports", "A flooded spot reported"]);
+      const { handler, calls } = handlerAt(NO_ADVISORY);
+      expect((await handler(demo("cubao-makati", "unclear"))).status).toBe(400);
+      expect(calls).toHaveLength(0);
+    });
+  });
+});
+
+describe("advisory areas for the map (S1, for S3a's layer)", () => {
+  it("adds advisoryAreas from PAGASA's own record and leaves every other field of the reply as it was", async () => {
+    const { handler } = handlerAt(ADVISORY_ACTIVE);
+    const { advisoryAreas, ...rest } = await (await handler(demo("mabolo-cbp", "flooded"))).json();
+    // The whole reply, saved from the merge commit before advisoryAreas existed.
+    expect(rest).toEqual(JSON.parse(read("test/fixtures/commute/mabolo-flooded-advisory-active.reply-f52f847.json")));
+    expect(advisoryAreas).toEqual(JSON.parse(read("test/fixtures/commute/mabolo-flooded-advisory-active.advisory-areas.json")));
+    expect(advisoryAreas[0]).toMatchObject({ kind: "General Flood Advisory (Moderate)", headline: "General Flood Advisory", sent: "2026-10-25T17:27:04+08:00" });
+  });
+
+  it("with no live advisory, advisoryAreas is empty", async () => {
+    const { handler } = handlerAt(NO_ADVISORY);
+    expect((await (await handler(demo("mabolo-cbp", "flooded"))).json()).advisoryAreas).toEqual([]);
   });
 });

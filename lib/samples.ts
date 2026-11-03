@@ -9,6 +9,7 @@ import type { Verdict } from "./verdict";
 export const DEMO_TRIPS = {
   "banilad-itpark": { label: "Banilad → IT Park", from: { lat: 10.346, lon: 123.911 }, to: { lat: 10.3307, lon: 123.9058 } },
   "mabolo-cbp": { label: "Mabolo → Cebu Business Park", from: { lat: 10.3143, lon: 123.9147 }, to: { lat: 10.3162, lon: 123.9059 } },
+  "cubao-makati": { label: "Araneta City Cubao → Makati City Hall", from: { lat: 14.62291, lon: 121.05326 }, to: { lat: 14.57049, lon: 121.02722 } },
 } as const satisfies Record<string, { label: string; from: Point; to: Point }>;
 
 export type DemoTripId = keyof typeof DEMO_TRIPS;
@@ -16,7 +17,7 @@ export type DemoTripId = keyof typeof DEMO_TRIPS;
 export const SCENARIOS = [
   { id: "none", label: "No reports" },
   { id: "flooded", label: "A flooded spot reported" },
-  { id: "unclear", label: "A photo Lusong can't call" },
+  { id: "unclear", label: "A photo Lusong can't call", trips: ["banilad-itpark", "mabolo-cbp"] },
   // Only Banilad → IT Park has a saved Valhalla reply finding no way around its spot.
   { id: "no_way_around", label: "A flooded spot with no way around", trips: ["banilad-itpark"] },
 ] as const satisfies readonly { id: string; label: string; trips?: readonly DemoTripId[] }[];
@@ -173,6 +174,32 @@ export const SAMPLE_SPECS: readonly SampleSpec[] = [
     credit: "Michael Peronce (User:Mikeee 07), CC BY-SA 4.0, via Wikimedia Commons",
     sourceUrl: "https://commons.wikimedia.org/wiki/File:Quiapo,_Manila_Floods_Habagat-Carina_2024-2.jpg",
     recorded: { run: "acceptance-runs/2026-10-28T19-23-25-915Z", file: "quiapo-2.jpg", draw: 1 },
+  },
+  {
+    id: "sample-quiapo-2024-edsa",
+    trip: "cubao-makati",
+    scenarios: ["flooded"],
+    // A point on the saved plain route (Valhalla, 2026-11-03 21:21 PHT), in its EDSA stretch, named from that reply's
+    // street names. /locate (21:33 PHT) finds EDSA's two carriageways, two ways, at 0 m, so it has no single way id. The
+    // 21:22 PHT probe excluded the 330 m box around it and Valhalla found a way around by P. Guevarra Street and Shaw
+    // Boulevard.
+    place: "EDSA (Epifanio de los Santos Avenue)",
+    at: { lat: 14.588074, lon: 121.056639 },
+    wayId: null,
+    ageMin: 30,
+    verdict: {
+      kind: "measured",
+      rangeCm: { low: 5, high: 72 },
+      passability: "NPATV",
+      confidence: "low",
+      readingsComplete: true,
+      decidedBy: { label: "P2", landmark: "mid_thigh", interval: { low: 50, high: 72 } },
+      readingsUsed: ["P1", "P2", "P4", "P6"],
+    },
+    origin: "Quiapo, City of Manila, during the Habagat and Typhoon Carina (Gaemi) floods of July 2024",
+    credit: "Michael Peronce (User:Mikeee 07), CC BY-SA 4.0, via Wikimedia Commons",
+    sourceUrl: "https://commons.wikimedia.org/wiki/File:Quiapo,_Manila_Floods_Habagat-Carina_2024-1.jpg",
+    recorded: { run: "acceptance-runs/2026-10-28T19-23-25-915Z", file: "quiapo-1.jpg", draw: 1 },
   },
 ];
 

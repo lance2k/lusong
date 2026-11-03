@@ -28,7 +28,7 @@ export function depthWords(v: Verdict): string {
 }
 
 export const MMDA_CREDIT =
-  "The passability lines are from Metro Manila's MMDA flood gauge. Cebu has no gauge of its own that Lusong found.";
+  "The passability lines are from Metro Manila's MMDA flood gauge, which Lusong uses for every trip.";
 
 export function passabilityLine(v: Verdict): string {
   if (v.kind === "no_flood") return "No flood water in the photo";

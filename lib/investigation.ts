@@ -1,10 +1,11 @@
-import type { AdvisoryReading } from "./advisory";
+import type { RouteAdvisory } from "./advisory-snapshot";
 import { decideAnswer, type Answer, type AnswerKind, type Point, type Report, type RouteCandidate } from "./answer";
 import { ATTEMPTS_PER_CALL, MUSE_INPUT_MICROS_PER_TOKEN, MUSE_OUTPUT_MICROS_PER_TOKEN } from "./budget";
 import { detourAvoids } from "./detour";
 import { MetaApiError, type Meter } from "./meta";
 import { respond, type FunctionCall, type FunctionTool, type SparkReply } from "./spark-responses";
-import { inMetroCebu, SEARCH_RESERVE_MICROS, type WebEvidence, type WebFinding, type WebPlan } from "./web-search";
+import { inServerTripBound } from "./province-index";
+import { SEARCH_RESERVE_MICROS, type WebEvidence, type WebFinding, type WebPlan } from "./web-search";
 
 export type { WebEvidence, WebFinding } from "./web-search";
 
@@ -12,7 +13,7 @@ export type { WebEvidence, WebFinding } from "./web-search";
  * Muse Spark's investigation of one commute check (lance2k/lusong#7, plan review 🔴P5/P6/P8).
  *
  * The check's evidence is gathered here deterministically, whatever the model does: the reports along every route that
- * is judged, through `sources`, and the advisory the caller read. The model's tool calls only add to it: a way around
+ * is judged, through `sources`, and PAGASA's advisories as they bear on each of those routes. The model's tool calls only add to it: a way around
  * spots it names, judged by the same rules on deterministically gathered reports. The answer rules pick the answer; the
  * model picks the evidence that explains it, which Lusong describes in its own words below the rules' reason.
  */
@@ -103,6 +104,8 @@ export type InvestigationResult =
   | {
       ok: true;
       answer: Answer;
+      /** PAGASA's advisories on the route the answer is about: the plain way, or the detour for Go another way. */
+      advisory: RouteAdvisory;
       /** Every report the rules were given: web findings only when located and dated today. */
       reports: Report[];
       detours: Detour[];
@@ -115,7 +118,8 @@ export type InvestigationResult =
 export interface InvestigationInput {
   /** The plain route, already joined to the trip's ends. */
   plainLine: Point[];
-  advisory: AdvisoryReading;
+  /** PAGASA's advisories as they bear on one route line: every judged route is judged under its own (S1P-8). */
+  advisoryFor: (line: readonly Point[]) => RouteAdvisory;
   rainingHere: boolean;
   now: Date;
   /** Epoch ms by which every model call must have finished. */
@@ -181,7 +185,7 @@ const TOOLS: FunctionTool[] = [
   {
     type: "function",
     name: "read_advisory",
-    description: "PAGASA's General Flood Advisory for Cebu, as Lusong read it for this check.",
+    description: "PAGASA's flood, rainfall and tropical cyclone advisories covering each route of this check, as Lusong read them.",
     parameters: { type: "object", properties: {} },
   },
   {
@@ -198,7 +202,7 @@ const TOOLS: FunctionTool[] = [
     type: "function",
     name: "route_around",
     description:
-      "Ask Lusong to try one more way around up to three spots in Metro Cebu that you think are flooded or closed. " +
+      "Ask Lusong to try one more way around up to three spots in the Philippines that you think are flooded or closed. " +
       "Lusong also avoids every spot already blocked, gathers the reports along the new way and judges it by its own rules.",
     parameters: {
       type: "object",
@@ -214,7 +218,7 @@ const TOOLS: FunctionTool[] = [
 ];
 
 const INSTRUCTIONS = [
-  "You help Lusong explain a commute check to a motorbike rider in Metro Cebu.",
+  "You help Lusong explain a commute check to a motorbike rider in the Philippines.",
   "Lusong's rules have already picked the answer and you cannot change it.",
   "Call read_advisory and reports_near_route to see the evidence Lusong gathered.",
   "If the usual way is blocked and you know of another flooded or closed spot, you may call route_around once.",
@@ -257,24 +261,14 @@ function phtClock(iso: string): string {
   return new Date(Date.parse(iso) + 8 * 3_600_000).toISOString().slice(0, 16).replace("T", " ") + " PHT";
 }
 
-function advisoryView(advisory: AdvisoryReading) {
-  switch (advisory.state) {
-    case "active": {
-      const a = advisory.advisory;
-      return {
-        state: "active",
-        headline: a.event ?? a.headline,
-        rain_forecast: a.rainForecast,
-        rivers: a.riversForCebu,
-        sent: phtClock(a.sent),
-        expires: phtClock(a.expires),
-      };
-    }
-    case "none":
-      return { state: "none" };
-    case "unreadable":
-      return { state: "unreadable", rule: "Lusong couldn't read PAGASA's feed, so it counts an advisory as active." };
+function advisoryView(advisory: RouteAdvisory) {
+  const products = advisory.covering
+    .filter((p) => p.counts)
+    .map((p) => ({ event: p.event, areas: p.areas, rain_forecast: p.rainForecast, rivers: p.rivers, sent: phtClock(p.sent), expires: phtClock(p.expires) }));
+  if (advisory.state === "unreadable") {
+    return { state: "unreadable", rule: "Lusong couldn't read all of PAGASA's advisories, so it counts one as active.", products };
   }
+  return advisory.state === "active" ? { state: "active", products } : { state: "none" };
 }
 
 function says(report: Report): string {
@@ -287,6 +281,7 @@ function says(report: Report): string {
 class Evidence {
   readonly reports = new Map<string, Report>();
   readonly detours: Detour[] = [];
+  private readonly advisories = new Map<readonly Point[], RouteAdvisory>();
 
   constructor(
     private readonly input: InvestigationInput,
@@ -297,13 +292,22 @@ class Evidence {
     for (const r of [...reports, ...this.webReports]) if (!this.reports.has(r.id)) this.reports.set(r.id, r);
   }
 
+  advisoryOn(line: readonly Point[]): RouteAdvisory {
+    let advisory = this.advisories.get(line);
+    if (!advisory) this.advisories.set(line, (advisory = this.input.advisoryFor(line)));
+    return advisory;
+  }
+
   answer(): Answer {
     const candidates: RouteCandidate[] = this.detours.map((d) => ({ id: d.id, line: d.line }));
     return decideAnswer({
       plain: { id: "plain", line: this.input.plainLine },
       detours: candidates,
       reports: [...this.reports.values()],
-      advisory: this.input.advisory.state,
+      advisory: {
+        plain: this.advisoryOn(this.input.plainLine).state,
+        detours: Object.fromEntries(this.detours.map((d) => [d.id, this.advisoryOn(d.line).state])),
+      },
       rainingHere: this.input.rainingHere,
       now: this.input.now,
     });
@@ -376,7 +380,11 @@ export async function investigate(input: InvestigationInput): Promise<Investigat
     switch (call.name) {
       case "read_advisory":
         toolCalls.push({ name: call.name, outcome: "read" });
-        return { id: "advisory", ...advisoryView(input.advisory) };
+        return {
+          id: "advisory",
+          ...advisoryView(evidence.advisoryOn(input.plainLine)),
+          other_routes: evidence.detours.map((d) => ({ route: d.id, ...advisoryView(evidence.advisoryOn(d.line)) })),
+        };
       case "reports_near_route": {
         const routeId = typeof args.route === "string" ? args.route : "";
         const answer = evidence.answer();
@@ -415,8 +423,8 @@ export async function investigate(input: InvestigationInput): Promise<Investigat
         if (!spots || spots.length === 0 || spots.length > ROUTE_AROUND_MAX_SPOTS) {
           return refuse("unreadable spots", `give one to ${ROUTE_AROUND_MAX_SPOTS} spots as {lat, lon}`);
         }
-        if (!spots.every((p) => typeof p === "object" && p !== null && inMetroCebu(p))) {
-          return refuse("spot outside Metro Cebu", "every spot must be a {lat, lon} in Metro Cebu");
+        if (!spots.every((p) => typeof p === "object" && p !== null && inServerTripBound(p))) {
+          return refuse("spot outside the Philippines", "every spot must be a {lat, lon} in the Philippines");
         }
         if (input.deadline - Date.now() < ROUTE_AROUND_MIN_MS) {
           toolCalls.push({ name: call.name, outcome: "no time left" });
@@ -481,6 +489,7 @@ export async function investigate(input: InvestigationInput): Promise<Investigat
   return {
     ok: true,
     answer,
+    advisory: evidence.advisoryOn(evidence.lineOf(answer.route) ?? input.plainLine),
     reports: [...evidence.reports.values()],
     detours: evidence.detours,
     web: input.web,

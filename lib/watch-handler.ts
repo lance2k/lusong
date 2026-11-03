@@ -6,7 +6,8 @@ import { channelFromEnv, type Channel } from "./channel";
 import { clientIp } from "./check-handler";
 import { COMMUTE_RESERVE_MICROS, type ScheduledCheck } from "./commute-handler";
 import { readBody } from "./deadline";
-import { inTripBound } from "./trip-bound";
+import { inServerTripBound } from "./province-index";
+import { endsTooFarApart } from "./router";
 import { LINK_CODE_TTL_MS, watchStoreFromEnv, type WatchRecord, type WatchStore, type WatchTrip } from "./watch-store";
 import { runTick, switchOff, type TickSummary } from "./watch-tick";
 import { hhmm, parseWindow } from "./watch-window";
@@ -42,7 +43,7 @@ function pointFrom(value: unknown): Point | null {
   if (typeof value !== "object" || value === null) return null;
   const { lat, lon } = value as Record<string, unknown>;
   if (typeof lat !== "number" || typeof lon !== "number" || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-  return inTripBound({ lat, lon }) ? { lat, lon } : null;
+  return inServerTripBound({ lat, lon }) ? { lat, lon } : null;
 }
 
 type WatchRequest =
@@ -56,7 +57,7 @@ function parseRequest(body: unknown): WatchRequest | null {
     const from = pointFrom(b.from);
     const to = pointFrom(b.to);
     const window = parseWindow(b.window);
-    return from && to && window ? { action: "on", trip: { from, to }, window } : null;
+    return from && to && window && !endsTooFarApart(from, to) ? { action: "on", trip: { from, to }, window } : null;
   }
   if ((b.action === "status" || b.action === "link" || b.action === "off") && typeof b.watcher === "string" && TOKEN.test(b.watcher)) {
     return { action: b.action, token: b.watcher };
@@ -93,7 +94,7 @@ export function makeWatchHandler(deps: {
     } catch {
       parsed = null;
     }
-    if (!parsed) return fail(400, "Send a trip in Metro Cebu with a window of up to 4 hours in one day, or a watcher to ask about.");
+    if (!parsed) return fail(400, "Send a trip in the Philippines with a window of up to 4 hours in one day, or a watcher to ask about.");
 
     const store = deps.store();
     const bot = deps.botUsername();

@@ -5,6 +5,7 @@ import {
   decideAnswer,
   REPORT_LIFETIME_MS,
   type AdvisoryState,
+  type RouteAdvisories,
   type Point,
   type Report,
   type ReportReading,
@@ -76,7 +77,7 @@ const clear = (opts: Parameters<typeof photoReport>[1] = {}) => photoReport({ ki
 
 function answerFor(
   reports: Report[],
-  conditions: { advisory?: AdvisoryState; rainingHere?: boolean; detours?: RouteCandidate[]; plain?: RouteCandidate } = {},
+  conditions: { advisory?: AdvisoryState | RouteAdvisories; rainingHere?: boolean; detours?: RouteCandidate[]; plain?: RouteCandidate } = {},
 ) {
   return decideAnswer({
     plain: conditions.plain ?? PLAIN,
@@ -287,11 +288,12 @@ describe("under rain, Go needs every point of the route within 500 m (along it) 
   });
 });
 
+const detourEast = (id: string, eastM: number): RouteCandidate => ({
+  id,
+  line: [START, offset(START, 0, eastM), offset(START, 2_500, eastM), offset(START, 2_500)],
+});
+
 describe("each route is judged the same way; the answer comes from the plain route and its detours", () => {
-  const detourEast = (id: string, eastM: number): RouteCandidate => ({
-    id,
-    line: [START, offset(START, 0, eastM), offset(START, 2_500, eastM), offset(START, 2_500)],
-  });
   const onDetour = (eastM: number) => offset(START, 1_250, eastM);
 
   it("plain blocked and no detour found ⇒ Wait, saying no way around was found", () => {
@@ -342,12 +344,39 @@ describe("each route is judged the same way; the answer comes from the plain rou
   });
 });
 
+describe("each route judged under its own advisory (S1P-8)", () => {
+  it("a dry plain way and a detour under an advisory: the detour needs its own clear cover, so No one knows", () => {
+    const result = answerFor([blocker()], { detours: [detourEast("d1", 300)], advisory: { plain: "none", detours: { d1: "active" } } });
+    expect(result.answer).toBe("no_one_knows");
+    expect(result.routes.map((r) => [r.routeId, r.state])).toEqual([
+      ["plain", "blocked"],
+      ["d1", "unknown"],
+    ]);
+  });
+
+  it("a plain way under an advisory and a dry detour: Go another way on the detour, nothing reported against it", () => {
+    const result = answerFor([blocker()], { detours: [detourEast("d1", 300)], advisory: { plain: "active", detours: { d1: "none" } } });
+    expect([result.answer, result.route]).toEqual(["go_another_way", "d1"]);
+    expect(result.reason).toContain("Nothing is reported against the other way.");
+  });
+
+  it("a plain way under an advisory with nothing reported is No one knows even when its detour is dry", () => {
+    expect(answerFor([], { advisory: { plain: "active", detours: {} } }).answer).toBe("no_one_knows");
+    expect(answerFor([], { advisory: { plain: "none", detours: {} } }).answer).toBe("go");
+  });
+
+  it("a detour the map doesn't name counts as unreadable, the lean-safe side", () => {
+    const result = answerFor([blocker()], { detours: [detourEast("d1", 300)], advisory: { plain: "none", detours: {} } });
+    expect(result.routes[1].state).toBe("unknown");
+  });
+});
+
 describe("the reason and the thin-evidence note", () => {
   it("rain with no reports says why in plain words", () => {
     expect(answerFor([], { advisory: "active" }).reason).toBe(
-      "PAGASA's flood advisory for Cebu is active, and nobody has reported your way.",
+      "A PAGASA advisory covers your way, and nobody has reported your way.",
     );
-    expect(answerFor([], { advisory: "unreadable" }).reason).toContain("couldn't read PAGASA's flood advisory");
+    expect(answerFor([], { advisory: "unreadable" }).reason).toContain("couldn't read all of PAGASA's advisories");
     expect(answerFor([], { rainingHere: true }).reason).toBe("You said it's raining here, and nobody has reported your way.");
   });
 

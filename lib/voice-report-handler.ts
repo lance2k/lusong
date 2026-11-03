@@ -7,7 +7,7 @@ import { phtTime, voiceHeard } from "./commute-words";
 import { beforeDeadline, readBody } from "./deadline";
 import { locateSpot } from "./locate";
 import { MetaApiError, transcribe } from "./meta";
-import { inMetroCebu } from "./metro-cebu";
+import { inServerTripBound } from "./province-index";
 import { reportStoreFromEnv, toReport, type ReportStore, type Saved, type StoredVoiceReport } from "./report-store";
 import { durationWords, type Timing } from "./report-handler";
 import type { ValhallaGate } from "./router";
@@ -145,7 +145,7 @@ export function makeVoiceReportHandler(deps: {
     }
     const at = pinFrom(form);
     if (!at) return fail(400, "Lusong needs your phone's location to place the report.");
-    if (!inMetroCebu(at)) return fail(400, "Lusong takes reports from streets in Metro Cebu only.");
+    if (!inServerTripBound(at)) return fail(400, "Lusong takes reports from streets in the Philippines only.");
     // A language the page doesn't offer, Bisaya included while it is switched off, is refused here.
     const language = voiceLanguageFrom(form.get("language"));
     if (!language) return fail(400, PICK_A_LANGUAGE);
