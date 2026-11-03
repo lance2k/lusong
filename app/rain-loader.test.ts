@@ -90,4 +90,33 @@ describe("the rain loader", () => {
     await h.flush();
     expect(h.state().layer).toBeNull();
   });
+
+  it("cancels B the moment the view is back at A, before the debounce runs load (round 2)", async () => {
+    const h = harness();
+    h.loader.setView(A);
+    h.loader.load();
+    h.pending[0].answer(okReply(14.6, 121, 5));
+    await h.flush();
+    const shownForA = h.state().layer;
+    h.loader.setView(B);
+    h.loader.load();
+    h.loader.setView(A); // no load(): the debounce hasn't fired yet
+    expect(h.pending[1].signal.aborted).toBe(true);
+    expect(h.state().loading).toBe(false);
+    h.pending[1].answer(okReply(10.3, 123.9, 40));
+    await h.flush();
+    expect(h.state().layer).toBe(shownForA);
+    h.loader.load();
+    expect(h.pending).toHaveLength(2); // A is covered: nothing is asked again
+  });
+
+  it("settles a reply whose model time isn't a date, with loading cleared", async () => {
+    const h = harness();
+    h.loader.setView(A);
+    h.loader.load();
+    h.pending[0].answer({ ...okReply(14.6, 121, 5), modelTime: "invalid-date" });
+    await h.flush();
+    expect(h.state().loading).toBe(false);
+    expect(h.state().layer?.circles.length).toBeGreaterThan(0);
+  });
 });

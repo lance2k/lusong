@@ -14,18 +14,18 @@ export type { RainState } from "./rain-loader";
 export function useRain(enabled: boolean): RainState & { onView: (view: Bbox) => void } {
   const [state, setState] = useState<RainState>({ layer: null, loading: false });
   const view = useRef<Bbox | null>(null);
-  const schedule = useRef<(() => void) | null>(null);
+  const schedule = useRef<((view: Bbox) => void) | null>(null);
 
   useEffect(() => {
     if (!enabled) return;
     const loader = createRainLoader({ fetch: (input, init) => fetch(input, init), onState: setState });
-    const load = () => {
-      if (view.current) loader.setView(view.current);
-      loader.load();
+    if (view.current) loader.setView(view.current);
+    const debounced = debounce(() => loader.load(), RAIN_DEBOUNCE_MS);
+    schedule.current = (next: Bbox) => {
+      loader.setView(next);
+      debounced.call();
     };
-    const debounced = debounce(load, RAIN_DEBOUNCE_MS);
-    schedule.current = debounced.call;
-    load();
+    loader.load();
     return () => {
       debounced.cancel();
       loader.stop();
@@ -35,7 +35,7 @@ export function useRain(enabled: boolean): RainState & { onView: (view: Bbox) =>
 
   const onView = useCallback((next: Bbox) => {
     view.current = next;
-    schedule.current?.();
+    schedule.current?.(next);
   }, []);
 
   return { ...state, loading: enabled && state.loading, layer: enabled ? state.layer : null, onView };

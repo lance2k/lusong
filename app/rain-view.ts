@@ -51,7 +51,7 @@ export function rainReplyOf(body: unknown): RainReply {
   const points = b.points!.filter(
     (p) => typeof p?.lat === "number" && typeof p.lon === "number" && typeof p.mm === "number" && Number.isFinite(p.mm),
   );
-  return { ...(b as RainReply), points, modelTime: typeof b.modelTime === "string" ? b.modelTime : null };
+  return { ...(b as RainReply), points, modelTime: typeof b.modelTime === "string" && Number.isFinite(Date.parse(b.modelTime)) ? b.modelTime : null };
 }
 
 export interface Debounced {

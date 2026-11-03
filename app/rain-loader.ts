@@ -8,7 +8,10 @@ export interface RainState {
 }
 
 export interface RainLoader {
-  /** Records the map's current view; the next `load` plans against it. */
+  /**
+   * Records the map's current view at once, before any debounce: a view back inside the box shown cancels the request
+   * out for elsewhere now, so its reply can't land in the gap. The next `load` plans against this view.
+   */
   setView(view: Bbox): void;
   /** Fetches when the view has left the last good box; when it hasn't, drops any request still out for another box. */
   load(): void;
@@ -35,6 +38,7 @@ export function createRainLoader(deps: { fetch: typeof fetch; onState: (next: (s
   return {
     setView(next) {
       view = next;
+      if (!rainFetchPlan({ enabled: true, view, fetched })) cancel();
     },
     load() {
       const box = rainFetchPlan({ enabled: true, view, fetched });
@@ -51,8 +55,16 @@ export function createRainLoader(deps: { fetch: typeof fetch; onState: (next: (s
         request = null;
         const reply = rainReplyOf(body);
         // Only a good reply makes the box reusable; any other is asked again on the next move.
-        fetched = reply.status === "ok" ? box : null;
-        deps.onState(() => ({ layer: buildRainLayer(reply), loading: false }));
+        let layer: RainLayer;
+        let usable = reply.status === "ok";
+        try {
+          layer = buildRainLayer(reply);
+        } catch {
+          usable = false;
+          layer = buildRainLayer(rainReplyOf(null));
+        }
+        fetched = usable ? box : null;
+        deps.onState(() => ({ layer, loading: false }));
       };
       deps
         .fetch(rainUrl(box), { signal: controller.signal })
