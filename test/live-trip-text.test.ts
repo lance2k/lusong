@@ -76,7 +76,8 @@ it.skipIf(process.env.LUSONG_LIVE !== "1")(
         row.error = err instanceof OutputCapError ? "output cap" : err instanceof MetaApiError ? err.message : err instanceof Error ? err.name : "error";
       }
       const usage = meter.usage();
-      spentMicros += costMicros(usage);
+      // A failed or unmetered attempt may still be billed: the cap counts the whole reservation, as settle does.
+      spentMicros += usage.complete && !row.error ? costMicros(usage) : Math.max(costMicros(usage), TRIP_TEXT_RESERVE_MICROS);
       row.usage = { inputTokens: usage.museInputTokens, outputTokens: usage.museOutputTokens, complete: usage.complete, micros: costMicros(usage) };
       rows.push(row);
     }
@@ -87,6 +88,7 @@ it.skipIf(process.env.LUSONG_LIVE !== "1")(
       bothEndsInCandidates: resolved,
       bothEndsFirstCandidate: top,
       leaveAtRight: rows.filter((r) => r.leaveAtMatch === true).length,
+      /** Metered cost, with the whole reservation counted for any text whose usage was incomplete. */
       spentMicros,
       spentUsd: spentMicros / 1e6,
       reserveMicrosPerText: TRIP_TEXT_RESERVE_MICROS,

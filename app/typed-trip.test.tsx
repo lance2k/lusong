@@ -100,6 +100,16 @@ describe("the reply, checked again on the phone", () => {
     expect(reply).toEqual({ status: "ok", from: [TALAMBAN, TALAMBAN_HALL, TALAMBAN], to: [IT_PARK], leave_at: null });
   });
 
+  it("drops one candidate off its shape alone, keeping the rest (S5-2)", () => {
+    const bad = { ...TALAMBAN, id: 7 };
+    expect(tripTextReplyOf({ status: "ok", from: [bad, TALAMBAN_HALL], to: [IT_PARK], leave_at: "07:00" })).toEqual({
+      status: "ok",
+      from: [TALAMBAN_HALL],
+      to: [IT_PARK],
+      leave_at: "07:00",
+    });
+  });
+
   it("reads anything off its shape as the model message", () => {
     expect(tripTextReplyOf(null)).toEqual({ status: "failed", reason: "model" });
     expect(tripTextReplyOf({ status: "ok", from: [], to: [IT_PARK] })).toEqual({ status: "failed", reason: "model" });

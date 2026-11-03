@@ -1,7 +1,15 @@
 import type { Point } from "../lib/answer";
 import type { Place } from "../lib/built-in-places";
 import { inTripBound } from "../lib/trip-bound";
-import { leaveAtOf, TRIP_TEXT_CANDIDATES, TRIP_TEXT_REASONS, type TripTextReason, type TripTextReply } from "../lib/trip-text-words";
+import {
+  CANDIDATE_AREA_MAX,
+  CANDIDATE_NAME_MAX,
+  leaveAtOf,
+  TRIP_TEXT_CANDIDATES,
+  TRIP_TEXT_REASONS,
+  type TripTextReason,
+  type TripTextReply,
+} from "../lib/trip-text-words";
 import type { WindowInput } from "./watcher";
 
 /** The typed box: nothing here is the trip until the rider taps Use this trip. */
@@ -63,15 +71,19 @@ function placeOf(value: unknown): Place | null {
   if (typeof value !== "object" || value === null) return null;
   const { id, name, area, lat, lon, source } = value as Record<string, unknown>;
   if (typeof id !== "string" || typeof name !== "string" || typeof area !== "string" || !name.trim()) return null;
-  if (name.length > 80 || area.length > 200 || (source !== "osm" && source !== "built-in")) return null;
+  if (name.length > CANDIDATE_NAME_MAX || area.length > CANDIDATE_AREA_MAX || (source !== "osm" && source !== "built-in")) return null;
   if (typeof lat !== "number" || typeof lon !== "number" || !Number.isFinite(lat) || !Number.isFinite(lon) || !inTripBound({ lat, lon })) return null;
   return { id, name, area, lat, lon, source };
 }
 
+/** The candidates that pass, at most 3; one off its shape is dropped alone. Null when none pass. */
 function placesOf(value: unknown): Place[] | null {
-  if (!Array.isArray(value) || value.length === 0) return null;
-  const places = value.slice(0, TRIP_TEXT_CANDIDATES).map(placeOf);
-  return places.every((p): p is Place => p !== null) ? places : null;
+  if (!Array.isArray(value)) return null;
+  const places = value
+    .map(placeOf)
+    .filter((p): p is Place => p !== null)
+    .slice(0, TRIP_TEXT_CANDIDATES);
+  return places.length > 0 ? places : null;
 }
 
 /** The server's reply, checked again on the phone: anything off its shape reads as the model being unavailable. */

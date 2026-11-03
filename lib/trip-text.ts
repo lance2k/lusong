@@ -1,8 +1,8 @@
 import { ATTEMPTS_PER_CALL, MUSE_INPUT_MICROS_PER_TOKEN, MUSE_OUTPUT_MICROS_PER_TOKEN } from "./budget";
 import { chatJson, MetaApiError, type Meter } from "./meta";
-import { searchPlaces, type Place, type PlacesDeps, type PlacesReply } from "./places";
+import { PlaceCache, searchPlaces, type Place, type PlacesDeps, type PlacesReply } from "./places";
 import { inServerTripBound } from "./province-index";
-import { leaveAtOf, TRIP_TEXT_CANDIDATES, TRIP_TEXT_MAX, TRIP_TEXT_MIN, type TripTextReply } from "./trip-text-words";
+import { CANDIDATE_AREA_MAX, CANDIDATE_NAME_MAX, leaveAtOf, TRIP_TEXT_CANDIDATES, TRIP_TEXT_MAX, TRIP_TEXT_MIN, type TripTextReply } from "./trip-text-words";
 import { placeLabel } from "./voice-claim";
 
 /** The typed text as sent: control characters dropped, spaces collapsed; null outside 3–160 characters. */
@@ -91,17 +91,19 @@ export const readTripText: ReadTrip = async (text, opts) => {
 /** At most three of the place search's own places for one end, each one a trip end the check would take. */
 export function candidatesOf(reply: PlacesReply): Place[] {
   return reply.places
-    .filter((p) => inServerTripBound(p))
+    .filter((p) => inServerTripBound(p) && p.name.length <= CANDIDATE_NAME_MAX && p.area.length <= CANDIDATE_AREA_MAX)
     .slice(0, TRIP_TEXT_CANDIDATES)
     .map(({ id, name, area, lat, lon, source }) => ({ id, name, area, lat, lon, source }));
 }
 
 /**
  * Both ends through S2's place search, and the reply built from its places only: the reading's strings are passed to
- * the search and to nothing else.
+ * the search and to nothing else. The search's cache is bypassed, since its keys are the query words: a cache that
+ * holds nothing keeps none of them.
  */
-export async function resolveTrip(reading: TripReading, places: PlacesDeps): Promise<TripTextReply> {
+export async function resolveTrip(reading: TripReading, deps: PlacesDeps): Promise<TripTextReply> {
   if (!reading.from || !reading.to) return { status: "failed", reason: "no_place" };
+  const places = { ...deps, cache: new PlaceCache(0) };
   const [fromReply, toReply] = await Promise.all([searchPlaces(reading.from, null, places), searchPlaces(reading.to, null, places)]);
   const from = candidatesOf(fromReply);
   const to = candidatesOf(toReply);

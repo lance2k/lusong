@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { countStoreFromEnv, MemoryCountStore, UpstashCountStore, addressLimitKey, createAddressLimit } from "./address-limit";
 import { createBudget, ipKeyFor, MemoryBudgetStore, RESERVE_MICROS, type Budget } from "./budget";
 import { Meter, MetaApiError } from "./meta";
-import { PlaceCache, type PlacesDeps } from "./places";
+import { PlaceCache, placesFromPhoton, type PlacesDeps } from "./places";
 import { TRIP_BOUND } from "./trip-bound";
 import {
   candidatesOf,
@@ -18,6 +18,7 @@ import {
 } from "./trip-text";
 import { makeTripTextHandler, TRIP_TEXT_LIMIT_PREFIX } from "./trip-text-handler";
 import { TRIP_TEXT_PER_IP_DAILY } from "./trip-text-words";
+import { tripTextReplyOf } from "../app/typed-trip";
 
 const TEXT = "Talamban to IT Park, leaving around 7";
 
@@ -173,6 +174,39 @@ describe("resolving both ends through the place search", () => {
     expect(await resolveTrip({ from: null, to: "IT Park", leaveAt: null }, placesWith(fetch))).toEqual({ status: "failed", reason: "no_place" });
     const down = await resolveTrip({ from: "Qwzx Plaza", to: "IT Park", leaveAt: null }, placesWith(fetch, "unavailable"));
     expect(down).toEqual({ status: "failed", reason: "search" });
+  });
+});
+
+describe("what resolving keeps (S5 duck round 1)", () => {
+  it("leaves no query words in the place search's cache, and asks Photon afresh each time (S5-1)", async () => {
+    const { fetch, queries } = photonFetch(PHOTON);
+    const cache = new PlaceCache();
+    const deps: PlacesDeps = { fetch, gate: { acquire: async () => "ok" }, cache, bound: TRIP_BOUND };
+    for (let i = 0; i < 2; i++) expect((await resolveTrip({ from: "Talamban", to: "IT Park", leaveAt: null }, deps)).status).toBe("ok");
+    expect(cache.size).toBe(0);
+    expect(queries).toHaveLength(4);
+  });
+
+  it("a Photon label composed from a house number and a long street, with a long area, reaches the page whole (S5-2)", () => {
+    const street = `${"Archbishop Reyes Avenue ".repeat(4)}Extension`.slice(0, 80);
+    const long = (k: string) => `${k} ${"x".repeat(80)}`.slice(0, 80);
+    const [composed] = placesFromPhoton(
+      {
+        features: [
+          {
+            geometry: { type: "Point", coordinates: [123.9061, 10.3301] },
+            properties: { osm_type: "N", osm_id: 77, housenumber: "1234", street, district: long("Lahug"), city: long("Cebu City"), county: long("Cebu"), countrycode: "PH" },
+          },
+        ],
+      },
+      TRIP_BOUND,
+    );
+    expect(composed.name.length).toBeGreaterThan(80);
+    expect(composed.area.length).toBeGreaterThan(200);
+    const other = { id: "osm:N3", name: "Cebu IT Park Gate", area: "Cebu City", lat: 10.3301, lon: 123.9061, source: "osm" as const };
+    const from = candidatesOf({ status: "ok", places: [composed] });
+    expect(from).toEqual([composed]);
+    expect(tripTextReplyOf({ status: "ok", from, to: [other], leave_at: null })).toEqual({ status: "ok", from: [composed], to: [other], leave_at: null });
   });
 });
 

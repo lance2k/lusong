@@ -5,6 +5,12 @@ export const TRIP_TEXT_MIN = 3;
 export const TRIP_TEXT_MAX = 160;
 /** Candidates the reply carries for each end. */
 export const TRIP_TEXT_CANDIDATES = 3;
+/**
+ * The longest name and area a candidate may carry, on the server and the phone alike. Photon's labels (lib/places.ts)
+ * reach 161 characters for a house number and street, and 244 for three area parts.
+ */
+export const CANDIDATE_NAME_MAX = 170;
+export const CANDIDATE_AREA_MAX = 250;
 /** Typed trips one address may send per UTC day, apart from its daily checks. */
 export const TRIP_TEXT_PER_IP_DAILY = 20;
 
