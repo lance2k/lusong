@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { admit } from "./admission";
 import { counts, REPORT_LIFETIME_MS, roleOf, type Point, type Role } from "./answer";
-import { budgetFromEnv, MUSE_INPUT_MICROS_PER_TOKEN, MUSE_OUTPUT_MICROS_PER_TOKEN, TRANSCRIBE_MICROS_PER_SECOND, type Budget } from "./budget";
+import { budgetFromEnv, MUSE_INPUT_MICROS_PER_TOKEN, MUSE_OUTPUT_MICROS_PER_TOKEN, TRANSCRIBE_MICROS_PER_SECOND, type Budget, type RefusalReason } from "./budget";
 import { clientIp } from "./check-handler";
 import { phtTime, voiceHeard } from "./commute-words";
 import { beforeDeadline, readBody } from "./deadline";
@@ -11,7 +11,7 @@ import { inServerTripBound } from "./province-index";
 import { reportStoreFromEnv, toReport, type ReportStore, type Saved, type StoredVoiceReport } from "./report-store";
 import { durationWords, type Timing } from "./report-handler";
 import type { ValhallaGate } from "./router";
-import { PICK_A_LANGUAGE, voiceLanguageFrom } from "./voice-language";
+import { PICK_A_LANGUAGE, voiceLanguageFrom, type VoiceLanguage } from "./voice-language";
 import {
   AUDIO_CLAIM_INPUT_TOKEN_BOUND,
   AUDIO_CLAIM_MAX_COMPLETION_TOKENS,
@@ -21,7 +21,7 @@ import {
   VOICE_CLAIM_MAX_COMPLETION_TOKENS,
   type VoiceClaim,
 } from "./voice-claim";
-import { MAX_VOICE_FILE_BYTES, MAX_VOICE_MS, parseVoiceWav, wavFromPcm } from "./wav";
+import { MAX_VOICE_FILE_BYTES, MAX_VOICE_MS, parseVoiceWav, wavFromPcm, type VoiceClip } from "./wav";
 
 /** Voice Transcribe's language hint (dev.meta.ai/docs/speech-to-text: a list of language names). */
 const TRANSCRIBE_LANGUAGES = ["Tagalog", "English"] as const;
@@ -78,7 +78,7 @@ export interface VoiceReportView {
 }
 
 /** `unknown`: the save was sent but its answer never came, so it may or may not have been written. */
-type StoredAs = boolean | "unknown";
+export type StoredAs = boolean | "unknown";
 
 function viewOf(report: StoredVoiceReport, now: Date, stored: StoredAs): VoiceReportView {
   const asRule = toReport(report);
@@ -108,76 +108,74 @@ function viewOf(report: StoredVoiceReport, now: Date, stored: StoredAs): VoiceRe
   };
 }
 
-export function makeVoiceReportHandler(deps: {
+/** The same chain as lib/report-handler.ts, with a read's minimum held back for each of the two Meta calls. */
+export function voiceSchedule(deadline: number, timing: VoiceTiming = VOICE_TIMING) {
+  const settleBy = deadline - timing.responseMs;
+  const releaseBy = settleBy - timing.storeCallMs;
+  const saveBy = releaseBy - timing.storeCallMs;
+  const finishBy = deadline - (3 * timing.storeCallMs + timing.responseMs);
+  const transcribeBy = finishBy - timing.minReadMs;
+  const admitBy = transcribeBy - timing.minReadMs;
+  const claimBy = admitBy - timing.storeCallMs;
+  return { settleBy, releaseBy, saveBy, finishBy, transcribeBy, admitBy, claimBy };
+}
+
+export interface VoiceReportInput {
+  /** A clip parseVoiceWav accepted: 16 kHz mono 16-bit samples, at most 30 s. Never kept. */
+  clip: VoiceClip;
+  language: VoiceLanguage;
+  at: Point;
+  receivedAt: Date;
+  /** Whose daily limit the report counts against: an address, or `tg:<chat id>`. */
+  admitKey: string | null;
+  /** Epoch ms by which the report is settled and done; every step's own limit is counted back from it. */
+  deadline: number;
+}
+
+export type VoiceRefusal = "store_down" | "out_of_time" | "in_flight" | "no_words" | "unheard" | "untranscribed";
+
+export type VoiceReportOutcome =
+  | { ok: true; duplicate: boolean; stored: StoredAs; report: VoiceReportView }
+  | { ok: false; refused: VoiceRefusal }
+  | { ok: false; refused: "admission"; reason: RefusalReason; response: () => Response };
+
+export interface VoiceReportDeps {
   gate: () => ValhallaGate;
   budget?: () => Budget;
   store?: () => ReportStore | null;
   fetch?: typeof fetch;
-  now?: () => Date;
   timing?: VoiceTiming;
-}) {
+}
+
+/** The voice report's steps after the clip is validated, shared by the page's route and the Telegram bot. */
+export function makeVoiceReporter(deps: VoiceReportDeps) {
   const timing = deps.timing ?? VOICE_TIMING;
   const budget = deps.budget ?? budgetFromEnv;
   const reportStore = deps.store ?? reportStoreFromEnv;
   const doFetch: typeof fetch = (...args) => (deps.fetch ?? fetch)(...args);
-  const now = deps.now ?? (() => new Date());
+  const refused = (r: VoiceRefusal): VoiceReportOutcome => ({ ok: false, refused: r });
 
-  return async function POST(request: Request): Promise<Response> {
-    const receivedAt = now();
-    // The same chain as lib/report-handler.ts, with a read's minimum held back for each of the two Meta calls.
-    const deadline = Date.now() + timing.budgetMs;
-    const settleBy = deadline - timing.responseMs;
-    const releaseBy = settleBy - timing.storeCallMs;
-    const saveBy = releaseBy - timing.storeCallMs;
-    const finishBy = deadline - (3 * timing.storeCallMs + timing.responseMs);
-    const transcribeBy = finishBy - timing.minReadMs;
-    const admitBy = transcribeBy - timing.minReadMs;
-    const claimBy = admitBy - timing.storeCallMs;
-
-    const body = await readBody(request, { maxBytes: MAX_BODY_BYTES, deadline: claimBy });
-    if (body === "too_large") return fail(413, TOO_LONG);
-    if (body === "too_slow") return fail(408, "Lusong didn't receive the whole voice note in time. Try again on a steadier connection.");
-    let form: FormData;
-    try {
-      form = await new Response(body as Uint8Array<ArrayBuffer>, { headers: { "content-type": request.headers.get("content-type") ?? "" } }).formData();
-    } catch {
-      return fail(400, "Send the voice note as a form upload.");
-    }
-    const at = pinFrom(form);
-    if (!at) return fail(400, "Lusong needs your phone's location to place the report.");
-    if (!inServerTripBound(at)) return fail(400, "Lusong takes reports from streets in the Philippines only.");
-    // A language the page doesn't offer, Bisaya included while it is switched off, is refused here.
-    const language = voiceLanguageFrom(form.get("language"));
-    if (!language) return fail(400, PICK_A_LANGUAGE);
-    const audio = form.get("audio");
-    if (!(audio instanceof File)) return fail(400, "No voice note was attached.");
-    if (audio.size > MAX_VOICE_FILE_BYTES) return fail(413, TOO_LONG);
-
-    const clip = parseVoiceWav(new Uint8Array(await audio.arrayBuffer()));
-    if (!clip.ok) {
-      if (clip.reason === "too_long") return fail(413, TOO_LONG);
-      if (clip.reason === "wrong_format") return fail(415, "Lusong takes voice notes recorded on this page only (16 kHz mono WAV).");
-      if (clip.reason === "too_short") return fail(400, "That voice note is too short. Hold record and say where you are and how deep the water is.");
-      return fail(400, "Lusong couldn't read that recording. Record it again on this page.");
-    }
+  return async function processVoiceReport(input: VoiceReportInput): Promise<VoiceReportOutcome> {
+    const { clip, language, at, receivedAt } = input;
+    const { settleBy, releaseBy, saveBy, finishBy, transcribeBy, admitBy, claimBy } = voiceSchedule(input.deadline, timing);
     // The samples alone, so a resend with different headers is still the same note.
     const audioHash = createHash("sha256").update(clip.pcm).digest("hex");
 
     const store = reportStore();
-    if (!store) return fail(503, "Lusong can't take reports right now.");
+    if (!store) return refused("store_down");
     const release = (token: string, by: number) =>
       beforeDeadline(store.releaseVoice(audioHash, token), by).catch((err: unknown) => {
         console.error("report store unreachable on release:", err instanceof Error ? err.message : err);
       });
 
-    if (Date.now() > claimBy) return fail(503, OUT_OF_TIME);
+    if (Date.now() > claimBy) return refused("out_of_time");
     const claiming = store.claimVoice(audioHash);
     let claim: Awaited<ReturnType<ReportStore["claimVoice"]>> | "late";
     try {
       claim = await beforeDeadline(claiming, admitBy);
     } catch (err) {
       console.error("report store unreachable on claim:", err instanceof Error ? err.message : err);
-      return fail(503, "Lusong can't take reports right now.");
+      return refused("store_down");
     }
     if (claim === "late") {
       void claiming.then(
@@ -186,13 +184,13 @@ export function makeVoiceReportHandler(deps: {
         },
         () => {},
       );
-      return fail(503, OUT_OF_TIME);
+      return refused("out_of_time");
     }
-    if (claim.state === "duplicate") return Response.json({ duplicate: true, stored: true, report: viewOf(claim.report, receivedAt, true) });
-    if (claim.state === "in_flight") return fail(409, "Lusong is already reading this voice note.");
+    if (claim.state === "duplicate") return { ok: true, duplicate: true, stored: true, report: viewOf(claim.report, receivedAt, true) };
+    if (claim.state === "in_flight") return refused("in_flight");
     const { token } = claim;
 
-    const admitting = admit(budget(), { clientIp: clientIp(request), reserveMicros: VOICE_RESERVE_MICROS, now: receivedAt });
+    const admitting = admit(budget(), { clientIp: input.admitKey, reserveMicros: VOICE_RESERVE_MICROS, now: receivedAt });
     const admission = await beforeDeadline(admitting, admitBy);
     if (admission === "late") {
       // No Meta call will start, so a reservation that lands late is refunded in full.
@@ -203,11 +201,11 @@ export function makeVoiceReportHandler(deps: {
         () => {},
       );
       await release(token, releaseBy);
-      return fail(503, OUT_OF_TIME);
+      return refused("out_of_time");
     }
     if (!admission.ok) {
       await release(token, releaseBy);
-      return admission.response();
+      return { ok: false, refused: "admission", reason: admission.reason, response: admission.response };
     }
 
     const { run } = admission;
@@ -216,17 +214,17 @@ export function makeVoiceReportHandler(deps: {
       if (Date.now() > admitBy) {
         await release(token, releaseBy);
         succeeded = true;
-        return fail(503, OUT_OF_TIME);
+        return refused("out_of_time");
       }
       const noWords = async () => {
         succeeded = true;
         await release(token, releaseBy);
-        return fail(422, "Lusong couldn't hear any words in that note. Record it again closer to the phone.");
+        return refused("no_words");
       };
       const claimFailed = async (err: unknown) => {
         console.error("voice claim failed:", err instanceof MetaApiError ? err.message : err);
         await release(token, releaseBy);
-        return fail(502, "Lusong couldn't make out the report. Try again in a minute.");
+        return refused("unheard");
       };
 
       let said: VoiceClaim;
@@ -246,7 +244,7 @@ export function makeVoiceReportHandler(deps: {
         } catch (err) {
           console.error("voice transcribe failed:", err instanceof MetaApiError ? err.message : err);
           await release(token, releaseBy);
-          return fail(502, "The transcribing service didn't answer. Try again in a minute.");
+          return refused("untranscribed");
         }
         if (words.trim() === "") return await noWords();
         try {
@@ -281,17 +279,71 @@ export function makeVoiceReportHandler(deps: {
       if (saved === "late") {
         // The save may still land, so the claim is kept for it and lapses on its own: freeing it would let a resend
         // be read and paid for again while this one could still be written.
-        return Response.json({ duplicate: false, stored: "unknown", report: viewOf(report, receivedAt, "unknown") });
+        return { ok: true, duplicate: false, stored: "unknown", report: viewOf(report, receivedAt, "unknown") };
       }
       if (saved.state === "duplicate" && saved.report.kind === "voice") {
-        return Response.json({ duplicate: true, stored: true, report: viewOf(saved.report, receivedAt, true) });
+        return { ok: true, duplicate: true, stored: true, report: viewOf(saved.report, receivedAt, true) };
       }
       // not_owner: the claim lapsed and the store says it wrote nothing.
       const stored = saved.state === "saved";
-      return Response.json({ duplicate: false, stored, report: viewOf(report, receivedAt, stored) });
+      return { ok: true, duplicate: false, stored, report: viewOf(report, receivedAt, stored) };
     } finally {
       // A settle cut off here keeps the whole reservation charged: the safe side.
       await beforeDeadline(run.settle(succeeded), settleBy);
     }
+  };
+}
+
+const VOICE_REFUSALS: Record<VoiceRefusal, { status: number; message: string }> = {
+  store_down: { status: 503, message: "Lusong can't take reports right now." },
+  out_of_time: { status: 503, message: OUT_OF_TIME },
+  in_flight: { status: 409, message: "Lusong is already reading this voice note." },
+  no_words: { status: 422, message: "Lusong couldn't hear any words in that note. Record it again closer to the phone." },
+  unheard: { status: 502, message: "Lusong couldn't make out the report. Try again in a minute." },
+  untranscribed: { status: 502, message: "The transcribing service didn't answer. Try again in a minute." },
+};
+
+export function makeVoiceReportHandler(deps: VoiceReportDeps & { now?: () => Date }) {
+  const timing = deps.timing ?? VOICE_TIMING;
+  const now = deps.now ?? (() => new Date());
+  const processVoiceReport = makeVoiceReporter(deps);
+
+  return async function POST(request: Request): Promise<Response> {
+    const receivedAt = now();
+    const deadline = Date.now() + timing.budgetMs;
+    const { claimBy } = voiceSchedule(deadline, timing);
+
+    const body = await readBody(request, { maxBytes: MAX_BODY_BYTES, deadline: claimBy });
+    if (body === "too_large") return fail(413, TOO_LONG);
+    if (body === "too_slow") return fail(408, "Lusong didn't receive the whole voice note in time. Try again on a steadier connection.");
+    let form: FormData;
+    try {
+      form = await new Response(body as Uint8Array<ArrayBuffer>, { headers: { "content-type": request.headers.get("content-type") ?? "" } }).formData();
+    } catch {
+      return fail(400, "Send the voice note as a form upload.");
+    }
+    const at = pinFrom(form);
+    if (!at) return fail(400, "Lusong needs your phone's location to place the report.");
+    if (!inServerTripBound(at)) return fail(400, "Lusong takes reports from streets in the Philippines only.");
+    // A language the page doesn't offer, Bisaya included while it is switched off, is refused here.
+    const language = voiceLanguageFrom(form.get("language"));
+    if (!language) return fail(400, PICK_A_LANGUAGE);
+    const audio = form.get("audio");
+    if (!(audio instanceof File)) return fail(400, "No voice note was attached.");
+    if (audio.size > MAX_VOICE_FILE_BYTES) return fail(413, TOO_LONG);
+
+    const clip = parseVoiceWav(new Uint8Array(await audio.arrayBuffer()));
+    if (!clip.ok) {
+      if (clip.reason === "too_long") return fail(413, TOO_LONG);
+      if (clip.reason === "wrong_format") return fail(415, "Lusong takes voice notes recorded on this page only (16 kHz mono WAV).");
+      if (clip.reason === "too_short") return fail(400, "That voice note is too short. Hold record and say where you are and how deep the water is.");
+      return fail(400, "Lusong couldn't read that recording. Record it again on this page.");
+    }
+
+    const outcome = await processVoiceReport({ clip, language, at, receivedAt, admitKey: clientIp(request), deadline });
+    if (outcome.ok) return Response.json({ duplicate: outcome.duplicate, stored: outcome.stored, report: outcome.report });
+    if (outcome.refused === "admission") return outcome.response();
+    const { status, message } = VOICE_REFUSALS[outcome.refused];
+    return fail(status, message);
   };
 }

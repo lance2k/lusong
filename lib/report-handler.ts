@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { admit } from "./admission";
 import { counts, REPORT_LIFETIME_MS, roleOf, type Point, type Role } from "./answer";
 import { blobStoreFromEnv, type BlobStore } from "./blob-store";
-import { budgetFromEnv, PHOTO_REPORT_RESERVE_MICROS, RESERVE_MICROS, type Budget } from "./budget";
+import { budgetFromEnv, PHOTO_REPORT_RESERVE_MICROS, RESERVE_MICROS, type Budget, type RefusalReason } from "./budget";
 import { checkPhoto } from "./check";
 import { clientIp } from "./check-handler";
 import { depthWords, MMDA_CREDIT, passabilityLine, phtTime } from "./commute-words";
@@ -17,11 +17,11 @@ import type { SamReply } from "./sam";
 import { reportStoreFromEnv, toReport, type ReportStore, type Saved, type StoredPhotoReport } from "./report-store";
 import type { ValhallaGate } from "./router";
 
-const MAX_BYTES = 3 * 1024 * 1024;
+export const MAX_BYTES = 3 * 1024 * 1024;
 /** The photo plus the form's boundaries and the two coordinates. */
 const MAX_BODY_BYTES = MAX_BYTES + 64 * 1024;
 /** The page shrinks every photo to this; the budget's input-token bound was measured at this size. */
-const MAX_SIDE = 1600;
+export const MAX_SIDE = 1600;
 
 /**
  * One deadline for the whole request, from its first byte, under the route's 120 s maxDuration: a paid read is always
@@ -159,81 +159,92 @@ async function photoFor(
   return outcome.published ? outcome.url : null;
 }
 
-export function makeReportHandler(deps: {
+/** When each step of a photo report must start or end, counted back from the moment the whole report must be done. */
+export function photoSchedule(deadline: number, timing: Timing = TIMING) {
+  const settleBy = deadline - timing.responseMs;
+  const releaseBy = settleBy - timing.storeCallMs;
+  const saveBy = releaseBy - timing.storeCallMs;
+  const finishBy = deadline - finishReserveMs(timing);
+  const admitBy = finishBy - timing.minReadMs;
+  const claimBy = admitBy - timing.storeCallMs;
+  return { settleBy, releaseBy, saveBy, finishBy, admitBy, claimBy };
+}
+
+/** `never`: no plate call and no blurred copy, whatever PLATE_DETECTION_TRUSTED says. */
+export type PublishPolicy = "never" | "when_trusted";
+
+export interface PhotoReportInput {
+  /** The photo as sent, metadata and all; it is sanitized here and never kept. */
+  upload: Uint8Array;
+  at: Point;
+  capturedAt: Date | null;
+  receivedAt: Date;
+  /** Whose daily limit the report counts against: an address, or `tg:<chat id>`. */
+  admitKey: string | null;
+  /** Epoch ms by which the report is settled and done; every step's own limit is counted back from it. */
+  deadline: number;
+  publish: PublishPolicy;
+}
+
+export type PhotoRefusal = "too_large" | "not_jpeg" | "store_down" | "out_of_time" | "in_flight" | "unread";
+
+export type PhotoReportOutcome =
+  | { ok: true; duplicate: boolean; stored: boolean; report: ReportView }
+  | { ok: false; refused: PhotoRefusal }
+  | { ok: false; refused: "admission"; reason: RefusalReason; response: () => Response };
+
+export interface PhotoReportDeps {
   gate: () => ValhallaGate;
   budget?: () => Budget;
   store?: () => ReportStore | null;
   fetch?: typeof fetch;
-  now?: () => Date;
   timing?: Timing;
   /** Where blurred photos go; null (BLOB_READ_WRITE_TOKEN unset) shows no photo and makes no plate call. */
   photos?: () => BlobStore | null;
   plateDetectionTrusted?: boolean;
   blur?: PhotoInput["blur"];
-}) {
+}
+
+/** The photo report's steps after the upload is in hand, shared by the page's route and the Telegram bot. */
+export function makePhotoReporter(deps: PhotoReportDeps) {
   const timing = deps.timing ?? TIMING;
   const photoStore = deps.photos ?? blobStoreFromEnv;
   const plateDetectionTrusted = deps.plateDetectionTrusted ?? PLATE_DETECTION_TRUSTED;
   const budget = deps.budget ?? budgetFromEnv;
   const reportStore = deps.store ?? reportStoreFromEnv;
   const doFetch: typeof fetch = (...args) => (deps.fetch ?? fetch)(...args);
-  const now = deps.now ?? (() => new Date());
+  const refused = (r: PhotoRefusal): PhotoReportOutcome => ({ ok: false, refused: r });
 
-  return async function POST(request: Request): Promise<Response> {
-    const receivedAt = now();
-    // Epoch ms, like lib/meta.ts's deadlines. Each step must start early enough for every later one to fit.
-    const deadline = Date.now() + timing.budgetMs;
-    const settleBy = deadline - timing.responseMs;
-    const releaseBy = settleBy - timing.storeCallMs;
-    const saveBy = releaseBy - timing.storeCallMs;
-    const finishBy = deadline - finishReserveMs(timing);
-    const admitBy = finishBy - timing.minReadMs;
-    const claimBy = admitBy - timing.storeCallMs;
+  return async function processPhotoReport(input: PhotoReportInput): Promise<PhotoReportOutcome> {
+    const { at, capturedAt, receivedAt } = input;
+    const { settleBy, releaseBy, saveBy, finishBy, admitBy, claimBy } = photoSchedule(input.deadline, timing);
 
-    const body = await readBody(request, { maxBytes: MAX_BODY_BYTES, deadline: claimBy });
-    if (body === "too_large") return fail(413, "That photo is too large. Try a smaller one.");
-    if (body === "too_slow") return fail(408, "Lusong didn't receive the whole photo in time. Try again on a steadier connection.");
-    let form: FormData;
-    try {
-      form = await new Response(body as Uint8Array<ArrayBuffer>, { headers: { "content-type": request.headers.get("content-type") ?? "" } }).formData();
-    } catch {
-      return fail(400, "Send the photo as a form upload.");
-    }
-    const at = pinFrom(form);
-    if (!at) return fail(400, "Lusong needs your phone's location to place the report.");
-    if (!inServerTripBound(at)) return fail(400, "Lusong takes reports from streets in the Philippines only.");
-    const photo = form.get("photo");
-    if (!(photo instanceof File)) return fail(400, "No photo was attached.");
-    if (photo.size > MAX_BYTES) return fail(413, "That photo is too large. Try a smaller one.");
-
-    const upload = new Uint8Array(await photo.arrayBuffer());
-    const capturedAt = readCaptureTime(upload);
     let jpeg: ReturnType<typeof sanitizeJpeg>;
     try {
-      jpeg = sanitizeJpeg(upload);
+      jpeg = sanitizeJpeg(input.upload);
     } catch (err) {
-      if (err instanceof JpegError) return fail(415, "Lusong reads JPEG photos only.");
+      if (err instanceof JpegError) return refused("not_jpeg");
       throw err;
     }
-    if (jpeg.width > MAX_SIDE || jpeg.height > MAX_SIDE) return fail(413, "That photo is too large. Try a smaller one.");
+    if (jpeg.width > MAX_SIDE || jpeg.height > MAX_SIDE) return refused("too_large");
     // The stripped bytes, so a resend whose metadata was edited is still the same photo.
     const photoHash = createHash("sha256").update(jpeg.bytes).digest("hex");
 
     const store = reportStore();
-    if (!store) return fail(503, "Lusong can't take reports right now.");
+    if (!store) return refused("store_down");
     const release = (token: string, by: number) =>
       beforeDeadline(store.releasePhoto(photoHash, token), by).catch((err: unknown) => {
         console.error("report store unreachable on release:", err instanceof Error ? err.message : err);
       });
 
-    if (Date.now() > claimBy) return fail(503, OUT_OF_TIME);
+    if (Date.now() > claimBy) return refused("out_of_time");
     const claiming = store.claimPhoto(photoHash);
     let claim: Awaited<ReturnType<ReportStore["claimPhoto"]>> | "late";
     try {
       claim = await beforeDeadline(claiming, admitBy);
     } catch (err) {
       console.error("report store unreachable on claim:", err instanceof Error ? err.message : err);
-      return fail(503, "Lusong can't take reports right now.");
+      return refused("store_down");
     }
     if (claim === "late") {
       // The claim may still land; free it then, so the photo can be sent again.
@@ -243,20 +254,20 @@ export function makeReportHandler(deps: {
         },
         () => {},
       );
-      return fail(503, OUT_OF_TIME);
+      return refused("out_of_time");
     }
-    if (claim.state === "duplicate") return Response.json({ duplicate: true, stored: true, report: viewOf(claim.report, receivedAt, true) });
-    if (claim.state === "in_flight") return fail(409, "Lusong is already reading this photo.");
+    if (claim.state === "duplicate") return { ok: true, duplicate: true, stored: true, report: viewOf(claim.report, receivedAt, true) };
+    if (claim.state === "in_flight") return refused("in_flight");
     const { token } = claim;
 
     if (Date.now() > admitBy) {
       await release(token, releaseBy);
-      return fail(503, OUT_OF_TIME);
+      return refused("out_of_time");
     }
     // Publishing needs both a trusted plate finder and a store; without either, the plate call would buy nothing.
-    const photos = plateDetectionTrusted ? photoStore() : null;
+    const photos = input.publish === "when_trusted" && plateDetectionTrusted ? photoStore() : null;
     const reserveMicros = photos ? PHOTO_REPORT_RESERVE_MICROS : RESERVE_MICROS;
-    const admitting = admit(budget(), { clientIp: clientIp(request), reserveMicros, now: receivedAt });
+    const admitting = admit(budget(), { clientIp: input.admitKey, reserveMicros, now: receivedAt });
     const admission = await beforeDeadline(admitting, finishBy - timing.minReadMs);
     if (admission === "late") {
       // No Meta call will start, so a reservation that lands late is refunded in full.
@@ -267,18 +278,18 @@ export function makeReportHandler(deps: {
         () => {},
       );
       await release(token, releaseBy);
-      return fail(503, OUT_OF_TIME);
+      return refused("out_of_time");
     }
     if (!admission.ok) {
       await release(token, releaseBy);
-      return admission.response();
+      return { ok: false, refused: "admission", reason: admission.reason, response: admission.response };
     }
 
     const { run } = admission;
     if (finishBy - Date.now() < timing.minReadMs) {
       await release(token, releaseBy);
       await beforeDeadline(run.settle(true), settleBy);
-      return fail(503, OUT_OF_TIME);
+      return refused("out_of_time");
     }
     let succeeded = false;
     try {
@@ -290,7 +301,7 @@ export function makeReportHandler(deps: {
       } catch (err) {
         console.error("report read failed:", err instanceof MetaApiError ? err.message : err);
         await release(token, releaseBy);
-        return fail(502, "The measuring service didn't answer. Try again in a minute.");
+        return refused("unread");
       }
       succeeded = true;
 
@@ -335,18 +346,64 @@ export function makeReportHandler(deps: {
           () => {},
         );
         await release(token, releaseBy);
-        return Response.json({ duplicate: false, stored: false, report: viewOf(report, receivedAt, false) });
+        return { ok: true, duplicate: false, stored: false, report: viewOf(report, receivedAt, false) };
       }
       if (saved.state !== "saved") dropPhoto();
       if (saved.state === "duplicate" && saved.report.kind === "photo") {
-        return Response.json({ duplicate: true, stored: true, report: viewOf(saved.report, receivedAt, true) });
+        return { ok: true, duplicate: true, stored: true, report: viewOf(saved.report, receivedAt, true) };
       }
       // not_owner: the claim lapsed and the store says it wrote nothing.
       const stored = saved.state === "saved";
-      return Response.json({ duplicate: false, stored, report: viewOf(report, receivedAt, stored) });
+      return { ok: true, duplicate: false, stored, report: viewOf(report, receivedAt, stored) };
     } finally {
       // A settle cut off here keeps the whole reservation charged: the safe side.
       await beforeDeadline(run.settle(succeeded), settleBy);
     }
+  };
+}
+
+const PHOTO_REFUSALS: Record<PhotoRefusal, { status: number; message: string }> = {
+  too_large: { status: 413, message: "That photo is too large. Try a smaller one." },
+  not_jpeg: { status: 415, message: "Lusong reads JPEG photos only." },
+  store_down: { status: 503, message: "Lusong can't take reports right now." },
+  out_of_time: { status: 503, message: OUT_OF_TIME },
+  in_flight: { status: 409, message: "Lusong is already reading this photo." },
+  unread: { status: 502, message: "The measuring service didn't answer. Try again in a minute." },
+};
+
+export function makeReportHandler(deps: PhotoReportDeps & { now?: () => Date }) {
+  const timing = deps.timing ?? TIMING;
+  const now = deps.now ?? (() => new Date());
+  const processPhotoReport = makePhotoReporter(deps);
+
+  return async function POST(request: Request): Promise<Response> {
+    const receivedAt = now();
+    // Epoch ms, like lib/meta.ts's deadlines. Each step must start early enough for every later one to fit.
+    const deadline = Date.now() + timing.budgetMs;
+    const { claimBy } = photoSchedule(deadline, timing);
+
+    const body = await readBody(request, { maxBytes: MAX_BODY_BYTES, deadline: claimBy });
+    if (body === "too_large") return fail(413, "That photo is too large. Try a smaller one.");
+    if (body === "too_slow") return fail(408, "Lusong didn't receive the whole photo in time. Try again on a steadier connection.");
+    let form: FormData;
+    try {
+      form = await new Response(body as Uint8Array<ArrayBuffer>, { headers: { "content-type": request.headers.get("content-type") ?? "" } }).formData();
+    } catch {
+      return fail(400, "Send the photo as a form upload.");
+    }
+    const at = pinFrom(form);
+    if (!at) return fail(400, "Lusong needs your phone's location to place the report.");
+    if (!inServerTripBound(at)) return fail(400, "Lusong takes reports from streets in the Philippines only.");
+    const photo = form.get("photo");
+    if (!(photo instanceof File)) return fail(400, "No photo was attached.");
+    if (photo.size > MAX_BYTES) return fail(413, "That photo is too large. Try a smaller one.");
+
+    const upload = new Uint8Array(await photo.arrayBuffer());
+    const capturedAt = readCaptureTime(upload);
+    const outcome = await processPhotoReport({ upload, at, capturedAt, receivedAt, admitKey: clientIp(request), deadline, publish: "when_trusted" });
+    if (outcome.ok) return Response.json({ duplicate: outcome.duplicate, stored: outcome.stored, report: outcome.report });
+    if (outcome.refused === "admission") return outcome.response();
+    const { status, message } = PHOTO_REFUSALS[outcome.refused];
+    return fail(status, message);
   };
 }
