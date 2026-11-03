@@ -237,4 +237,13 @@ describe("robots.txt", () => {
     expect(robotsAllow("User-agent: *\nDisallow: /\n", "/")).toBe(false);
     expect(robotsAllow("", "/anything")).toBe(true);
   });
+
+  it("two * groups, or two Lusong groups, are read as one: their rules combined (S4D-7)", () => {
+    const twoStars = "User-agent: *\nAllow: /\n\nUser-agent: BadBot\nDisallow: /\n\nUser-agent: *\nDisallow: /private\n";
+    expect(robotsAllow(twoStars, "/private")).toBe(false);
+    expect(robotsAllow(twoStars, "/news")).toBe(true);
+    const twoLusong = "User-agent: lusong\nAllow: /\n\nUser-agent: *\nDisallow: /\n\nUser-agent: lusong\nDisallow: /drafts\n";
+    expect(robotsAllow(twoLusong, "/drafts/1")).toBe(false);
+    expect(robotsAllow(twoLusong, "/news")).toBe(true);
+  });
 });

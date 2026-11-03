@@ -242,7 +242,7 @@ export async function safeFetch(rawUrl: string, deps: SafeFetchDeps): Promise<Sa
   }
 }
 
-/** robots.txt's rules for Lusong's agent (the `lusong` group, else `*`): the longest matching Allow or Disallow wins. */
+/** robots.txt's rules for Lusong's agent (the `lusong` groups, else `*`): the longest matching Allow or Disallow wins. */
 export function robotsAllow(robots: string, path: string): boolean {
   const groups: { agents: string[]; rules: { allow: boolean; prefix: string }[] }[] = [];
   let current: (typeof groups)[number] | null = null;
@@ -264,8 +264,11 @@ export function robotsAllow(robots: string, path: string): boolean {
       lastWasAgent = false;
     }
   }
-  const mine = groups.find((g) => g.agents.includes("lusong")) ?? groups.find((g) => g.agents.includes("*"));
-  if (!mine) return true;
+  // Every group naming Lusong counts, else every `*` group: their rules are combined before precedence (S4D-7).
+  const named = groups.filter((g) => g.agents.includes("lusong"));
+  const chosen = named.length > 0 ? named : groups.filter((g) => g.agents.includes("*"));
+  if (chosen.length === 0) return true;
+  const mine = { rules: chosen.flatMap((g) => g.rules) };
   const matches = (prefix: string) => {
     const pattern = new RegExp(`^${prefix.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\\\$$/, "$")}`);
     return pattern.test(path);
