@@ -95,6 +95,8 @@ export interface WatchStore {
   routes(ids: readonly string[]): Promise<(Point[] | null)[]>;
   /** The delivery state of each `<alertId>@<version>` for this watcher, in one read (S4P-9). */
   alertStates(id: string, members: readonly string[]): Promise<(string | null)[]>;
+  /** alertStates for several watchers in one read (S4D-1): one store call for a whole batch. */
+  alertStatesMany(entries: readonly { id: string; members: readonly string[] }[]): Promise<(string | null)[][]>;
   /**
    * Atomic, before an alert send (S4P-1): the watcher still exists with this generation and isn't stopping, the alert
    * version was never claimed or is a retry whose time has come, and the chat had no alert in the last `chatGapMs`.
@@ -330,6 +332,10 @@ export class MemoryWatchStore implements WatchStore {
     return members.map((m) => alerts?.get(m) ?? null);
   }
 
+  async alertStatesMany(entries: readonly { id: string; members: readonly string[] }[]) {
+    return Promise.all(entries.map((e) => this.alertStates(e.id, e.members)));
+  }
+
   async claimAlert(id: string, gen: string, member: string, nowMs: number, chatGapMs: number): Promise<AlertClaim> {
     const fields = this.live(id);
     if (!fields || fields.gen !== gen || fields.stopping) return { claimed: false, why: "gone" };
@@ -533,6 +539,23 @@ function pairs(flat: unknown[]): Fields {
 }
 
 /** Upstash's REST API, one EVAL per operation, in the same database as the budget (lib/budget.ts). */
+/** One HMGET per key; ARGV is each key's member count followed by its members. */
+const ALERT_STATES_MANY_SCRIPT = `
+local out = {}
+local at = 1
+for i, key in ipairs(KEYS) do
+  local n = tonumber(ARGV[at])
+  at = at + 1
+  if n == 0 then
+    out[i] = {}
+  else
+    out[i] = redis.call('HMGET', key, unpack(ARGV, at, at + n - 1))
+  end
+  at = at + n
+end
+return out
+`;
+
 export class UpstashWatchStore implements WatchStore {
   private readonly ttlMs: number;
   private readonly codeTtlMs: number;
@@ -675,6 +698,22 @@ export class UpstashWatchStore implements WatchStore {
     const result = await this.evalScript("return redis.call('HMGET', KEYS[1], unpack(ARGV))", [this.alertsSent(id)], [...members]);
     if (!Array.isArray(result) || result.length !== members.length) throw new Error("unexpected alert state read");
     return result.map((value) => (typeof value === "string" ? value : null));
+  }
+
+  async alertStatesMany(entries: readonly { id: string; members: readonly string[] }[]) {
+    if (entries.length === 0) return [];
+    const result = await this.evalScript(
+      ALERT_STATES_MANY_SCRIPT,
+      entries.map((e) => this.alertsSent(e.id)),
+      entries.flatMap((e) => [e.members.length, ...e.members]),
+    );
+    if (!Array.isArray(result) || result.length !== entries.length) throw new Error("unexpected alert state read");
+    return entries.map((e, i) => {
+      const row = result[i];
+      if (e.members.length === 0) return [];
+      if (!Array.isArray(row) || row.length !== e.members.length) throw new Error("unexpected alert state read");
+      return row.map((value) => (typeof value === "string" ? value : null));
+    });
   }
 
   async claimAlert(id: string, gen: string, member: string, nowMs: number, chatGapMs: number): Promise<AlertClaim> {

@@ -30,6 +30,15 @@ export const DELIVERY_LIMITS: DeliveryLimits = { budgetMs: 45_000, maxSends: 40,
 const LEASE_MARGIN_MS = 500;
 /** No send is started with less than a lease and a store call left of the run. */
 const STORE_CALL_MS = 5_000;
+/** Watchers whose alert history one store call reads. */
+export const HISTORY_BATCH = 25;
+
+/** The promise's value, or "late" once `ms` have passed; a late read is left to settle on its own. */
+function withinMs<T>(promise: Promise<T>, ms: number): Promise<T | "late"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<"late">((resolve) => (timer = setTimeout(() => resolve("late"), ms)));
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+}
 
 export interface DeliveryDeps {
   watches: WatchStore;
@@ -57,6 +66,8 @@ export interface DeliverySummary {
   ambiguous: number;
   /** Left for the next run: the send cap, the time budget, a retry not yet due, or the chat's one-second gap. */
   deferred: number;
+  /** Watchers whose alert history the run had no time to read: the next run starts with them. */
+  unread: number;
 }
 
 interface Owed {
@@ -80,7 +91,7 @@ export async function runDelivery(deps: DeliveryDeps): Promise<DeliverySummary> 
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const deadline = Date.now() + limits.budgetMs;
   const now = deps.now();
-  const summary: DeliverySummary = { ok: true, alerts: 0, pagasaHeld: null, watchers: 0, due: 0, sent: 0, rejected: 0, ambiguous: 0, deferred: 0 };
+  const summary: DeliverySummary = { ok: true, alerts: 0, pagasaHeld: null, watchers: 0, due: 0, sent: 0, rejected: 0, ambiguous: 0, deferred: 0, unread: 0 };
 
   // PAGASA's alerts are rebuilt from the snapshot, which has already applied every Update's and Cancel's references.
   try {
@@ -110,25 +121,54 @@ export async function runDelivery(deps: DeliveryDeps): Promise<DeliverySummary> 
   if (alerts.length === 0 || watchers.length === 0) return summary;
   const lineOf = new Map(watchers.map((w, i) => [w.id, lines[i]]));
 
-  // Each watcher's owed alerts, oldest event first; one HMGET per watcher an alert touches.
+  // Each watcher's owed alerts, oldest event first. Histories are read HISTORY_BATCH watchers to a store call, and no
+  // batch starts without a read's timeout and a send's room left, so slow reads can't spend the run (S4D-1).
   const queues: Owed[][] = [];
-  for (const watcher of fromCursor(watchers, cursor)) {
-    const corridor = corridorFor(watcher.trip, lineOf.get(watcher.id) ?? null);
-    const touching = alerts
-      .map((alert) => ({ alert, ...touches(alert, corridor) }))
-      .filter((t) => t.touches)
-      .sort((a, b) => Date.parse(a.alert.eventAt) - Date.parse(b.alert.eventAt));
-    if (touching.length === 0) continue;
-    let states: (string | null)[];
-    try {
-      states = await deps.watches.alertStates(watcher.id, touching.map((t) => memberOf(t.alert)));
-    } catch (err) {
-      console.error("alert delivery couldn't read a watcher's alert history:", message(err));
-      summary.ok = false;
-      continue;
+  const ordered = fromCursor(watchers, cursor);
+  let readUpTo: string | null = null;
+  let readStopped = false;
+  for (let start = 0; start < ordered.length; ) {
+    const batch: { watcher: WatchRecord; touching: { alert: Alert; areas: string[] }[] }[] = [];
+    let next = start;
+    for (; next < ordered.length && batch.length < HISTORY_BATCH; next++) {
+      const watcher = ordered[next];
+      const corridor = corridorFor(watcher.trip, lineOf.get(watcher.id) ?? null);
+      const touching = alerts
+        .map((alert) => ({ alert, ...touches(alert, corridor) }))
+        .filter((t) => t.touches)
+        .sort((a, b) => Date.parse(a.alert.eventAt) - Date.parse(b.alert.eventAt));
+      if (touching.length > 0) batch.push({ watcher, touching });
     }
-    const owed = touching.filter((_, i) => states[i] === null || /^retry:/.test(states[i]!)).map((t) => ({ watcher, alert: t.alert, areas: t.areas }));
-    if (owed.length > 0) queues.push(owed);
+    if (batch.length > 0) {
+      const room = deadline - Date.now() - SEND_LEASE_MS - STORE_CALL_MS;
+      if (room < STORE_CALL_MS) {
+        readStopped = true;
+        summary.unread = ordered.length - start;
+        break;
+      }
+      let states: (string | null)[][] | "late";
+      try {
+        states = await withinMs(
+          deps.watches.alertStatesMany(batch.map((b) => ({ id: b.watcher.id, members: b.touching.map((t) => memberOf(t.alert)) }))),
+          Math.min(room, STORE_CALL_MS),
+        );
+      } catch (err) {
+        console.error("alert delivery couldn't read the watchers' alert history:", message(err));
+        summary.ok = false;
+        states = "late";
+      }
+      if (states === "late") {
+        readStopped = true;
+        summary.unread = ordered.length - start;
+        break;
+      }
+      batch.forEach((b, i) => {
+        const owed = b.touching.filter((_, j) => states[i][j] === null || /^retry:/.test(states[i][j]!)).map((t) => ({ watcher: b.watcher, alert: t.alert, areas: t.areas }));
+        if (owed.length > 0) queues.push(owed);
+      });
+    }
+    readUpTo = ordered[next - 1].id;
+    start = next;
   }
   summary.due = queues.reduce((n, q) => n + q.length, 0);
 
@@ -162,7 +202,9 @@ export async function runDelivery(deps: DeliveryDeps): Promise<DeliverySummary> 
     }
   }
   // Where the next run starts: after the last watcher this one reached, or from the beginning once everyone was.
-  await deps.alerts.setCursor(stoppedEarly ? lastWatcher : null).catch((err) => console.error("alert delivery couldn't save its cursor:", message(err)));
+  // A run that reached no one keeps the cursor it started from.
+  const resumeAfter = stoppedEarly ? (lastWatcher ?? cursor) : readStopped ? (readUpTo ?? cursor) : null;
+  await deps.alerts.setCursor(resumeAfter).catch((err) => console.error("alert delivery couldn't save its cursor:", message(err)));
   return summary;
 }
 

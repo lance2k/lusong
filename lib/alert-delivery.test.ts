@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CAGAYAN_GFA4, CAGAYAN_GFA4_CANCEL, CAGAYAN_GFA4_REISSUED, ALL_SAVED, feedOf } from "../test/pagasa-fixtures";
 import { watchStores } from "../test/watch-stores";
 import { FEED_URL } from "./advisory";
 import { judgeArea } from "./advisory-geo";
 import { MemoryAdvisoryStore, refreshSnapshot, SNAPSHOT_KEY, type AdvisoryProduct, type AdvisorySnapshot } from "./advisory-snapshot";
-import { DELIVERY_LIMITS, runDelivery, type DeliveryDeps } from "./alert-delivery";
+import { DELIVERY_LIMITS, HISTORY_BATCH, runDelivery, type DeliveryDeps } from "./alert-delivery";
 import { corridorFor, simplifyLine, touches } from "./alert-corridor";
 import { alertMessage, MemoryAlertStore, pagasaAlerts, UpstashAlertStore, type Alert, type AlertStore } from "./alerts";
 import type { Point } from "./answer";
@@ -154,8 +154,8 @@ describe("alert delivery: who gets what (ledger #7)", () => {
     const t = setup();
     for (const id of ["a1", "a2"]) await linked(t.watches, id, CEBU_TRIP);
     await publish(t.advisory, snapshotOf([product("tc", COUNTRY_AREA, SENT_AM, UNTIL_PM)], AFTERNOON));
-    // Less than a lease and a store call left: nothing is started.
-    expect(await t.deliver({ limits: { budgetMs: 12_000 } })).toMatchObject({ sent: 0, deferred: 2 });
+    // Less than a history read, a lease and a store call left: no history is read and nothing is started.
+    expect(await t.deliver({ limits: { budgetMs: 12_000 } })).toMatchObject({ sent: 0, unread: 2 });
     expect(await t.deliver()).toMatchObject({ sent: 2 });
   });
 
@@ -585,7 +585,7 @@ describe("the rider's text", () => {
 });
 
 describe("store commands at 100 watchers with 3 nationwide alerts (S4P-9)", () => {
-  it("one list, one route read, one history read per watcher, and five per send", async () => {
+  it("one list, one route read, one history read per 25 watchers, and five per send", async () => {
     const t = setup();
     for (let i = 0; i < 100; i++) await linked(t.watches, `w${String(i).padStart(3, "0")}`, CEBU_TRIP);
     await publish(t.advisory, snapshotOf(["n1", "n2", "n3"].map((id) => product(id, COUNTRY_AREA, SENT_AM, UNTIL_PM)), AFTERNOON));
@@ -615,12 +615,59 @@ describe("store commands at 100 watchers with 3 nationwide alerts (S4P-9)", () =
     expect(runs).toBe(8);
     expect(calls["watches.list"]).toBe(runs);
     expect(calls["watches.routes"]).toBe(runs);
-    expect(calls["watches.alertStates"]).toBeLessThanOrEqual(100 * runs);
+    expect(calls["watches.alertStatesMany"]).toBe((100 / HISTORY_BATCH) * runs);
+    expect(calls["watches.alertStates"]).toBeUndefined();
     for (const perSend of ["watches.takeSendLease", "watches.claimAlert", "watches.settleAlert", "watches.releaseSendLease", "alerts.isActive"]) {
       expect(calls[perSend]).toBe(300);
     }
     const total = Object.values(calls).reduce((a, b) => a + b, 0);
-    // Per run: rebuild, alert list, watcher list, cursor read, route read, cursor write; then one history read a watcher.
-    expect(total).toBe(runs * (6 + 100) + 300 * 5);
+    // Per run: rebuild, alert list, watcher list, cursor read, route read, cursor write; then one history read a batch.
+    expect(total).toBe(runs * (6 + 100 / HISTORY_BATCH) + 300 * 5);
+  });
+});
+
+describe("slow history reads can't spend the run (S4D-1)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("100 watchers whose history reads take 10 s a batch (1 s a watcher): the run returns within budget, sends, and the next resumes", async () => {
+    const t = setup();
+    vi.spyOn(Date, "now").mockImplementation(() => t.clock.ms());
+    for (let i = 0; i < 100; i++) await linked(t.watches, `w${String(i).padStart(3, "0")}`, CEBU_TRIP);
+    await publish(t.advisory, snapshotOf([product("n1", COUNTRY_AREA, SENT_AM, UNTIL_PM)], AFTERNOON));
+    const store = t.watches;
+    const slow = new Proxy(store, {
+      get(target, key, receiver) {
+        const value = Reflect.get(target, key, receiver);
+        if (key === "alertStatesMany")
+          return async (entries: { id: string; members: string[] }[]) => {
+            t.clock.advance(10_000);
+            return store.alertStatesMany(entries);
+          };
+        if (key === "alertStates")
+          return async (id: string, members: string[]) => {
+            t.clock.advance(1_000);
+            return store.alertStates(id, members);
+          };
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const started = t.clock.ms();
+    const first = await t.deliver({ watches: slow });
+    expect(t.clock.ms() - started).toBeLessThanOrEqual(DELIVERY_LIMITS.budgetMs);
+    expect(first.sent).toBeGreaterThan(0);
+    expect(first.unread).toBeGreaterThan(0);
+    let runs = 1;
+    let sent = first.sent;
+    while (sent < 100 && runs < 10) {
+      runs += 1;
+      t.clock.advance(2_000);
+      const run = await t.deliver({ watches: slow });
+      expect(run.sent).toBeGreaterThan(0);
+      sent += run.sent;
+    }
+    expect(sent).toBe(100);
+    const chats = t.channel.attempts.map((a) => a.chatId);
+    expect(new Set(chats).size).toBe(100);
+    expect(chats).toHaveLength(100);
   });
 });
