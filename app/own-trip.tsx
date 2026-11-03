@@ -5,7 +5,7 @@ import type { Point } from "../lib/answer";
 import type { Place } from "../lib/built-in-places";
 import { TRIP_AREA_NAME } from "../lib/trip-bound";
 import { PlaceSearch } from "./place-search";
-import { createTripStore, pickTrip, startTrip, tapTrip, type TripDraft } from "./trip";
+import { createTripStore, pickBothTrip, pickTrip, startTrip, tapTrip, type TripDraft } from "./trip";
 
 function phone(): Storage | null {
   try {
@@ -43,6 +43,8 @@ export interface OwnTrip {
   bias: { lat: number; lon: number } | null;
   setBias: (at: { lat: number; lon: number }) => void;
   pick: (end: "from" | "to", place: Place) => void;
+  /** Fills From and To together, as two picks would: a typed trip once the rider taps Use this trip. */
+  pickBoth: (from: Place, to: Place) => boolean;
   /** False when the phone wouldn't store the trip, so it lasts only while the page is open. */
   kept: boolean;
   /** The last clear failed: the phone wouldn't remove the trip, so it is still saved. */
@@ -122,6 +124,14 @@ export function useOwnTrip(changed: () => void, events: OwnTripEvents = {}): Own
     setNamed((l) => ({ ...l, [end]: { name, at: { lat: place.lat, lon: place.lon } } }));
   }
 
+  function pickBoth(from: Place, to: Place): boolean {
+    if (!apply(pickBothTrip(draft, from, to))) return false;
+    setTouched(true);
+    const named = (place: Place) => ({ name: place.area ? `${place.name}, ${place.area}` : place.name, at: { lat: place.lat, lon: place.lon } });
+    setNamed({ from: named(from), to: named(to) });
+    return true;
+  }
+
   function clear() {
     if (!tripStore().clear()) {
       setClearFailed(true);
@@ -140,7 +150,7 @@ export function useOwnTrip(changed: () => void, events: OwnTripEvents = {}): Own
   const home = draft.step === "set" ? draft.trip.home : draft.step === "work" ? draft.home : undefined;
   const work = draft.step === "set" ? draft.trip.work : draft.step === "home" ? draft.work : undefined;
   const labels = { from: nameFor(named.from, home), to: nameFor(named.to, work) };
-  return { draft, outside, kept, clearFailed, labels, bias, setBias, pick, tap, clear, touched };
+  return { draft, outside, kept, clearFailed, labels, bias, setBias, pick, pickBoth, tap, clear, touched };
 }
 
 export function OwnTripPanel({ own, onFocusBox, focusSignal }: { own: OwnTrip; onFocusBox?: () => void; focusSignal?: number }) {
@@ -179,7 +189,8 @@ export function OwnTripPanel({ own, onFocusBox, focusSignal }: { own: OwnTrip; o
             <p className="text-ink-2">
               It leaves the phone only inside a check, and Lusong&apos;s server doesn&apos;t keep it unless you switch on the
               watcher below. Place names you type are sent to Lusong&apos;s server and to Photon, komoot&apos;s OpenStreetMap
-              search, to find the place; Lusong doesn&apos;t store them. To change the trip, search again or tap a new home on the map.
+              search, to find the place. Words you type in the trip box are sent to Lusong&apos;s server and to Meta&apos;s Model API
+              to read the place names, and those names to Photon. Lusong doesn&apos;t store any of them. To change the trip, search again or tap a new home on the map.
             </p>
             {!own.kept && (
               <p className="text-warn-ink">This phone wouldn&apos;t store it, so it lasts until you close the page.</p>

@@ -1,0 +1,12 @@
+[
+  { "text": "Talamban to IT Park, leaving around 7", "from": "Talamban", "to": "IT Park", "leaveAt": "07:00" },
+  { "text": "Banilad to Ayala Center Cebu at 6:30", "from": "Banilad", "to": "Ayala Center", "leaveAt": "06:30" },
+  { "text": "from Mandaue City Hall to SM City Cebu, 8am", "from": "Mandaue", "to": "SM City Cebu", "leaveAt": "08:00" },
+  { "text": "Lapu-Lapu City Hall papuntang Mactan airport mga 5 ng hapon", "from": "Lapu-Lapu", "to": "Mactan", "leaveAt": "17:00" },
+  { "text": "Cubao to Makati City Hall leaving 7:30", "from": "Cubao", "to": "Makati", "leaveAt": "07:30" },
+  { "text": "Quiapo Church to University of Santo Tomas", "from": "Quiapo", "to": "Santo Tomas", "leaveAt": null },
+  { "text": "Colon Street to Fuente Osmena Circle around 5pm", "from": "Colon", "to": "Fuente", "leaveAt": "17:00" },
+  { "text": "Marikina City Hall to SM Megamall alas sais ng umaga", "from": "Marikina", "to": "Megamall", "leaveAt": "06:00" },
+  { "text": "Davao City Hall to Bajada, leaving 7", "from": "Davao", "to": "Bajada", "leaveAt": "07:00" },
+  { "text": "Iloilo City Hall to SM City Iloilo, 6 pm", "from": "Iloilo City Hall", "to": "SM City Iloilo", "leaveAt": "18:00" }
+]

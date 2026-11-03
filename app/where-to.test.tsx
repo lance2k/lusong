@@ -15,6 +15,7 @@ const own: OwnTrip = {
   bias: null,
   setBias: () => {},
   pick: () => {},
+  pickBoth: () => false,
   kept: true,
   clearFailed: false,
   tap: () => {},
@@ -53,6 +54,8 @@ describe("the trip chips (S3P-1)", () => {
         collapsed={false}
         onExpand={noop}
         summary={null}
+        onUseTypedTrip={() => false}
+        leaveAt={null}
       />,
     );
     expect(chipLabels(html)[0]).toBe("My trip");
@@ -60,6 +63,61 @@ describe("the trip chips (S3P-1)", () => {
     expect(html).toContain("Check my trip");
     expect(html).toContain("Your trip is saved on this phone.");
     expect(html).toContain("Photon, komoot&#x27;s OpenStreetMap");
+  });
+
+  it("puts the typed box above From and To, and the privacy line under them covers it (S5)", () => {
+    const html = renderToStaticMarkup(
+      <WhereTo
+        headingId="h"
+        inputs={{ ...initialCommuteState.inputs, trip: OWN_TRIP }}
+        change={noop}
+        own={own}
+        checking={false}
+        canCheck
+        onCheck={noop}
+        onFocusBox={noop}
+        focusSignal={0}
+        onPickMyTrip={noop}
+        onOpenWatcher={noop}
+        collapsed={false}
+        onExpand={noop}
+        summary={null}
+        onUseTypedTrip={() => false}
+        leaveAt="07:00"
+      />,
+    );
+    const typed = html.indexOf("Or type your trip");
+    expect(typed).toBeGreaterThan(-1);
+    expect(typed).toBeLessThan(html.indexOf("From (home)"));
+    expect(html).toContain("The words you type here are sent to Lusong&#x27;s server and to Meta&#x27;s Model API");
+    const privacy = /Place names you type[^<]*/.exec(html)![0];
+    expect(privacy).toContain("Words you type in the trip box are sent to Lusong&#x27;s server and to Meta&#x27;s Model API");
+    expect(privacy).toContain("Lusong doesn&#x27;t store any of them");
+    expect(html).toContain("Leaving around 07:00. If you switch on the watcher, its window starts an hour before.");
+  });
+
+  it("shows no leaving time without one", () => {
+    const html = renderToStaticMarkup(
+      <WhereTo
+        headingId="h"
+        inputs={{ ...initialCommuteState.inputs, trip: OWN_TRIP }}
+        change={noop}
+        own={own}
+        checking={false}
+        canCheck
+        onCheck={noop}
+        onFocusBox={noop}
+        focusSignal={0}
+        onPickMyTrip={noop}
+        onOpenWatcher={noop}
+        collapsed={false}
+        onExpand={noop}
+        summary={null}
+        onUseTypedTrip={() => false}
+        leaveAt={null}
+      />,
+    );
+    expect(html).not.toContain("Leaving around");
   });
 
   it("a demo trip shows its sample chips with the samples line", () => {
@@ -79,6 +137,8 @@ describe("the trip chips (S3P-1)", () => {
         collapsed={false}
         onExpand={noop}
         summary={null}
+        onUseTypedTrip={() => false}
+        leaveAt={null}
       />,
     );
     expect(html).toContain("Samples are labelled test photos from elsewhere, pinned on these streets for the demo. Real checks never use them.");
