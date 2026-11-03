@@ -103,6 +103,43 @@ also shows:
 Each tick checks up to 20 watchers that are in their window and haven't been checked in the last 9 minutes, and it
 finishes in under 45 s, inside the route's 60 s limit.
 
+### Alert delivery: `lusong-alert-deliver` (not yet created)
+
+PAGASA advisories that touch a watcher's trip, and nationwide ones, are sent by their own route, never inside the tick
+(plan S4a, disposition S4P-8). The schedule for it is the main session's to create, as the tick's was:
+
+- Schedule id: `lusong-alert-deliver`
+- Destination: `https://lusong-mocha.vercel.app/api/alerts/deliver`, method `POST`
+- Cron: `5-55/10 * * * *` (every 10 minutes, offset by 5 from the tick)
+- Header: `Upstash-Forward-Authorization: Bearer <WATCH_TICK_SECRET>`, the same secret as the tick
+- Retries: 0
+
+A run sends at most 40 messages in at most 45 s and answers with counts only, for example
+`{"ok":true,"alerts":2,"pagasaHeld":null,"watchers":3,"due":2,"sent":2,"rejected":0,"ambiguous":0,"deferred":0}`.
+`pagasaHeld` says why PAGASA's alerts weren't sent this run (a stale or incomplete snapshot), which leans safe: they go
+at the first run that reads a complete, fresh snapshot. Each alert version reaches a watcher at most once. Its claim is
+written before the send, so a run that dies mid-send never sends it again. Telegram's 429 is tried again after its
+`retry_after` (60 s without one), at most 3 more times.
+
+### The Wonder sweep: `lusong-alert-sweep` (not yet created)
+
+Road closures and disaster-office posts come from one Muse Wonder call with web search, at most 4 a UTC day and at
+least 3 hours apart (plan S4b). Each candidate page is then fetched by Lusong itself (HTTPS, `*.gov.ph` and a fixed
+list of news sites only, robots.txt respected, private addresses refused) and kept only if the page names the place
+and the province, has a closure or flood term near the place, and carries its own publication time from the last
+48 hours. Items only ever warn (`SWEEP_BLOCKING` is false): they are messaged and shown beside the answer, never part
+of it.
+
+- Env: `LUSONG_SWEEP=on` turns discovery (the one paid call) on; unset, the route only works through stored candidates.
+  It needs `MODEL_API_KEY`, and spends from the same daily budget as riders: a sweep is admitted only while $7.00 of
+  `DAILY_BUDGET_USD` stays free for riders and the day's sweeps stay within $1.50 (reserve $0.30 each).
+- Schedule id: `lusong-alert-sweep`
+- Destination: `https://lusong-mocha.vercel.app/api/alerts/sweep`, method `POST`
+- Cron: `25,55 * * * *` (every 30 minutes). The slot claim keeps Wonder calls to 4 a day, 3 hours apart; the runs in
+  between finish admitting the candidates a cut-off run left (S4P-8), at no model cost.
+- Header: `Upstash-Forward-Authorization: Bearer <WATCH_TICK_SECRET>`
+- Retries: 0
+
 ## 6. One-message test
 
 1. On a phone, open the preview, pick "Your own trip", and tap home then work in Metro Cebu.

@@ -455,3 +455,26 @@ describe.each(watchStores)("the watcher's tick on the %s", (_name, make) => {
     expect(await deps.store.get(w.id)).toMatchObject({ sending: null, lastKind: null });
   });
 });
+
+describe("the tick keeps each checked trip's route line for alert delivery (S4P-6)", () => {
+  it("stores the plain route's line, at most 200 points with both ends, and not for a watcher switched off meanwhile", async () => {
+    const { store, deps } = setup("2026-10-30T06:00:00+08:00");
+    const w = await linkedWatcher(store);
+    const line = Array.from({ length: 1_000 }, (_, i) => ({ lat: BANILAD.lat + ((IT_PARK.lat - BANILAD.lat) * i) / 999, lon: BANILAD.lon + (i === 500 ? 0.03 : 0) }));
+    deps.check = async () => ({ ok: true, kind: "go", line });
+    await runTick(deps);
+    const [kept] = await store.routes([w.id]);
+    expect(kept!.length).toBeLessThanOrEqual(200);
+    expect(kept![0]).toEqual(line[0]);
+    expect(kept!.at(-1)).toEqual(line.at(-1));
+    expect(kept).toContainEqual(line[500]);
+
+    const other = await linkedWatcher(store, { id: "b".repeat(64) }, "5151");
+    deps.check = async () => {
+      await store.remove(other.id);
+      return { ok: true, kind: "go", line };
+    };
+    await runTick({ ...deps, now: () => new Date("2026-10-30T06:10:00+08:00") });
+    expect(await store.routes([other.id])).toEqual([null]);
+  });
+});

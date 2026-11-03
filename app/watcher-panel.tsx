@@ -117,7 +117,10 @@ export function WatcherPanel({ trip, leaveAt = null }: { trip: Trip | null; leav
         <>
           <p className="text-ink-2">
             Lusong checks this trip every 10 minutes in your window and messages you when the window opens and whenever the
-            answer changes. It checks as if you hadn&apos;t tapped &ldquo;raining here&rdquo;.
+            answer changes. It checks as if you hadn&apos;t tapped &ldquo;raining here&rdquo;. Lusong also messages you once
+            for each PAGASA advisory, road closure or disaster-office post it finds that touches or passes near your trip,
+            and for nationwide ones, whatever the window.
+            It tries to send; it can&apos;t promise you receive it.
           </p>
           {trip && (
           <>

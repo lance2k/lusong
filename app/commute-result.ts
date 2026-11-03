@@ -44,6 +44,8 @@ export interface CommuteResult {
   advisory: PageAdvisory;
   /** The PAGASA areas covering any checked way; optional so an older reply still renders. */
   advisoryAreas?: AdvisoryArea[];
+  /** Posts the sweep found near these routes; shown only, never part of the answer. Optional so an older reply renders. */
+  sweepWarnings?: { id: string; text: string; link: string }[];
   muse: PageMuse;
   reports: PageReport[];
   mmdaCredit: string;

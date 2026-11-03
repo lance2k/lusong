@@ -1,6 +1,7 @@
 import type { AnswerKind } from "./answer";
 import { SEND_TIMEOUT_MS, type Channel } from "./channel";
 import { TITLES, type ScheduledCheck } from "./commute-handler";
+import { simplifyLine } from "./alert-corridor";
 import { clockLine, hhmm, inWindow, phtDay } from "./watch-window";
 import type { WatchRecord, WatchStore, WatchTrip } from "./watch-store";
 
@@ -121,7 +122,20 @@ async function runOne(
     return "failed";
   }
   if (!result.ok) return "failed";
+  try {
+    return await sendAnswer(deps, w, result.kind);
+  } finally {
+    // The alert delivery's corridor (S4P-6), kept after the send so it never delays one. A failed write leaves the last
+    // line, or the fallback box, in use.
+    if (result.line) {
+      await deps.store.saveRoute(w.id, w.gen, simplifyLine(result.line)).catch((err) => {
+        console.error("watch store failed saving the route line:", err instanceof Error ? err.message : err);
+      });
+    }
+  }
+}
 
+async function sendAnswer(deps: TickDeps, w: WatchRecord, kind: AnswerKind): Promise<"sent" | "quiet" | "failed"> {
   const leaseAsked = Date.now();
   let lease: string | null;
   try {
@@ -133,7 +147,7 @@ async function runOne(
   // A switch-off holds the lease while it deletes the watcher.
   if (!lease) return "quiet";
   try {
-    return await sendUnderLease(deps, w, result.kind, leaseAsked);
+    return await sendUnderLease(deps, w, kind, leaseAsked);
   } finally {
     await deps.store.releaseSendLease(w.id, lease).catch((err) => {
       console.error("watch store failed releasing the send lease:", err instanceof Error ? err.message : err);
@@ -198,6 +212,8 @@ async function sendUnderLease(deps: TickDeps, w: WatchRecord, kind: AnswerKind, 
  * the deletion, so it goes ahead rather than leave the trip on the server.
  */
 export async function switchOff(store: WatchStore, id: string, opts: { waitMs?: number; pollMs?: number } = {}): Promise<void> {
+  // Marked first (S4P-2): a send claimed after this sees it, so only one already claimed can still be under way.
+  await store.markStopping(id);
   const until = Date.now() + (opts.waitMs ?? SWITCH_OFF_WAIT_MS);
   while (!(await store.takeSendLease(id, SEND_LEASE_MS)) && Date.now() < until) {
     await new Promise((resolve) => setTimeout(resolve, opts.pollMs ?? SWITCH_OFF_POLL_MS));

@@ -76,6 +76,7 @@ export function placesFromPhoton(body: unknown, bound: Bound): Place[] {
       lat,
       lon,
       source: "osm",
+      ...(text(props.osm_key) && text(props.type) ? { feature: { key: text(props.osm_key)!, type: text(props.type)! } } : {}),
     });
   }
   return out;

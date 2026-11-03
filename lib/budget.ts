@@ -76,6 +76,17 @@ export interface BudgetStore {
   settle(s: { id: string; day: string; chargeMicros: number }): Promise<boolean>;
 }
 
+/**
+ * The Wonder sweep's ledger (plan S4b, disposition S4P-3), kept in the riders' own daily spend so one atomic step
+ * decides both: a sweep is admitted only if, after its reserve, the day's total spend stays within `totalCapMicros`
+ * (the budget less what is kept free for riders) and the sweeps' own spend within `sweepCapMicros`.
+ */
+export interface SweepLedger {
+  admitSweep(a: { id: string; day: string; reserveMicros: number; totalCapMicros: number; sweepCapMicros: number }): Promise<"admitted" | "budget" | "sweep">;
+  /** Atomic and once only: moves the day's total and sweep spend alike by (charge − reserved). */
+  settleSweep(s: { id: string; day: string; chargeMicros: number }): Promise<boolean>;
+}
+
 export interface Budget {
   /** A null ip is a scheduled run: it reserves against the daily budget and no address's limit. */
   admit(ip: string | null, now: Date, reserveMicros?: number): Promise<Admission>;
@@ -170,10 +181,36 @@ export function budgetFromEnv(env: Record<string, string | undefined> = process.
 }
 
 /** For local development and tests only: each server instance would keep its own ledger. */
-export class MemoryBudgetStore implements BudgetStore {
+export class MemoryBudgetStore implements BudgetStore, SweepLedger {
   private spent = new Map<string, number>();
   private perIp = new Map<string, number>();
-  private reservations = new Map<string, { day: string; reserved: number }>();
+  private reservations = new Map<string, { day: string; reserved: number; sweep?: true }>();
+  private sweepSpent = new Map<string, number>();
+
+  async admitSweep(a: Parameters<SweepLedger["admitSweep"]>[0]) {
+    const spent = this.spent.get(a.day) ?? 0;
+    const sweep = this.sweepSpent.get(a.day) ?? 0;
+    if (spent + a.reserveMicros > a.totalCapMicros) return "budget" as const;
+    if (sweep + a.reserveMicros > a.sweepCapMicros) return "sweep" as const;
+    this.spent.set(a.day, spent + a.reserveMicros);
+    this.sweepSpent.set(a.day, sweep + a.reserveMicros);
+    this.reservations.set(a.id, { day: a.day, reserved: a.reserveMicros, sweep: true });
+    return "admitted" as const;
+  }
+
+  async settleSweep(s: Parameters<SweepLedger["settleSweep"]>[0]) {
+    const open = this.reservations.get(s.id);
+    if (!open?.sweep || open.day !== s.day) return false;
+    this.reservations.delete(s.id);
+    this.spent.set(s.day, (this.spent.get(s.day) ?? 0) + s.chargeMicros - open.reserved);
+    this.sweepSpent.set(s.day, (this.sweepSpent.get(s.day) ?? 0) + s.chargeMicros - open.reserved);
+    return true;
+  }
+
+  /** The day's total and sweep spend, for tests. */
+  spentOn(day: string) {
+    return { total: this.spent.get(day) ?? 0, sweep: this.sweepSpent.get(day) ?? 0 };
+  }
 
   async admit(a: Parameters<BudgetStore["admit"]>[0]) {
     const spent = this.spent.get(a.day) ?? 0;
@@ -189,7 +226,7 @@ export class MemoryBudgetStore implements BudgetStore {
 
   async settle(s: Parameters<BudgetStore["settle"]>[0]) {
     const open = this.reservations.get(s.id);
-    if (!open || open.day !== s.day) return false;
+    if (!open || open.sweep || open.day !== s.day) return false;
     this.reservations.delete(s.id);
     this.spent.set(s.day, (this.spent.get(s.day) ?? 0) + s.chargeMicros - open.reserved);
     return true;
@@ -227,11 +264,39 @@ end
 return 1
 `;
 
+/** KEYS: the day's spend, the day's sweep spend, the reservation. A sweep reservation is marked, so a rider's settle,
+ *  whose pattern then reads a different day, can't close it. */
+const ADMIT_SWEEP_SCRIPT = `
+local spent = tonumber(redis.call('GET', KEYS[1]) or '0')
+local sweep = tonumber(redis.call('GET', KEYS[2]) or '0')
+local reserve, totalCap, sweepCap, ttl = tonumber(ARGV[1]), tonumber(ARGV[2]), tonumber(ARGV[3]), tonumber(ARGV[4])
+if spent + reserve > totalCap then return 'budget' end
+if sweep + reserve > sweepCap then return 'sweep' end
+redis.call('INCRBY', KEYS[1], reserve)
+redis.call('EXPIRE', KEYS[1], ttl)
+redis.call('INCRBY', KEYS[2], reserve)
+redis.call('EXPIRE', KEYS[2], ttl)
+redis.call('SET', KEYS[3], reserve .. ':' .. ARGV[5] .. ':sweep', 'EX', ttl)
+return 'admitted'
+`;
+
+const SETTLE_SWEEP_SCRIPT = `
+local open = redis.call('GET', KEYS[1])
+if not open then return 0 end
+local reserved, day = string.match(open, '^(%d+):(.+):sweep$')
+if day ~= ARGV[2] then return 0 end
+redis.call('DEL', KEYS[1])
+local delta = tonumber(ARGV[1]) - tonumber(reserved)
+if redis.call('EXISTS', KEYS[2]) == 1 then redis.call('INCRBY', KEYS[2], delta) end
+if redis.call('EXISTS', KEYS[3]) == 1 then redis.call('INCRBY', KEYS[3], delta) end
+return 1
+`;
+
 /** Two days, so a check admitted just before midnight UTC still finds its keys when it settles. */
 const KEY_TTL_SECONDS = 172_800;
 
 /** Upstash's REST API: one POST per command, the command as a JSON array. */
-export class UpstashBudgetStore implements BudgetStore {
+export class UpstashBudgetStore implements BudgetStore, SweepLedger {
   constructor(
     private readonly url: string,
     private readonly token: string,
@@ -259,6 +324,25 @@ export class UpstashBudgetStore implements BudgetStore {
     );
     if (result === "admitted" || result === "budget" || result === "ip") return result;
     throw new Error(`unexpected admit result ${JSON.stringify(result)}`);
+  }
+
+  async admitSweep(a: Parameters<SweepLedger["admitSweep"]>[0]) {
+    const result = await this.evalScript(
+      ADMIT_SWEEP_SCRIPT,
+      [`${this.prefix}:spent:${a.day}`, `${this.prefix}:sweep-spent:${a.day}`, `${this.prefix}:res:${a.id}`],
+      [a.reserveMicros, a.totalCapMicros, a.sweepCapMicros, KEY_TTL_SECONDS, a.day],
+    );
+    if (result === "admitted" || result === "budget" || result === "sweep") return result;
+    throw new Error(`unexpected sweep admit result ${JSON.stringify(result)}`);
+  }
+
+  async settleSweep(s: Parameters<SweepLedger["settleSweep"]>[0]) {
+    const result = await this.evalScript(
+      SETTLE_SWEEP_SCRIPT,
+      [`${this.prefix}:res:${s.id}`, `${this.prefix}:spent:${s.day}`, `${this.prefix}:sweep-spent:${s.day}`],
+      [s.chargeMicros, s.day],
+    );
+    return result === 1;
   }
 
   async settle(s: Parameters<BudgetStore["settle"]>[0]) {

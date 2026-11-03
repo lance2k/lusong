@@ -35,6 +35,8 @@ export interface WatchRecord {
   sending: SentAnswer | null;
   /** Epoch ms of the last run claimed; 0 for never. */
   checkedAt: number;
+  /** Set when a switch-off has begun (S4P-2): no send is claimed for it from then on. */
+  stopping?: true;
 }
 
 export type NewWatcher = Pick<WatchRecord, "id" | "gen" | "trip" | "window">;
@@ -43,6 +45,13 @@ export interface SentAnswer {
   kind: AnswerKind;
   day: string;
 }
+
+/**
+ * An alert send's durable claim (S4P-1): `value` is the `attempt:<ms>` written before the send, `tries` the confirmed
+ * rejections before it. Refused: "gone" (switched off, stopping or switched on again), "done" (sent, ambiguous, given up,
+ * or an attempt whose outcome is unknown), "soon" (a retry not yet due, or this chat had an alert under a second ago).
+ */
+export type AlertClaim = { claimed: true; value: string; tries: number } | { claimed: false; why: "gone" | "done" | "soon" };
 
 export interface WatchStore {
   /** Saves the watcher and its first link code, unless MAX_WATCHERS are already live. */
@@ -76,8 +85,26 @@ export interface WatchStore {
   takeSendLease(id: string, ttlMs: number): Promise<string | null>;
   /** Frees the lease only if `token` still holds it, so a late release can't free someone else's. */
   releaseSendLease(id: string, token: string): Promise<void>;
-  /** Deletes the trip, chat binding, history, send lease and any outstanding code. */
+  /** Deletes the trip, chat binding, history, send lease, route line, alert history and any outstanding code. */
   remove(id: string): Promise<void>;
+  /** The first step of a switch-off (S4P-2): from now on no send is claimed for it. False when it is gone. */
+  markStopping(id: string): Promise<boolean>;
+  /** The line of the trip's last checked route (S4P-6), kept as long as the watcher, if the generation still matches. */
+  saveRoute(id: string, gen: string, line: readonly Point[]): Promise<boolean>;
+  /** Each watcher's stored route line, or null, in one read. */
+  routes(ids: readonly string[]): Promise<(Point[] | null)[]>;
+  /** The delivery state of each `<alertId>@<version>` for this watcher, in one read (S4P-9). */
+  alertStates(id: string, members: readonly string[]): Promise<(string | null)[]>;
+  /** alertStates for several watchers in one read (S4D-1): one store call for a whole batch. */
+  alertStatesMany(entries: readonly { id: string; members: readonly string[] }[]): Promise<(string | null)[][]>;
+  /**
+   * Atomic, before an alert send (S4P-1): the watcher still exists with this generation and isn't stopping, the alert
+   * version was never claimed or is a retry whose time has come, and the chat had no alert in the last `chatGapMs`.
+   * Then writes `attempt:<nowMs>` for it.
+   */
+  claimAlert(id: string, gen: string, member: string, nowMs: number, chatGapMs: number): Promise<AlertClaim>;
+  /** After the send: replaces the claim with `next` (null deletes it), only while the claim is still what is stored. */
+  settleAlert(id: string, member: string, claimed: string, next: string | null): Promise<boolean>;
 }
 
 type Fields = Record<string, string>;
@@ -101,6 +128,7 @@ function fromFields(id: string, f: Fields): WatchRecord | null {
       lastDay: f.lastDay || null,
       sending: sendingAs && sendingDay ? { kind: sendingAs, day: sendingDay } : null,
       checkedAt: Number(f.checkedAt) || 0,
+      ...(f.stopping ? { stopping: true as const } : {}),
     };
   } catch {
     return null;
@@ -123,7 +151,8 @@ export class MemoryWatchStore implements WatchStore {
   private readonly ttlMs: number;
   private readonly codeTtlMs: number;
   private readonly maxWatchers: number;
-  private records = new Map<string, { fields: Fields; expiresAt: number }>();
+  /** A watcher's route line and alert history live and expire with its record, as their own keys do on Upstash. */
+  private records = new Map<string, { fields: Fields; expiresAt: number; route?: Point[]; alerts?: Map<string, string> }>();
   private codes = new Map<string, { id: string; expiresAt: number }>();
   private index = { ids: new Set<string>(), expiresAt: 0 };
   private leases = new Map<string, { token: string; expiresAt: number }>();
@@ -165,7 +194,12 @@ export class MemoryWatchStore implements WatchStore {
   ttls(): Record<string, number> {
     const out: Record<string, number> = {};
     const t = this.now();
-    for (const [id, entry] of this.records) if (this.live(id)) out[`lusong:watch:w:${id}`] = entry.expiresAt - t;
+    for (const [id, entry] of this.records) {
+      if (!this.live(id)) continue;
+      out[`lusong:watch:w:${id}`] = entry.expiresAt - t;
+      if (entry.route) out[`lusong:watch:route:v1:${id}`] = entry.expiresAt - t;
+      if (entry.alerts?.size) out[`lusong:alert-sent:v1:${id}`] = entry.expiresAt - t;
+    }
     for (const [code, entry] of this.codes) if (this.liveCode(code)) out[`lusong:watch-code:${code}`] = entry.expiresAt - t;
     if (this.index.expiresAt > t && this.index.ids.size > 0) out["lusong:watch:index"] = this.index.expiresAt - t;
     for (const [id, lease] of this.leases) if (lease.expiresAt > t) out[`lusong:watch:lease:${id}`] = lease.expiresAt - t;
@@ -232,7 +266,7 @@ export class MemoryWatchStore implements WatchStore {
 
   async markSending(id: string, gen: string, answer: SentAnswer) {
     const fields = this.live(id);
-    if (!fields || fields.gen !== gen) return false;
+    if (!fields || fields.gen !== gen || fields.stopping) return false;
     const uncertain = fromFields(id, fields)?.sending;
     if (uncertain) {
       fields.lastKind = uncertain.kind;
@@ -274,6 +308,66 @@ export class MemoryWatchStore implements WatchStore {
     this.index.ids.delete(id);
     this.leases.delete(id);
   }
+
+  async markStopping(id: string) {
+    const fields = this.live(id);
+    if (!fields) return false;
+    fields.stopping = "1";
+    return true;
+  }
+
+  async saveRoute(id: string, gen: string, line: readonly Point[]) {
+    const entry = this.live(id)?.gen === gen ? this.records.get(id) : undefined;
+    if (!entry) return false;
+    entry.route = line.map((p) => ({ lat: p.lat, lon: p.lon }));
+    return true;
+  }
+
+  async routes(ids: readonly string[]) {
+    return ids.map((id) => (this.live(id) ? (this.records.get(id)!.route ?? null) : null));
+  }
+
+  async alertStates(id: string, members: readonly string[]) {
+    const alerts = this.live(id) ? this.records.get(id)!.alerts : undefined;
+    return members.map((m) => alerts?.get(m) ?? null);
+  }
+
+  async alertStatesMany(entries: readonly { id: string; members: readonly string[] }[]) {
+    return Promise.all(entries.map((e) => this.alertStates(e.id, e.members)));
+  }
+
+  async claimAlert(id: string, gen: string, member: string, nowMs: number, chatGapMs: number): Promise<AlertClaim> {
+    const fields = this.live(id);
+    if (!fields || fields.gen !== gen || fields.stopping) return { claimed: false, why: "gone" };
+    const entry = this.records.get(id)!;
+    const alerts = (entry.alerts ??= new Map());
+    const verdict = claimVerdict(alerts.get(member) ?? null, Number(fields.alertAt ?? 0), nowMs, chatGapMs);
+    if (!verdict.claimed) return verdict;
+    alerts.set(member, verdict.value);
+    fields.alertAt = String(nowMs);
+    return verdict;
+  }
+
+  async settleAlert(id: string, member: string, claimed: string, next: string | null) {
+    const alerts = this.live(id) ? this.records.get(id)!.alerts : undefined;
+    if (!alerts || alerts.get(member) !== claimed) return false;
+    if (next === null) alerts.delete(member);
+    else alerts.set(member, next);
+    return true;
+  }
+}
+
+/** The claim rule both stores apply, in claimAlert's one step. */
+function claimVerdict(state: string | null, lastAlertAt: number, nowMs: number, chatGapMs: number): AlertClaim {
+  let tries = 0;
+  if (state !== null) {
+    const retry = /^retry:(\d+):(\d+)$/.exec(state);
+    if (!retry) return { claimed: false, why: "done" };
+    if (Number(retry[2]) > nowMs) return { claimed: false, why: "soon" };
+    tries = Number(retry[1]);
+  }
+  if (nowMs - lastAlertAt < chatGapMs) return { claimed: false, why: "soon" };
+  return { claimed: true, value: `attempt:${nowMs}`, tries };
 }
 
 /** KEYS: record, index, code. ARGV: id, record prefix, max, ttl, code ttl, code, then the fields as name, value pairs. */
@@ -292,11 +386,13 @@ redis.call('SET', KEYS[3], ARGV[1], 'PX', ARGV[5])
 return 'created'
 `;
 
-/** KEYS: record, index. */
+/** KEYS: record, index, route line, alert history. */
 const REFRESH_SCRIPT = `
 if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
 redis.call('PEXPIRE', KEYS[1], ARGV[1])
 redis.call('PEXPIRE', KEYS[2], ARGV[1])
+redis.call('PEXPIRE', KEYS[3], ARGV[1])
+redis.call('PEXPIRE', KEYS[4], ARGV[1])
 return 1
 `;
 
@@ -356,6 +452,7 @@ return 0
 /** An answer still marked as sending becomes the last sent before the new one is marked; see WatchStore.markSending. */
 const MARK_SENDING_SCRIPT = `
 if redis.call('HGET', KEYS[1], 'gen') ~= ARGV[1] then return 0 end
+if redis.call('HEXISTS', KEYS[1], 'stopping') == 1 then return 0 end
 local uncertain = redis.call('HGET', KEYS[1], 'sending')
 if uncertain then
   local kind, day = string.match(uncertain, '^([^|]+)|(.+)$')
@@ -382,12 +479,56 @@ if redis.call('GET', KEYS[1]) == ARGV[1] then redis.call('DEL', KEYS[1]) end
 return 1
 `;
 
-/** KEYS: record, index, code prefix, lease. */
+/** KEYS: record, index, code prefix, lease, route line, alert history. */
 const REMOVE_SCRIPT = `
 local code = redis.call('HGET', KEYS[1], 'code')
 if code then redis.call('DEL', KEYS[3] .. code) end
-redis.call('DEL', KEYS[1], KEYS[4])
+redis.call('DEL', KEYS[1], KEYS[4], KEYS[5], KEYS[6])
 redis.call('SREM', KEYS[2], ARGV[1])
+return 1
+`;
+
+const MARK_STOPPING_SCRIPT = `
+if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
+redis.call('HSET', KEYS[1], 'stopping', '1')
+return 1
+`;
+
+/** KEYS: record, route line. Kept as long as the record has left. */
+const SAVE_ROUTE_SCRIPT = `
+if redis.call('HGET', KEYS[1], 'gen') ~= ARGV[1] then return 0 end
+local ttl = redis.call('PTTL', KEYS[1])
+if ttl <= 0 then return 0 end
+redis.call('SET', KEYS[2], ARGV[2], 'PX', ttl)
+return 1
+`;
+
+/** KEYS: record, alert history. ARGV: gen, member, now ms, chat gap ms. The same rule as claimVerdict. */
+const CLAIM_ALERT_SCRIPT = `
+if redis.call('HGET', KEYS[1], 'gen') ~= ARGV[1] then return 'gone' end
+if redis.call('HEXISTS', KEYS[1], 'stopping') == 1 then return 'gone' end
+local now = tonumber(ARGV[3])
+local tries = 0
+local state = redis.call('HGET', KEYS[2], ARGV[2])
+if state then
+  local n, notBefore = string.match(state, '^retry:(%d+):(%d+)$')
+  if not n then return 'done' end
+  if tonumber(notBefore) > now then return 'soon' end
+  tries = tonumber(n)
+end
+if now - tonumber(redis.call('HGET', KEYS[1], 'alertAt') or '0') < tonumber(ARGV[4]) then return 'soon' end
+local ttl = redis.call('PTTL', KEYS[1])
+if ttl <= 0 then return 'gone' end
+redis.call('HSET', KEYS[2], ARGV[2], 'attempt:' .. ARGV[3])
+redis.call('PEXPIRE', KEYS[2], ttl)
+redis.call('HSET', KEYS[1], 'alertAt', ARGV[3])
+return 'claimed:' .. tries
+`;
+
+/** KEYS: alert history. ARGV: member, claim, next ('' deletes). */
+const SETTLE_ALERT_SCRIPT = `
+if redis.call('HGET', KEYS[1], ARGV[1]) ~= ARGV[2] then return 0 end
+if ARGV[3] == '' then redis.call('HDEL', KEYS[1], ARGV[1]) else redis.call('HSET', KEYS[1], ARGV[1], ARGV[3]) end
 return 1
 `;
 
@@ -398,6 +539,23 @@ function pairs(flat: unknown[]): Fields {
 }
 
 /** Upstash's REST API, one EVAL per operation, in the same database as the budget (lib/budget.ts). */
+/** One HMGET per key; ARGV is each key's member count followed by its members. */
+const ALERT_STATES_MANY_SCRIPT = `
+local out = {}
+local at = 1
+for i, key in ipairs(KEYS) do
+  local n = tonumber(ARGV[at])
+  at = at + 1
+  if n == 0 then
+    out[i] = {}
+  else
+    out[i] = redis.call('HMGET', key, unpack(ARGV, at, at + n - 1))
+  end
+  at = at + n
+end
+return out
+`;
+
 export class UpstashWatchStore implements WatchStore {
   private readonly ttlMs: number;
   private readonly codeTtlMs: number;
@@ -425,6 +583,12 @@ export class UpstashWatchStore implements WatchStore {
   }
   private get codePrefix() {
     return `${this.prefix}:watch-code:`;
+  }
+  private route(id: string) {
+    return `${this.prefix}:watch:route:v1:${id}`;
+  }
+  private alertsSent(id: string) {
+    return `${this.prefix}:alert-sent:v1:${id}`;
   }
 
   private async evalScript(script: string, keys: string[], args: (string | number)[]): Promise<unknown> {
@@ -457,7 +621,7 @@ export class UpstashWatchStore implements WatchStore {
   }
 
   async refresh(id: string) {
-    return (await this.evalScript(REFRESH_SCRIPT, [this.record(id), this.index], [this.ttlMs])) === 1;
+    return (await this.evalScript(REFRESH_SCRIPT, [this.record(id), this.index, this.route(id), this.alertsSent(id)], [this.ttlMs])) === 1;
   }
 
   async newCode(id: string, code: string) {
@@ -510,7 +674,69 @@ export class UpstashWatchStore implements WatchStore {
   }
 
   async remove(id: string) {
-    await this.evalScript(REMOVE_SCRIPT, [this.record(id), this.index, this.codePrefix, this.lease(id)], [id]);
+    await this.evalScript(REMOVE_SCRIPT, [this.record(id), this.index, this.codePrefix, this.lease(id), this.route(id), this.alertsSent(id)], [id]);
+  }
+
+  async markStopping(id: string) {
+    return (await this.evalScript(MARK_STOPPING_SCRIPT, [this.record(id)], [])) === 1;
+  }
+
+  async saveRoute(id: string, gen: string, line: readonly Point[]) {
+    const json = JSON.stringify(line.map((p) => [p.lat, p.lon]));
+    return (await this.evalScript(SAVE_ROUTE_SCRIPT, [this.record(id), this.route(id)], [gen, json])) === 1;
+  }
+
+  async routes(ids: readonly string[]) {
+    if (ids.length === 0) return [];
+    const result = await this.evalScript("return redis.call('MGET', unpack(KEYS))", ids.map((id) => this.route(id)), []);
+    if (!Array.isArray(result) || result.length !== ids.length) throw new Error("unexpected route read");
+    return result.map((value) => (typeof value === "string" ? lineFrom(value) : null));
+  }
+
+  async alertStates(id: string, members: readonly string[]) {
+    if (members.length === 0) return [];
+    const result = await this.evalScript("return redis.call('HMGET', KEYS[1], unpack(ARGV))", [this.alertsSent(id)], [...members]);
+    if (!Array.isArray(result) || result.length !== members.length) throw new Error("unexpected alert state read");
+    return result.map((value) => (typeof value === "string" ? value : null));
+  }
+
+  async alertStatesMany(entries: readonly { id: string; members: readonly string[] }[]) {
+    if (entries.length === 0) return [];
+    const result = await this.evalScript(
+      ALERT_STATES_MANY_SCRIPT,
+      entries.map((e) => this.alertsSent(e.id)),
+      entries.flatMap((e) => [e.members.length, ...e.members]),
+    );
+    if (!Array.isArray(result) || result.length !== entries.length) throw new Error("unexpected alert state read");
+    return entries.map((e, i) => {
+      const row = result[i];
+      if (e.members.length === 0) return [];
+      if (!Array.isArray(row) || row.length !== e.members.length) throw new Error("unexpected alert state read");
+      return row.map((value) => (typeof value === "string" ? value : null));
+    });
+  }
+
+  async claimAlert(id: string, gen: string, member: string, nowMs: number, chatGapMs: number): Promise<AlertClaim> {
+    const result = await this.evalScript(CLAIM_ALERT_SCRIPT, [this.record(id), this.alertsSent(id)], [gen, member, nowMs, chatGapMs]);
+    const claimed = typeof result === "string" ? /^claimed:(\d+)$/.exec(result) : null;
+    if (claimed) return { claimed: true, value: `attempt:${nowMs}`, tries: Number(claimed[1]) };
+    if (result === "gone" || result === "done" || result === "soon") return { claimed: false, why: result };
+    throw new Error(`unexpected alert claim result ${JSON.stringify(result)}`);
+  }
+
+  async settleAlert(id: string, member: string, claimed: string, next: string | null) {
+    return (await this.evalScript(SETTLE_ALERT_SCRIPT, [this.alertsSent(id)], [member, claimed, next ?? ""])) === 1;
+  }
+}
+
+function lineFrom(json: string): Point[] | null {
+  try {
+    const pairs = JSON.parse(json) as unknown;
+    if (!Array.isArray(pairs)) return null;
+    const line = pairs.map((p) => (Array.isArray(p) ? { lat: Number(p[0]), lon: Number(p[1]) } : { lat: NaN, lon: NaN }));
+    return line.length >= 2 && line.every((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon)) ? line : null;
+  } catch {
+    return null;
   }
 }
 

@@ -74,6 +74,23 @@ export function Evidence({
 
       <Advisory advisory={result.advisory} />
 
+      {result.sweepWarnings && result.sweepWarnings.length > 0 && (
+        <section className="space-y-2 text-[15px]">
+          <h3 className={heading}>Posts near your way</h3>
+          <p className="text-ink-2">Lusong found these online and hasn&apos;t confirmed them. They don&apos;t change the answer.</p>
+          <ul className="space-y-2">
+            {result.sweepWarnings.map((w) => (
+              <li key={w.id}>
+                {w.text}{" "}
+                <a href={w.link} target="_blank" rel="noopener noreferrer" className="font-semibold text-brand underline">
+                  Source
+                </a>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <section>
         <h3 className={heading}>Reports</h3>
         {result.reports.length === 0 ? (
