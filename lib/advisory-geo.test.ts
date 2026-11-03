@@ -111,12 +111,19 @@ describe("judging an area against a route", () => {
     expect(judgeArea({ desc: "Somewhere", polygons: [], geocodes: ["99"] }, davaoDeOroRoute)).toBe("unbounded");
   });
 
-  it("a readable polygon is the area: a route through it is covered, one beside it isn't", () => {
+  it("a readable polygon covers a route through it; with nothing else to place it, one beside it is outside", () => {
     const square = [123.88, 10.28, 123.92, 10.28, 123.92, 10.31, 123.88, 10.31, 123.88, 10.28];
     expect(judgeArea({ desc: "Cebu", polygons: [square], geocodes: ["072200000"] }, cebuRoute)).toBe("covers");
     // Starts and ends outside the square, crossing it: no vertex inside.
     expect(judgeArea({ desc: "x", polygons: [square], geocodes: [] }, [{ lat: 10.295, lon: 123.85 }, { lat: 10.295, lon: 123.95 }])).toBe("covers");
     expect(judgeArea({ desc: "x", polygons: [square], geocodes: [] }, [{ lat: 10.4, lon: 123.85 }, { lat: 10.4, lon: 123.95 }])).toBe("outside");
+  });
+
+  it("lean safe: a route outside the polygon but inside the province its geocode names is covered", () => {
+    const square = [123.88, 10.28, 123.92, 10.28, 123.92, 10.31, 123.88, 10.31, 123.88, 10.28];
+    const north = [{ lat: 10.4, lon: 123.85 }, { lat: 10.4, lon: 123.95 }];
+    expect(judgeArea({ desc: "x", polygons: [square], geocodes: ["072200000"] }, north)).toBe("covers");
+    expect(judgeArea({ desc: "x", polygons: [square], geocodes: ["071200000"] }, north)).toBe("outside");
   });
 
   it("a nationwide area covers a Cebu and a Davao route alike", () => {

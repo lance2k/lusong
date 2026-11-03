@@ -318,21 +318,22 @@ export function isNationwide(area: CapArea): boolean {
 }
 
 /**
- * Covers: the route enters the area's polygon, or, with no readable polygon, the province or region its geocode or name
- * bounds it by (lean safe: anywhere in that bound counts). Nationwide areas cover every route. Unbounded: nothing places
- * it, so it never covers a route; the caller shows it as a warning instead.
+ * Lean safe, as lib/advisory.ts was for Cebu: an area covers a route when any indicator it carries says so, its polygon
+ * or the province or region its geocode or name bounds it by. PAGASA's own polygons are coarse: the 2026-10-30 Davao
+ * Region record's Davao del Sur polygon leaves out downtown Davao City, which its SAME code 112400000 includes. A
+ * nationwide area covers every route. Unbounded: no polygon and nothing names a place, so it never covers a route; the
+ * caller shows it as a warning instead.
  */
 export function judgeArea(area: CapArea, line: readonly Point[]): AreaJudgement {
   const bound = boundOf(area);
   if (bound?.kind === "nationwide") return "covers";
-  if (area.polygons.length > 0) return area.polygons.some((ring) => lineEnters(line, [ring])) ? "covers" : "outside";
-  if (!bound) return "unbounded";
-  return bound.codes.some((code) => {
+  if (area.polygons.some((ring) => lineEnters(line, [ring]))) return "covers";
+  if (!bound) return area.polygons.length > 0 ? "outside" : "unbounded";
+  const inBound = bound.codes.some((code) => {
     const province = BY_CODE.get(code);
     return province !== undefined && lineEnters(line, province.rings, province.bbox);
-  })
-    ? "covers"
-    : "outside";
+  });
+  return inBound ? "covers" : "outside";
 }
 
 /** Every province faeldon holds, for tests and inventories. */
