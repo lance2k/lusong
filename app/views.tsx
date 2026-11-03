@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Checker from "./checker";
-import { ABOUT_INTRO, CHECK_INTRO, CREDITS_LINE, ESTIMATE_LINE, PHOTO_PRIVACY_LINE, REPORT_INTRO, TILES_LINE } from "./credits";
+import { ABOUT_INTRO, CHECK_INTRO, CREDITS_LINE, ESTIMATE_LINE, PHOTO_PRIVACY_LINE, RAIN_CREDIT_LINE, REPORT_INTRO, TILES_LINE } from "./credits";
 import ReportStreet from "./report";
 import type { Trip } from "./trip";
 import { Chip } from "./ui/chip";
@@ -55,6 +55,7 @@ export function AboutView() {
       <p>{ESTIMATE_LINE}</p>
       <p>{PHOTO_PRIVACY_LINE}</p>
       <p>{CREDITS_LINE}</p>
+      <p>{RAIN_CREDIT_LINE}</p>
       <p>{TILES_LINE}</p>
     </div>
   );
