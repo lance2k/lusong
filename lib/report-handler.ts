@@ -10,7 +10,7 @@ import { readCaptureTime } from "./exif";
 import { JpegError, sanitizeJpeg } from "./jpeg";
 import { locateSpot } from "./locate";
 import { MetaApiError, segmentReply, type Meter } from "./meta";
-import { inMetroCebu } from "./metro-cebu";
+import { inServerTripBound } from "./province-index";
 import { beforeDeadline, readBody } from "./deadline";
 import { PLATE_DETECTION_TRUSTED, publishPhoto, type PhotoInput, type PhotoOutcome, type SamCall } from "./photo-publish";
 import type { SamReply } from "./sam";
@@ -201,7 +201,7 @@ export function makeReportHandler(deps: {
     }
     const at = pinFrom(form);
     if (!at) return fail(400, "Lusong needs your phone's location to place the report.");
-    if (!inMetroCebu(at)) return fail(400, "Lusong takes reports from streets in Metro Cebu only.");
+    if (!inServerTripBound(at)) return fail(400, "Lusong takes reports from streets in the Philippines only.");
     const photo = form.get("photo");
     if (!(photo instanceof File)) return fail(400, "No photo was attached.");
     if (photo.size > MAX_BYTES) return fail(413, "That photo is too large. Try a smaller one.");

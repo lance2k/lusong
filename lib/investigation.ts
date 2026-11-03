@@ -4,7 +4,8 @@ import { ATTEMPTS_PER_CALL, MUSE_INPUT_MICROS_PER_TOKEN, MUSE_OUTPUT_MICROS_PER_
 import { detourAvoids } from "./detour";
 import { MetaApiError, type Meter } from "./meta";
 import { respond, type FunctionCall, type FunctionTool, type SparkReply } from "./spark-responses";
-import { inMetroCebu, SEARCH_RESERVE_MICROS, type WebEvidence, type WebFinding, type WebPlan } from "./web-search";
+import { inServerTripBound } from "./province-index";
+import { SEARCH_RESERVE_MICROS, type WebEvidence, type WebFinding, type WebPlan } from "./web-search";
 
 export type { WebEvidence, WebFinding } from "./web-search";
 
@@ -181,7 +182,7 @@ const TOOLS: FunctionTool[] = [
   {
     type: "function",
     name: "read_advisory",
-    description: "PAGASA's General Flood Advisory for Cebu, as Lusong read it for this check.",
+    description: "PAGASA's flood advisory for this trip, as Lusong read it for this check.",
     parameters: { type: "object", properties: {} },
   },
   {
@@ -198,7 +199,7 @@ const TOOLS: FunctionTool[] = [
     type: "function",
     name: "route_around",
     description:
-      "Ask Lusong to try one more way around up to three spots in Metro Cebu that you think are flooded or closed. " +
+      "Ask Lusong to try one more way around up to three spots in the Philippines that you think are flooded or closed. " +
       "Lusong also avoids every spot already blocked, gathers the reports along the new way and judges it by its own rules.",
     parameters: {
       type: "object",
@@ -214,7 +215,7 @@ const TOOLS: FunctionTool[] = [
 ];
 
 const INSTRUCTIONS = [
-  "You help Lusong explain a commute check to a motorbike rider in Metro Cebu.",
+  "You help Lusong explain a commute check to a motorbike rider in the Philippines.",
   "Lusong's rules have already picked the answer and you cannot change it.",
   "Call read_advisory and reports_near_route to see the evidence Lusong gathered.",
   "If the usual way is blocked and you know of another flooded or closed spot, you may call route_around once.",
@@ -415,8 +416,8 @@ export async function investigate(input: InvestigationInput): Promise<Investigat
         if (!spots || spots.length === 0 || spots.length > ROUTE_AROUND_MAX_SPOTS) {
           return refuse("unreadable spots", `give one to ${ROUTE_AROUND_MAX_SPOTS} spots as {lat, lon}`);
         }
-        if (!spots.every((p) => typeof p === "object" && p !== null && inMetroCebu(p))) {
-          return refuse("spot outside Metro Cebu", "every spot must be a {lat, lon} in Metro Cebu");
+        if (!spots.every((p) => typeof p === "object" && p !== null && inServerTripBound(p))) {
+          return refuse("spot outside the Philippines", "every spot must be a {lat, lon} in the Philippines");
         }
         if (input.deadline - Date.now() < ROUTE_AROUND_MIN_MS) {
           toolCalls.push({ name: call.name, outcome: "no time left" });

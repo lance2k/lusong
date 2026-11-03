@@ -98,7 +98,9 @@ describe("POST /api/watch", () => {
 
   it.each([
     ["no trip", { action: "on", window: { start: "06:00", end: "08:00" } }],
-    ["an end outside Metro Cebu", { action: "on", from: BANILAD, to: { lat: 35.68, lon: 139.76 }, window: { start: "06:00", end: "08:00" } }],
+    ["an end outside the Philippines", { action: "on", from: BANILAD, to: { lat: 35.68, lon: 139.76 }, window: { start: "06:00", end: "08:00" } }],
+    ["ends more than 100 km apart", { action: "on", from: BANILAD, to: { lat: 11.27, lon: 123.911 }, window: { start: "06:00", end: "08:00" } }],
+    ["an end in Sabah, inside the trip box but outside the Philippines", { action: "on", from: BANILAD, to: { lat: 5.84, lon: 118.11 }, window: { start: "06:00", end: "08:00" } }],
     ["a window that ends before it starts", { action: "on", from: BANILAD, to: IT_PARK, window: { start: "08:00", end: "06:00" } }],
     ["a window over 4 hours", { action: "on", from: BANILAD, to: IT_PARK, window: { start: "05:00", end: "09:30" } }],
     ["an unknown action", { action: "explode" }],

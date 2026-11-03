@@ -178,7 +178,7 @@ describe("the rules pick the answer, whatever the model does (🔴P5)", () => {
     expect(meta.requests).toHaveLength(1);
     expect(result.toolCalls).toEqual([]);
     expect(result.answer.answer).toBe("no_one_knows");
-    expect(result.answer.reason).toMatch(/PAGASA's flood advisory for Cebu is active/);
+    expect(result.answer.reason).toMatch(/PAGASA's flood advisory for this trip is active/);
   });
 
   it("a model that writes \"safe to go\" under Wait: its words reach nothing, only the ids it picked", async () => {
@@ -433,7 +433,8 @@ describe("route_around: a way around the model proposes is judged by the same ru
   it.each([
     ["no spots", []],
     ["four spots", [MODEL_SPOT, MODEL_SPOT, MODEL_SPOT, MODEL_SPOT]],
-    ["a spot in Manila", [{ lat: 14.5995, lon: 120.9842 }]],
+    ["a spot in Sabah, inside the trip box but outside the Philippines", [{ lat: 5.84, lon: 118.11 }]],
+    ["a spot outside the trip box", [{ lat: 35.68, lon: 139.76 }]],
     ["a spot that isn't numbers", [{ lat: "10.33", lon: "123.91" }]],
     ["spots that aren't a list", "Banilad"],
   ])("%s is refused without asking the router", async (_name, spots) => {
@@ -801,10 +802,12 @@ describe("settling an investigation through the shared admission", () => {
     return { budget: createBudget({ store, budgetUsd: 10, ipLimit: 10 }), charged };
   }
 
+  const CEBU_AREA = { code: "702200000", name: "Cebu" };
+
   async function check(meta: Parameters<typeof fakeMeta>[0], plan?: WebPlan) {
     const { budget, charged } = recordingBudget();
     const kv = new MemoryKvStore();
-    const thePlan = plan ?? (await planWebSearch(kv, NOW, createBudget({ store: new MemoryBudgetStore(), budgetUsd: 100, ipLimit: 1 })));
+    const thePlan = plan ?? (await planWebSearch(CEBU_AREA, kv, NOW, createBudget({ store: new MemoryBudgetStore(), budgetUsd: 100, ipLimit: 1 })));
     const reserved = investigationReserveMicros(thePlan);
     const admission = await admit(budget, { clientIp: "192.0.2.1", reserveMicros: reserved, now: NOW });
     if (!admission.ok) throw new Error("expected an admission");
@@ -829,7 +832,7 @@ describe("settling an investigation through the shared admission", () => {
   });
 
   it("success with a cached search: only the loop is reserved and charged", async () => {
-    const plan: WebPlan = { kind: "cached", evidence: { state: "searched", searchedAt: NOW.toISOString(), findings: [] } };
+    const plan: WebPlan = { kind: "cached", area: CEBU_AREA, evidence: { state: "searched", searchedAt: NOW.toISOString(), findings: [] } };
     const { charged, reserved } = await check({ turns: loop }, plan);
 
     expect(reserved).toBe(LOOP_RESERVE_LITERAL);
@@ -838,7 +841,7 @@ describe("settling an investigation through the shared admission", () => {
 
   it("past today's search cap: no search request, only the loop reserved, and the answer from the rules", async () => {
     const used = createBudget({ store: new MemoryBudgetStore(), budgetUsd: (SEARCH_RESERVE_MICROS - 1) / 1e6, ipLimit: 1 });
-    const plan = await planWebSearch(new MemoryKvStore(), NOW, used);
+    const plan = await planWebSearch(CEBU_AREA, new MemoryKvStore(), NOW, used);
     const { charged, reserved, result, searchRequests } = await check({ turns: loop }, plan);
 
     expect(searchRequests).toHaveLength(0);

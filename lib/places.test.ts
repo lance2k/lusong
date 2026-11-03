@@ -20,6 +20,8 @@ import { inBound, TRIP_BOUND, type Bound } from "./trip-bound";
 
 const IT_PARK_REPLY = JSON.parse(readFileSync("test/fixtures/photon/it-park-cebu.json", "utf8"));
 const PHILIPPINES: Bound = { id: "ph-test", south: 4.5, north: 21.2, west: 116.9, east: 126.7 };
+/** The Metro Cebu box the trip bound was before S1: these tests check that a bound narrower than the country holds. */
+const CEBU: Bound = { id: "metro-cebu", south: 10.2, north: 10.47, west: 123.74, east: 124.07 };
 const OPEN: PhotonGate = { acquire: async () => "ok" };
 
 describe("the query", () => {
@@ -41,25 +43,29 @@ describe("built-in places", () => {
     expect(BUILT_IN_PLACES.every((p) => inBound(PHILIPPINES, p))).toBe(true);
   });
 
+  it("the trip bound is the Philippines", () => {
+    expect(TRIP_BOUND).toEqual({ ...PHILIPPINES, id: "philippines" });
+  });
+
   it("only those inside the active trip bound are offered", () => {
-    expect(builtInMatches("city hall", TRIP_BOUND).map((p) => p.id)).toEqual([
+    expect(builtInMatches("city hall", CEBU).map((p) => p.id)).toEqual([
       "built-in:lapu-lapu-city-hall",
       "built-in:talisay-city-hall",
     ]);
-    expect(builtInMatches("davao", TRIP_BOUND)).toEqual([]);
+    expect(builtInMatches("davao", CEBU)).toEqual([]);
     expect(builtInMatches("davao", PHILIPPINES).map((p) => p.id)).toEqual(["built-in:davao-city-hall"]);
   });
 
   it("matches word starts, ignoring case and accents", () => {
-    expect(builtInMatches("fuente osme", TRIP_BOUND).map((p) => p.id)).toEqual(["built-in:fuente-osmena"]);
-    expect(builtInMatches("IT PAR", TRIP_BOUND).map((p) => p.id)).toEqual(["built-in:cebu-it-park"]);
-    expect(builtInMatches("ark", TRIP_BOUND)).toEqual([]);
+    expect(builtInMatches("fuente osme", CEBU).map((p) => p.id)).toEqual(["built-in:fuente-osmena"]);
+    expect(builtInMatches("IT PAR", CEBU).map((p) => p.id)).toEqual(["built-in:cebu-it-park"]);
+    expect(builtInMatches("ark", CEBU)).toEqual([]);
   });
 });
 
 describe("Photon's reply", () => {
   it("keeps points in the Philippines inside the bound, one per name and area", () => {
-    const places = placesFromPhoton(IT_PARK_REPLY, TRIP_BOUND);
+    const places = placesFromPhoton(IT_PARK_REPLY, CEBU);
     expect(places.map((p) => p.name)).toEqual([
       "IT Park BRT Stop",
       "Cebu IT Park Transport Terminal",
@@ -69,7 +75,7 @@ describe("Photon's reply", () => {
       "Cebu IT Tower",
       "AAS IT Services",
     ]);
-    expect(places.every((p) => p.source === "osm" && inBound(TRIP_BOUND, p))).toBe(true);
+    expect(places.every((p) => p.source === "osm" && inBound(CEBU, p))).toBe(true);
     expect(places[0]).toMatchObject({ id: "osm:N13754365857", area: expect.stringContaining("Cebu City") });
   });
 
@@ -84,28 +90,28 @@ describe("Photon's reply", () => {
         { geometry: { type: "Point", coordinates: [123.9, 10.3] }, properties: { countrycode: "PH", street: "Gorordo Avenue", housenumber: "12" } },
       ],
     };
-    expect(placesFromPhoton(body, TRIP_BOUND).map((p) => p.name)).toEqual(["12 Gorordo Avenue"]);
-    expect(placesFromPhoton({ nope: true }, TRIP_BOUND)).toEqual([]);
-    expect(placesFromPhoton(null, TRIP_BOUND)).toEqual([]);
+    expect(placesFromPhoton(body, CEBU).map((p) => p.name)).toEqual(["12 Gorordo Avenue"]);
+    expect(placesFromPhoton({ nope: true }, CEBU)).toEqual([]);
+    expect(placesFromPhoton(null, CEBU)).toEqual([]);
   });
 });
 
 describe("the request to Photon", () => {
   it("is limited to the bound and biased to the phone, rounded to a tenth of a degree", () => {
-    const bias = roundBias("10.3456", "123.9123", TRIP_BOUND);
+    const bias = roundBias("10.3456", "123.9123", CEBU);
     expect(bias).toEqual({ lat: 10.3, lon: 123.9 });
-    const url = new URL(photonUrl("it park", TRIP_BOUND, bias));
+    const url = new URL(photonUrl("it park", CEBU, bias));
     expect(url.host).toBe("photon.komoot.io");
     expect(url.searchParams.get("bbox")).toBe("123.74,10.2,124.07,10.47");
     expect(url.searchParams.get("lat")).toBe("10.3");
     expect(url.searchParams.get("lon")).toBe("123.9");
-    expect(new URL(photonUrl("x y z", TRIP_BOUND, null)).searchParams.has("lat")).toBe(false);
+    expect(new URL(photonUrl("x y z", CEBU, null)).searchParams.has("lat")).toBe(false);
   });
 
   it("drops a bias outside the bound or not a number", () => {
-    expect(roundBias("14.6", "121.0", TRIP_BOUND)).toBeNull();
-    expect(roundBias("abc", "121.0", TRIP_BOUND)).toBeNull();
-    expect(roundBias(null, null, TRIP_BOUND)).toBeNull();
+    expect(roundBias("14.6", "121.0", CEBU)).toBeNull();
+    expect(roundBias("abc", "121.0", CEBU)).toBeNull();
+    expect(roundBias(null, null, CEBU)).toBeNull();
   });
 });
 
@@ -198,7 +204,7 @@ describe("searching", () => {
 
   it("puts the built-in match first, then Photon's places, at most 8", async () => {
     const fetchMock = vi.fn(async () => ok());
-    const reply = await searchPlaces("IT Park", null, { fetch: fetchMock, gate: OPEN, cache: new PlaceCache(), bound: TRIP_BOUND });
+    const reply = await searchPlaces("IT Park", null, { fetch: fetchMock, gate: OPEN, cache: new PlaceCache(), bound: CEBU });
     expect(reply.status).toBe("ok");
     expect(reply.places[0].id).toBe("built-in:cebu-it-park");
     expect(reply.places.length).toBeLessThanOrEqual(8);
@@ -207,7 +213,7 @@ describe("searching", () => {
 
   it("asks Photon once for the same query and rounded place", async () => {
     const fetchMock = vi.fn(async () => ok());
-    const deps = { fetch: fetchMock, gate: OPEN, cache: new PlaceCache(), bound: TRIP_BOUND };
+    const deps = { fetch: fetchMock, gate: OPEN, cache: new PlaceCache(), bound: CEBU };
     await searchPlaces("IT Park", { lat: 10.3, lon: 123.9 }, deps);
     await searchPlaces("it  park", { lat: 10.3, lon: 123.9 }, deps);
     expect(fetchMock).toHaveBeenCalledOnce();
@@ -215,7 +221,7 @@ describe("searching", () => {
 
   it("sends nothing for a short query", async () => {
     const fetchMock = vi.fn(async () => ok());
-    expect(await searchPlaces("it", null, { fetch: fetchMock, gate: OPEN, cache: new PlaceCache(), bound: TRIP_BOUND })).toEqual({
+    expect(await searchPlaces("it", null, { fetch: fetchMock, gate: OPEN, cache: new PlaceCache(), bound: CEBU })).toEqual({
       status: "short",
       places: [],
     });
@@ -225,23 +231,23 @@ describe("searching", () => {
   it("says busy or down and offers the built-in places when Photon can't be asked or fails", async () => {
     const cache = new PlaceCache();
     const never = vi.fn(async () => ok());
-    const busy = await searchPlaces("talisay", null, { fetch: never, gate: { acquire: async () => "busy" }, cache, bound: TRIP_BOUND });
+    const busy = await searchPlaces("talisay", null, { fetch: never, gate: { acquire: async () => "busy" }, cache, bound: CEBU });
     expect(busy).toEqual({ status: "busy", places: [expect.objectContaining({ id: "built-in:talisay-city-hall" })] });
     expect(never).not.toHaveBeenCalled();
-    const down = await searchPlaces("talisay", null, { fetch: never, gate: { acquire: async () => "unavailable" }, cache, bound: TRIP_BOUND });
+    const down = await searchPlaces("talisay", null, { fetch: never, gate: { acquire: async () => "unavailable" }, cache, bound: CEBU });
     expect(down.status).toBe("down");
     const throttled = await searchPlaces("talisay", null, {
       fetch: async () => new Response("slow down", { status: 429 }),
       gate: OPEN,
       cache,
-      bound: TRIP_BOUND,
+      bound: CEBU,
     });
     expect(throttled.status).toBe("busy");
     const broken = await searchPlaces("talisay", null, {
       fetch: async () => Promise.reject(new TypeError("fetch failed")),
       gate: OPEN,
       cache,
-      bound: TRIP_BOUND,
+      bound: CEBU,
     });
     expect(broken).toEqual({ status: "down", places: [expect.objectContaining({ id: "built-in:talisay-city-hall" })] });
     expect(cache.size).toBe(0);

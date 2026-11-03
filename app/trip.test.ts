@@ -23,12 +23,12 @@ describe("tapping your trip", () => {
     expect(afterWork).toEqual({ draft: { step: "set", trip: { home: BANILAD, work: IT_PARK } }, outside: false });
   });
 
-  it("a tap outside Metro Cebu changes nothing and says so", () => {
-    const manila = { lat: 14.5547, lon: 121.0244 };
+  it("a tap outside the Philippines' box changes nothing and says so", () => {
+    const tokyo = { lat: 35.68, lon: 139.76 };
     const draft = startTrip(null);
-    expect(tapTrip(draft, manila)).toEqual({ draft, outside: true });
+    expect(tapTrip(draft, tokyo)).toEqual({ draft, outside: true });
     const half = tapTrip(draft, BANILAD).draft;
-    expect(tapTrip(half, manila)).toEqual({ draft: half, outside: true });
+    expect(tapTrip(half, tokyo)).toEqual({ draft: half, outside: true });
   });
 
   it("tapping again once the trip is set starts a new trip at a new home", () => {
@@ -73,7 +73,7 @@ describe("the trip on the phone", () => {
     ["not JSON", "{"],
     ["a trip missing its work point", JSON.stringify({ home: BANILAD })],
     ["coordinates that aren't numbers", JSON.stringify({ home: { lat: "10.3", lon: 123.9 }, work: IT_PARK })],
-    ["a home outside Metro Cebu", JSON.stringify({ home: { lat: 14.676, lon: 121.0437 }, work: IT_PARK })],
+    ["a home outside the Philippines' box", JSON.stringify({ home: { lat: 35.68, lon: 139.76 }, work: IT_PARK })],
   ])("a stored value that is %s is no trip", (_why, raw) => {
     const phone = fakeStorage();
     phone.setItem("lusong.trip", raw);
@@ -160,9 +160,9 @@ describe("picking your trip in the From and To boxes", () => {
   });
 
   it("a place outside the trip bound changes nothing and says so", () => {
-    const manila = { lat: 14.5547, lon: 121.0244 };
+    const tokyo = { lat: 35.68, lon: 139.76 };
     const set = startTrip({ home: BANILAD, work: IT_PARK });
-    expect(pickTrip(set, "to", manila)).toEqual({ draft: set, outside: true });
+    expect(pickTrip(set, "to", tokyo)).toEqual({ draft: set, outside: true });
   });
 
   it("a map tap after only To was picked fills From", () => {
