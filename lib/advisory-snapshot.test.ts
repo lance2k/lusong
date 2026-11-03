@@ -7,6 +7,7 @@ import {
   kindOf,
   MemoryAdvisoryStore,
   readStoredSnapshot,
+  recordUrl,
   refreshSnapshot,
   SNAPSHOT_KEY,
   SNAPSHOT_LEASE_KEY,
@@ -491,5 +492,24 @@ describe.skipIf(!upstashUrl)("the Upstash store for the advisory snapshot", () =
     });
     expect(older.outcome).toBe("superseded");
     expect((await readStoredSnapshot(store))!.products.map((p) => p.link)).toEqual([CAGAYAN_GFA4_REISSUED]);
+  });
+});
+
+describe("records the feed links by PAGASA's bare IP address", () => {
+  it("maps 121.58.193.10 to the feed's host and leaves other links alone", () => {
+    expect(recordUrl("https://121.58.193.10/output/gfa/052284af-b5f8-409a-9f3d-aef22b241285.cap")).toBe(
+      "https://publicalert.pagasa.dost.gov.ph/output/gfa/052284af-b5f8-409a-9f3d-aef22b241285.cap",
+    );
+    expect(recordUrl(CAGAYAN_GFA4)).toBe(CAGAYAN_GFA4);
+    expect(recordUrl("https://example.org/x.cap")).toBe("https://example.org/x.cap");
+  });
+
+  it("a feed entry linked by IP is fetched from the feed's host, so the snapshot stays complete", async () => {
+    const byIp = CAGAYAN_GFA4.replace("publicalert.pagasa.dost.gov.ph", "121.58.193.10");
+    const served: Served = { [FEED_URL]: feedOf([CAGAYAN_GFA4], (entry) => entry.replace(CAGAYAN_GFA4, byIp)), [CAGAYAN_GFA4]: ALL_SAVED[CAGAYAN_GFA4] };
+    const { snapshot, net, judge } = await snapshotAt("2026-10-23T05:45:00+08:00", served);
+    expect(net.calls).not.toContain(byIp);
+    expect(snapshot.complete).toBe(true);
+    expect(judge(TUGUEGARAO_ROUTE).state).toBe("active");
   });
 });
