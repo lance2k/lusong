@@ -1,15 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MemoryAlertStore } from "./alerts";
 import { createBudget, MemoryBudgetStore, UpstashBudgetStore, type BudgetStore, type SweepLedger } from "./budget";
 import type { Meter } from "./meta";
 import type { SafeFetchResult } from "./safe-fetch";
 import {
   MemorySweepStore,
+  PERSIST_RESERVE_MS,
   RIDER_FLOOR_MICROS,
   runSweep,
   SWEEP_DAILY_CAP_MICROS,
   SWEEP_GAP_MS,
+  SWEEP_LIMITS,
   SWEEP_MAX_OUTPUT_TOKENS,
   SWEEP_MAX_TOOL_CALLS,
   SWEEP_RESERVE_MICROS,
@@ -127,6 +129,25 @@ describe.each(sweepStores)("the day's sweep slots on the %s (S4P-3)", (_name, ma
   });
 });
 
+describe.skipIf(!upstashUrl)("the candidates' write on Upstash (S4D-5)", () => {
+  it("is one atomic call: the candidates and the open-run pointer together", async () => {
+    const store = new UpstashSweepStore(upstashUrl!, upstashToken, `lusong-test-${randomUUID()}`);
+    const real = globalThis.fetch;
+    let calls = 0;
+    vi.stubGlobal("fetch", (...args: Parameters<typeof fetch>) => {
+      calls += 1;
+      return real(...args);
+    });
+    try {
+      await store.saveCandidates("r1", [CANDIDATE, { ...CANDIDATE, place: "Colon Street" }]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(calls).toBe(1);
+    expect(await store.openRun()).toEqual({ run: "r1", candidates: [CANDIDATE, { ...CANDIDATE, place: "Colon Street" }] });
+  });
+});
+
 const URL_GOV = "https://mandauecity.gov.ph/advisories/fortuna";
 const CANDIDATE = { url: URL_GOV, place: "A.S. Fortuna Street", province: "Cebu", kind: "closure" as const };
 const PAGE = `<html><head><meta property="article:published_time" content="2026-11-04T09:30:00+08:00"></head><body>A.S. Fortuna Street in Mandaue City, Cebu is closed to traffic due to flooding.</body></html>`;
@@ -233,11 +254,51 @@ describe("one sweep (S4P-3, S4P-8; no paid call: Wonder is stubbed)", () => {
   it("candidates survive a cut-off invocation: the next one admits them without asking Wonder again", async () => {
     const h = sweepHarness(wonderReply([CANDIDATE, { ...CANDIDATE, url: "https://mandauecity.gov.ph/advisories/other" }]));
     // No time is left for admission after discovery.
-    expect(await h.sweep({ limits: { budgetMs: 1_000, minAdmitMs: 5_000 } })).toMatchObject({ discovery: "ran", admitted: 0, left: 2 });
+    expect(await h.sweep({ limits: { budgetMs: PERSIST_RESERVE_MS + 500, wonderAttemptMs: 0, minAdmitMs: 5_000 } })).toMatchObject({ discovery: "ran", admitted: 0, left: 2 });
     expect(await h.sweep()).toMatchObject({ discovery: "continued", admitted: 1, refused: 1, left: 0 });
     expect(h.calls).toHaveLength(1);
     // Every candidate decided: the next invocation is a new discovery, which isn't due yet.
     expect(await h.sweep()).toMatchObject({ discovery: "not_due" });
+  });
+
+  it("a late Wonder reply and 5 s store answers still finish under 60 s, the candidates kept for the next invocation (S4D-5)", async () => {
+    vi.useFakeTimers({ now: NOW });
+    try {
+      const h = sweepHarness(wonderReply([CANDIDATE, { ...CANDIDATE, url: "https://mandauecity.gov.ph/advisories/other" }]));
+      let slow = false;
+      const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+      const slowly = <T extends object>(store: T): T =>
+        new Proxy(store, {
+          get(target, key, receiver) {
+            const value = Reflect.get(target, key, receiver);
+            if (typeof value !== "function") return value;
+            return async (...args: unknown[]) => {
+              if (slow) await wait(5_000);
+              return value.apply(target, args);
+            };
+          },
+        });
+      const wonder: SweepDeps["wonder"] = async (body, attemptMs, deadline, meter) => {
+        // The reply lands as late as the call allows; every store answer after it takes 5 s.
+        await wait(Math.min(attemptMs, deadline - Date.now()));
+        slow = true;
+        return h.deps.wonder(body, attemptMs, deadline, meter);
+      };
+      const started = Date.now();
+      const running = h.sweep({ wonder, ledger: slowly(h.ledger), sweeps: slowly(h.sweeps) });
+      await vi.runAllTimersAsync();
+      const summary = await running;
+      expect(Date.now() - started).toBeLessThan(60_000);
+      expect(Date.now() - started).toBeLessThanOrEqual(SWEEP_LIMITS.budgetMs);
+      expect(summary).toMatchObject({ discovery: "ran", admitted: 0 });
+      slow = false;
+      const next = h.sweep();
+      await vi.runAllTimersAsync();
+      expect(await next).toMatchObject({ discovery: "continued", admitted: 1, refused: 1, left: 0 });
+      expect(h.calls).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("a model reply that isn't the schema yields no candidates and fetches nothing", async () => {

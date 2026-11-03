@@ -49,7 +49,21 @@ export interface SweepLimits {
 }
 
 /** Wonder's call can take the whole budget; admission then waits for the next invocation, its candidates kept. */
-export const SWEEP_LIMITS: SweepLimits = { budgetMs: 45_000, wonderAttemptMs: 40_000, concurrency: 4, minAdmitMs: 23_000 };
+export const SWEEP_LIMITS: SweepLimits = { budgetMs: 55_000, wonderAttemptMs: 40_000, concurrency: 4, minAdmitMs: 23_000 };
+
+/** One store call's own timeout (UpstashSweepStore and the budget store). */
+const STORE_CALL_MS = 5_000;
+/** Left after Wonder for the settlement and the one atomic candidate write (S4D-5). */
+export const PERSIST_RESERVE_MS = 2 * STORE_CALL_MS;
+/** Left after a page's admission for its alert write and its mark. */
+const ADMIT_WRITE_RESERVE_MS = 2 * STORE_CALL_MS;
+
+/** The promise's value, or "late" once `ms` have passed; a late write is left to land on its own. */
+function withinMs<T>(promise: Promise<T>, ms: number): Promise<T | "late"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<"late">((resolve) => (timer = setTimeout(() => resolve("late"), Math.max(0, ms))));
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+}
 
 /** What Wonder bills: tokens at Wonder's rates and every web_search_call item as a query. */
 export function wonderCostMicros(usage: MeteredUsage): number {
@@ -73,6 +87,16 @@ export interface SweepStore {
   markCandidate(run: string, index: number, outcome: string): Promise<void>;
   closeRun(run: string): Promise<void>;
 }
+
+/** The candidates and the open-run pointer in one atomic call (S4D-5): a cut-off leaves both or neither. */
+const SAVE_CANDIDATES_SCRIPT = `
+if #ARGV > 2 then
+  redis.call('HSET', KEYS[1], unpack(ARGV, 3))
+  redis.call('PEXPIRE', KEYS[1], ARGV[2])
+end
+redis.call('SET', KEYS[2], ARGV[1], 'PX', ARGV[2])
+return 1
+`;
 
 export class MemorySweepStore implements SweepStore {
   private slots = new Set<string>();
@@ -157,11 +181,7 @@ export class UpstashSweepStore implements SweepStore {
 
   async saveCandidates(run: string, candidates: Candidate[]) {
     const fields = candidates.flatMap((c, i) => [String(i), JSON.stringify(c)]);
-    if (fields.length > 0) {
-      await this.command(["HSET", this.candidatesKey(run), ...fields]);
-      await this.command(["PEXPIRE", this.candidatesKey(run), CANDIDATES_TTL_MS]);
-    }
-    await this.command(["SET", this.openKey, run, "PX", CANDIDATES_TTL_MS]);
+    await this.command(["EVAL", SAVE_CANDIDATES_SCRIPT, 2, this.candidatesKey(run), this.openKey, run, CANDIDATES_TTL_MS, ...fields]);
   }
 
   async openRun() {
@@ -274,7 +294,7 @@ export interface SweepDeps {
 export type SweepSummary = {
   ok: boolean;
   /** What discovery did this invocation. */
-  discovery: "ran" | "off" | "not_due" | "budget" | "sweep_cap" | "failed" | "continued" | "unavailable";
+  discovery: "ran" | "off" | "not_due" | "budget" | "sweep_cap" | "failed" | "continued" | "unavailable" | "late";
   slot: number | null;
   chargedMicros: number;
   candidates: number;
@@ -311,6 +331,12 @@ async function discover(deps: SweepDeps, limits: SweepLimits, deadline: number, 
     summary.discovery = "unavailable";
     return null;
   }
+  // Wonder is started only with its whole timeout and the persist reserve left, so what it finds is always saved.
+  const roomForWonder = () => deadline - Date.now() >= limits.wonderAttemptMs + PERSIST_RESERVE_MS;
+  if (!roomForWonder()) {
+    summary.discovery = "late";
+    return null;
+  }
   const now = deps.now();
   const day = now.toISOString().slice(0, 10);
   const slot = await deps.sweeps.claimSlot(day, now.getTime(), SWEEP_GAP_MS, SWEEPS_PER_DAY);
@@ -332,6 +358,11 @@ async function discover(deps: SweepDeps, limits: SweepLimits, deadline: number, 
     return null;
   }
 
+  if (!roomForWonder()) {
+    await deps.ledger.settleSweep({ id, day, chargeMicros: 0 }).catch((err) => console.error("sweep: settle failed:", err instanceof Error ? err.message : err));
+    summary.discovery = "late";
+    return null;
+  }
   const meter = new Meter();
   let reply: unknown = null;
   try {
@@ -345,7 +376,7 @@ async function discover(deps: SweepDeps, limits: SweepLimits, deadline: number, 
         text: { format: { type: "json_schema", name: "sweep_candidates", schema: CANDIDATE_SCHEMA, strict: true } },
       },
       limits.wonderAttemptMs,
-      deadline,
+      deadline - PERSIST_RESERVE_MS,
       meter,
     );
   } catch (err) {
@@ -356,7 +387,10 @@ async function discover(deps: SweepDeps, limits: SweepLimits, deadline: number, 
   // A reply over the input bound is still charged in full; a call whose counts may be missing keeps the reservation.
   const charge = reply !== null && usage.complete ? actual : Math.max(SWEEP_RESERVE_MICROS, actual);
   summary.chargedMicros = charge;
-  await deps.ledger.settleSweep({ id, day, chargeMicros: charge }).catch((err) => console.error("sweep: settle failed:", err instanceof Error ? err.message : err));
+  const settled = await withinMs(deps.ledger.settleSweep({ id, day, chargeMicros: charge }), deadline - Date.now()).catch((err) =>
+    console.error("sweep: settle failed:", err instanceof Error ? err.message : err),
+  );
+  if (settled === "late") console.error("sweep: settle still pending at the deadline");
   if (reply === null) {
     summary.discovery = "failed";
     summary.ok = false;
@@ -373,7 +407,18 @@ async function discover(deps: SweepDeps, limits: SweepLimits, deadline: number, 
   const candidates = candidatesFrom(read.answerText);
   summary.discovery = "ran";
   const run = randomUUID();
-  await deps.sweeps.saveCandidates(run, candidates);
+  try {
+    if ((await withinMs(deps.sweeps.saveCandidates(run, candidates), deadline - Date.now())) === "late") {
+      // The write may still land, and the next invocation then admits them; this one has no time left to.
+      console.error("sweep: candidate write still pending at the deadline");
+      summary.ok = false;
+      return null;
+    }
+  } catch (err) {
+    console.error("sweep: candidate write failed:", err instanceof Error ? err.message : err);
+    summary.ok = false;
+    return null;
+  }
   return { run, candidates: candidates.map((c) => ({ ...c })) as StoredCandidate[] };
 }
 
@@ -383,14 +428,14 @@ async function admitAll(deps: SweepDeps, limits: SweepLimits, deadline: number, 
   const robots = robotsChecker(deps.admit.fetchPage);
   let next = 0;
   const worker = async () => {
-    while (next < pending.length && deadline - Date.now() >= limits.minAdmitMs) {
+    while (next < pending.length && deadline - Date.now() >= limits.minAdmitMs + ADMIT_WRITE_RESERVE_MS) {
       const { c, i } = pending[next++];
       let outcome: string;
       try {
         const result = await admitCandidate(c, { ...deps.admit, robots, now: deps.now() });
         if (result.outcome === "retry") continue;
         if (result.outcome === "admitted") {
-          await deps.alerts.addIfAbsent([result.alert]);
+          if ((await withinMs(deps.alerts.addIfAbsent([result.alert]), deadline - Date.now())) === "late") continue;
           summary.admitted += 1;
           outcome = "admitted";
         } else {
@@ -403,12 +448,12 @@ async function admitAll(deps: SweepDeps, limits: SweepLimits, deadline: number, 
         summary.ok = false;
         continue;
       }
-      await deps.sweeps.markCandidate(open.run, i, outcome).catch(() => {});
+      await withinMs(deps.sweeps.markCandidate(open.run, i, outcome), deadline - Date.now()).catch(() => {});
     }
   };
   await Promise.all(Array.from({ length: Math.min(limits.concurrency, pending.length) }, worker));
-  const after = await deps.sweeps.openRun().catch(() => null);
-  summary.left = after?.run === open.run ? after.candidates.filter((c) => !c.done).length : 0;
+  const after = await withinMs(deps.sweeps.openRun(), deadline - Date.now()).catch(() => null);
+  summary.left = after === "late" ? pending.length : after?.run === open.run ? after.candidates.filter((c) => !c.done).length : 0;
 }
 
 /** The deployed sweep's Wonder call: Meta's Responses API with the Wonder model named in the body. */
