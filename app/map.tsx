@@ -14,7 +14,9 @@ import {
   TILE_ATTRIBUTION,
   TILE_URL,
   ZOOM_CONTROL,
+  textBlock,
   type AreaShape,
+  type FitPadding,
   type LayerToggles,
   type PinSpec,
 } from "./map-layers";
@@ -49,7 +51,7 @@ export interface MapView {
   areas: AreaShape[];
   layers: LayerToggles;
   /** What covers the map's edges (the sheet, the top band), so a fit keeps the trip in the part left showing. */
-  padding: { topLeft: [number, number]; bottomRight: [number, number] };
+  padding: FitPadding;
   /** The sheet's height over the map's bottom edge: the zoom buttons sit just above it. */
   bottomInset: number;
   /** A report to fly to and open; `n` changes on every request, so the same pin can be asked for twice. */
@@ -174,7 +176,7 @@ export default function TripMap({
     markers.current.clear();
     for (const area of areas) {
       L.polygon(area.rings, { className: area.className, weight: 1.5, interactive: true })
-        .bindTooltip(area.tooltip.join("\n"), { sticky: true, className: "lusong-area-tip" })
+        .bindTooltip(textBlock(area.tooltip, document), { sticky: true, className: "lusong-area-tip" })
         .addTo(g.areas);
     }
     const styles = routeStyles(Boolean(detour));
@@ -204,14 +206,20 @@ export default function TripMap({
     const points: Point[] | null = JSON.parse(frameKey);
     if (!map.current) return;
     map.current.invalidateSize();
-    if (!points) map.current.setView(latLng(PHILIPPINES_VIEW.centre), PHILIPPINES_VIEW.zoom);
-    // A single end would otherwise zoom to the street's last tile level.
-    else
-      map.current.fitBounds(L.latLngBounds(points.map(latLng)), {
-        paddingTopLeft: pad.current.topLeft,
-        paddingBottomRight: pad.current.bottomRight,
-        maxZoom: 15,
-      });
+    if (!points) {
+      map.current.setView(latLng(PHILIPPINES_VIEW.centre), PHILIPPINES_VIEW.zoom);
+      return;
+    }
+    const size = map.current.getSize();
+    const { topLeft, bottomRight } = pad.current;
+    // Padding that leaves no room would give Leaflet a negative area to fit into, and a non-finite view.
+    const roomy = size.x - topLeft[0] - bottomRight[0] > 40 && size.y - topLeft[1] - bottomRight[1] > 40;
+    map.current.fitBounds(L.latLngBounds(points.map(latLng)), {
+      paddingTopLeft: roomy ? topLeft : [24, 24],
+      paddingBottomRight: roomy ? bottomRight : [24, 24],
+      // A single end would otherwise zoom to the street's last tile level.
+      maxZoom: 15,
+    });
   }, [frameKey]);
 
   useEffect(() => {

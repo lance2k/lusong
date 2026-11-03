@@ -42,6 +42,31 @@ export function areaShapes(areas: AdvisoryArea[]): AreaShape[] {
   }));
 }
 
+export interface FitPadding {
+  topLeft: [number, number];
+  bottomRight: [number, number];
+}
+
+/**
+ * What a fit keeps clear: the top band always, and the sheet on a phone. A sheet taller than half the screen is
+ * fitted as if at half, so the map always keeps room to fit into (a full sheet would leave it none).
+ */
+export function fitPadding(input: { desktop: boolean; sheetPx: number; vh: number }): FitPadding {
+  if (input.desktop) return { topLeft: [440, 96], bottomRight: [80, 24] };
+  return { topLeft: [24, 96], bottomRight: [24, Math.min(input.sheetPx, Math.round(input.vh / 2)) + 24] };
+}
+
+/** Leaflet sets a string tooltip as HTML, and an area's headline comes from the reply, so it gets text nodes only. */
+export function textBlock(lines: string[], doc: Pick<Document, "createElement">): HTMLElement {
+  const box = doc.createElement("div");
+  for (const line of lines) {
+    const p = doc.createElement("p");
+    p.textContent = line;
+    box.append(p);
+  }
+  return box;
+}
+
 export interface RouteStyle {
   className: string;
   weight: number;

@@ -9,7 +9,7 @@ import { commuteReducer, initialCommuteState, OWN_TRIP, type CommuteInputs, type
 import type { CommuteResult } from "./commute-result";
 import { CREDITS_LINE } from "./credits";
 import { Evidence } from "./evidence";
-import { advisoryAreasOf, ALL_LAYERS, areaShapes, legendRows, type LayerId, type LayerToggles } from "./map-layers";
+import { advisoryAreasOf, ALL_LAYERS, areaShapes, fitPadding, legendRows, type LayerId, type LayerToggles } from "./map-layers";
 import { MapLegend } from "./map-legend";
 import { tripMapProps } from "./map-props";
 import { CLEAR_FAILED_LINE, outsideLine, useOwnTrip } from "./own-trip";
@@ -87,6 +87,10 @@ function Shell() {
   const viewHeading = useRef<HTMLHeadingElement>(null);
   const opener = useRef<HTMLElement | null>(null);
   const shownView = useRef<SheetView | null>(null);
+  const latestTicket = useRef(state.ticket);
+  useEffect(() => {
+    latestTicket.current = state.ticket;
+  });
 
   // A trip saved on an earlier visit is chosen once it is read, so the next check is one tap.
   const restored = useRef(false);
@@ -117,8 +121,17 @@ function Shell() {
   }
 
   function openView(v: SheetView) {
-    opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    window.history.pushState({ [PUSHED_KEY]: true }, "", `?sheet=${v}`);
+    if (sheetView === v) {
+      viewHeading.current?.focus();
+      return;
+    }
+    if (sheetView) {
+      // From one view to another: the entry is replaced, so Back still leads to the commute and the first opener.
+      window.history.replaceState({ [PUSHED_KEY]: backMove(window.history.state) === "history-back" }, "", `?sheet=${v}`);
+    } else {
+      opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      window.history.pushState({ [PUSHED_KEY]: true }, "", `?sheet=${v}`);
+    }
     locationChanged();
     setDetent(VIEW_DETENT[v]);
   }
@@ -150,8 +163,11 @@ function Shell() {
         return;
       }
       dispatch({ type: "answered", ticket, result: { ...(reply as CommuteResult), checkedAt: new Date().toISOString() } });
-      setDetent("half");
-      body.current?.scrollTo({ top: 0 });
+      // Only the answer still shown moves the sheet, and never while the rider is in another view.
+      if (latestTicket.current === ticket && viewFromSearch(window.location.search) === null) {
+        setDetent("half");
+        body.current?.scrollTo({ top: 0 });
+      }
     } catch {
       dispatch({ type: "failed", ticket, message: "Lusong couldn't be reached. Check your connection." });
     }
@@ -168,7 +184,7 @@ function Shell() {
         onTap={ownTrip ? own.tap : undefined}
         areas={areas}
         layers={layers}
-        padding={desktop ? { topLeft: [440, 96], bottomRight: [80, 24] } : { topLeft: [24, 96], bottomRight: [24, sheetPx + 24] }}
+        padding={fitPadding({ desktop, sheetPx, vh })}
         bottomInset={sheetPx}
         hideBottom={!desktop && detent === "full"}
         focusPin={focusPin}
@@ -252,6 +268,7 @@ function Shell() {
                 result={view.result}
                 onShowReport={(id) => {
                   if (!desktop) setDetent("peek");
+                  setLayers((l) => ({ ...l, reports: true }));
                   setFocusPin((f) => ({ id, n: (f?.n ?? 0) + 1 }));
                 }}
                 onWatch={view.for.trip === OWN_TRIP && savedTrip ? () => openView("watch") : undefined}

@@ -5,10 +5,12 @@ import {
   ageMinutes,
   areaShapes,
   ATTRIBUTION_CONTROL,
+  fitPadding,
   legendRows,
   MAP_OPTIONS,
   pinSpec,
   routeStyles,
+  textBlock,
   type AdvisoryArea,
   type LegendReply,
 } from "./map-layers";
@@ -147,5 +149,61 @@ describe("the map's credits (S3P-4)", () => {
     expect(source).toMatch(/L\.map\(box\.current!, MAP_OPTIONS\)/);
     expect(source).toMatch(/L\.control\.attribution\(ATTRIBUTION_CONTROL\)\.addTo\(m\)/);
     expect(source).not.toMatch(/attributionControl:\s*true/);
+  });
+});
+
+describe("fitting the map (duck round 1, finding 1)", () => {
+  it.each(["peek", "half", "full"] as const)("on a 390×844 phone at %s, the padding always leaves the map room to fit into", (detent) => {
+    const sheetPx = { peek: 176, half: 422, full: 844 - 84 }[detent];
+    const { topLeft, bottomRight } = fitPadding({ desktop: false, sheetPx, vh: 844 });
+    expect(844 - topLeft[1] - bottomRight[1]).toBeGreaterThan(200);
+    expect(390 - topLeft[0] - bottomRight[0]).toBeGreaterThan(200);
+  });
+
+  it("a short landscape phone with a full sheet still leaves room", () => {
+    const { topLeft, bottomRight } = fitPadding({ desktop: false, sheetPx: 400 - 84, vh: 400 });
+    expect(400 - topLeft[1] - bottomRight[1]).toBeGreaterThan(40);
+  });
+});
+
+describe("area tooltips are text, never HTML (duck round 1, finding 2)", () => {
+  interface FakeNode {
+    tag: string;
+    children: FakeNode[];
+    textContent: string;
+    innerHTMLSet: boolean;
+    append: (...n: FakeNode[]) => void;
+  }
+  const fakeDoc = {
+    createElement(tag: string) {
+      const node: FakeNode = {
+        tag,
+        children: [],
+        textContent: "",
+        innerHTMLSet: false,
+        append: (...n) => node.children.push(...n),
+      };
+      return new Proxy(node, {
+        set(target, key, value) {
+          if (key === "innerHTML" || key === "outerHTML") target.innerHTMLSet = true;
+          (target as unknown as Record<string | symbol, unknown>)[key] = value;
+          return true;
+        },
+      }) as unknown as HTMLElement;
+    },
+  };
+
+  it("a headline with markup in it stays literal text", () => {
+    const [shape] = areaShapes([{ ...AREA, headline: '<img src=x onerror="alert(1)">' }]);
+    const box = textBlock(shape.tooltip, fakeDoc) as unknown as FakeNode;
+    expect(box.innerHTMLSet).toBe(false);
+    expect(box.children.map((c) => c.textContent)).toEqual(['<img src=x onerror="alert(1)">', shape.tooltip[1]]);
+    expect(box.children.every((c) => !c.innerHTMLSet && c.tag === "p")).toBe(true);
+  });
+
+  it("the map hands Leaflet the text block, never a joined string", () => {
+    const source = readFileSync(new URL("./map.tsx", import.meta.url), "utf8");
+    expect(source).toMatch(/bindTooltip\(textBlock\(area\.tooltip, document\)/);
+    expect(source).not.toMatch(/area\.tooltip\.join/);
   });
 });

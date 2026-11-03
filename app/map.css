@@ -82,8 +82,8 @@
   fill-opacity: var(--advisory-fill);
 }
 
-.lusong-area-tip {
-  white-space: pre-line;
+.lusong-area-tip p {
+  margin: 0;
 }
 
 .lusong-pin-box {
