@@ -12,6 +12,8 @@ import {
 } from "./advisory-snapshot";
 import { placeOnRoute, ROUTE_CORRIDOR_M, type AnswerKind, type Point, type Report } from "./answer";
 import { budgetFromEnv, type Budget } from "./budget";
+import { sweepWarningsAlong } from "./sweep-warnings";
+import { alertStoreFromEnv, type AlertStore } from "./alerts";
 import { clientIp } from "./check-handler";
 import { boxAround, lineForTrip } from "./detour";
 import { ageWords, depthWords, MMDA_CREDIT, passabilityLine, phtTime, voiceDepthWords, voicePassabilityLine } from "./commute-words";
@@ -304,6 +306,8 @@ type CommuteDeps = {
   timing?: CommuteTiming;
   /** The shared store holding PAGASA's snapshot; without one, each handler keeps its own in memory. */
   advisoryStore?: () => AdvisoryStore | null;
+  /** The sweep's items, shown as warnings beside the answer and never deciding it (lib/sweep-warnings.ts). */
+  alertStore?: () => AlertStore | null;
 };
 
 /** What a scheduled check learns: the answer's kind, or the HTTP status a page would have been given instead. */
@@ -527,6 +531,9 @@ export function makeCommuteCheck(deps: CommuteDeps) {
     // The search ends early enough to leave a way around and the model's pick their time.
     const searchDeadline = run.deadline - timing.routeWorstMs - timing.modelRoomMs;
     run.searched = true;
+    // A demo shows its sample reports only, so the sweep's real-world items are left out of it.
+    const sweepStore = check.demo ? null : (deps.alertStore ?? alertStoreFromEnv)();
+    const sweepAlerts = sweepStore ? sweepStore.all(at.getTime()).catch(() => []) : Promise.resolve([]);
     const [advisory, routed, webParts] = await Promise.all([
       beforeDeadline(advisoryAt(at, run.deadline), run.deadline),
       check.plain(),
@@ -641,6 +648,7 @@ export function makeCommuteCheck(deps: CommuteDeps) {
       },
       advisory: advisoryForPage(result.advisory, answer.route),
       advisoryAreas: advisoryAreasFor(advisory, judgedLines.map((l) => l.line), at),
+      sweepWarnings: sweepWarningsAlong(await beforeDeadline(sweepAlerts, run.deadline + timing.storeCallMs), [plainLine, ...(shown ? [shown.line] : [])]),
       reports: sent,
       muse: {
         pick: pickForPage(result, { now: at, advisory: result.advisory, rainingHere: check.rainingHere, pickable }),

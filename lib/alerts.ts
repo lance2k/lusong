@@ -105,17 +105,24 @@ const SWEEP_PHRASES: Record<SweepFields["words"], string> = { closure: "a road c
  * The only words an alert message is made of: the fixed templates, the validated fields and the source link.
  * `areas` are the areaDescs that touch this rider's trip, from PAGASA's own record.
  */
-export function alertMessage(alert: Alert, areas: readonly string[]): string {
+export function alertWords(alert: Alert, areas: readonly string[]): string {
   if (alert.origin === "pagasa") {
     const f = alert.fields as PagasaFields;
     const named = areas.map((a) => plainLine(a, 60)).filter((a) => a !== "");
     const shown = named.slice(0, 3).join(", ");
     const where =
       "nationwide" in alert.scope || named.length === 0 ? "the whole country" : named.length > 3 ? `${shown} and ${named.length - 3} more` : shown;
-    return `PAGASA ${plainLine(f.event, 80)} for ${where}, sent ${phtTime(f.sent)}, until ${phtTime(f.expires)}. ${alert.sourceUrl}`;
+    return `PAGASA ${plainLine(f.event, 80)} for ${where}, sent ${phtTime(f.sent)}, until ${phtTime(f.expires)}.`;
   }
   const f = alert.fields as SweepFields;
-  return `${alert.sourceOrg} reports ${SWEEP_PHRASES[f.words]} at ${plainLine(f.place, 80)}, posted ${phtTime(f.posted)}. Unconfirmed by Lusong. ${alert.sourceUrl}`;
+  // "the MMDA" opens a sentence as "The MMDA"; a bare host name is left as it is written.
+  const org = alert.sourceOrg.replace(/^the /, "The ");
+  return `${org} reports ${SWEEP_PHRASES[f.words]} at ${plainLine(f.place, 80)}, posted ${phtTime(f.posted)}. Unconfirmed by Lusong.`;
+}
+
+/** The message a rider gets on Telegram: the words, then the source's link. */
+export function alertMessage(alert: Alert, areas: readonly string[]): string {
+  return `${alertWords(alert, areas)} ${alert.sourceUrl}`;
 }
 
 function parseAlert(text: string): Alert | null {

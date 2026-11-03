@@ -236,6 +236,35 @@ describe("alert delivery: who gets what (ledger #7)", () => {
   });
 });
 
+describe("sweep items reach the watchers whose trip they touch", () => {
+  it("a sweep item at a spot on the stored line is sent in its template, whatever the PAGASA snapshot's state", async () => {
+    const t = setup();
+    await linked(t.watches, "near", CEBU_TRIP);
+    await linked(t.watches, "davao", DAVAO_TRIP);
+    await t.watches.saveRoute("near", "g1", [BANILAD, IT_PARK]);
+    const posted = "2026-11-04T13:00:00+08:00";
+    await t.alerts.addIfAbsent([
+      alert("sweep:x", {
+        origin: "sweep",
+        kind: "office_post",
+        scope: { point: { lat: 10.338, lon: 123.909 }, radiusM: 500 },
+        sourceUrl: "https://cebucity.gov.ph/advisories/1",
+        sourceOrg: "the Cebu City government",
+        eventAt: posted,
+        expiresAt: "2026-11-05T01:00:00+08:00",
+        fields: { place: "Gorordo Avenue, Lahug, Cebu City", posted, words: "flood" },
+      }),
+    ]);
+    expect(await t.deliver({ advisory: null })).toMatchObject({ sent: 1, pagasaHeld: "no advisory store" });
+    expect(t.channel.attempts).toEqual([
+      expect.objectContaining({
+        chatId: "chat-near",
+        text: "The Cebu City government reports flooding at Gorordo Avenue, Lahug, Cebu City, posted 4 Nov, 1:00 p.m. PHT. Unconfirmed by Lusong. https://cebucity.gov.ph/advisories/1",
+      }),
+    ]);
+  });
+});
+
 describe("Update and Cancel act on the referenced products (S4P-5)", () => {
   /** PAGASA's feed listing these saved Cagayan Valley records, refreshed into the snapshot at `iso`. */
   async function refreshAt(advisory: MemoryAdvisoryStore, iso: string, links: string[]) {

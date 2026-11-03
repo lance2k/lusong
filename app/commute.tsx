@@ -40,6 +40,8 @@ interface PageAdvisory {
 
 interface CommuteResult {
   trip: { id: DemoTripId | null; label: string };
+  /** Posts the sweep found near these routes; shown only, never part of the answer. */
+  sweepWarnings?: { id: string; text: string; link: string }[];
   rainingHere: boolean;
   answer: { kind: AnswerKind; title: string; reason: string; thin: string | null };
   route: { lengthKm: number; timeMin: number; streets: string[]; line: Point[] };
@@ -183,6 +185,23 @@ function ResultView({ result, checkedFor }: { result: CommuteResult; checkedFor:
       {result.muse && <MusePick pick={result.muse.pick} />}
 
       <Advisory advisory={result.advisory} />
+
+      {result.sweepWarnings && result.sweepWarnings.length > 0 && (
+        <section className="space-y-2 text-[15px]">
+          <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">Posts near your way</h3>
+          <p className="text-zinc-600 dark:text-zinc-400">Lusong found these online and hasn&apos;t confirmed them. They don&apos;t change the answer.</p>
+          <ul className="space-y-2">
+            {result.sweepWarnings.map((w) => (
+              <li key={w.id}>
+                {w.text}{" "}
+                <a href={w.link} target="_blank" rel="noopener noreferrer" className="underline">
+                  Source
+                </a>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {result.muse && <WebFindings web={result.muse.web} />}
 

@@ -257,7 +257,7 @@ describe("POST /api/watch/telegram", () => {
     expect(channel.sent).toEqual([
       {
         chatId: "4242",
-        text: "Linked. Lusong will message you here between 11:00 and 13:00 PHT: once when the window opens, and again whenever the answer changes. Lusong also messages you once for each PAGASA advisory that touches or passes near your trip, and for nationwide ones, whatever the window. It tries to send; it can't promise you receive it. To stop, switch the watcher off on Lusong's page; that deletes your trip from Lusong's server.",
+        text: "Linked. Lusong will message you here between 11:00 and 13:00 PHT: once when the window opens, and again whenever the answer changes. Lusong also messages you once for each PAGASA advisory, road closure or disaster-office post it finds that touches or passes near your trip, and for nationwide ones, whatever the window. It tries to send; it can't promise you receive it. To stop, switch the watcher off on Lusong's page; that deletes your trip from Lusong's server.",
       },
     ]);
   });

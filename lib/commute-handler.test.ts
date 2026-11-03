@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { MemoryAlertStore, type Alert, type AlertStore } from "./alerts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FEED_URL } from "./advisory";
 import { createBudget, MemoryBudgetStore, type Budget, type BudgetStore } from "./budget";
@@ -163,6 +164,7 @@ function handlerAt(
   reports: ReportStore | null = new MemoryReportStore(),
   muse: MuseDeps = MUSE_OFF,
   timing?: Partial<CommuteTiming>,
+  alerts: AlertStore | null = null,
 ) {
   const net = network(opts);
   const gate = makeValhallaGate(store);
@@ -174,6 +176,7 @@ function handlerAt(
     reports: () => reports,
     muse,
     timing: timing && { ...COMMUTE_TIMING, ...timing },
+    alertStore: () => alerts,
   });
   return { handler, checkTrip, ...net };
 }
@@ -2171,5 +2174,47 @@ describe("advisory areas for the map (S1, for S3a's layer)", () => {
   it("with no live advisory, advisoryAreas is empty", async () => {
     const { handler } = handlerAt(NO_ADVISORY);
     expect((await (await handler(demo("mabolo-cbp", "flooded"))).json()).advisoryAreas).toEqual([]);
+  });
+});
+
+describe("sweep items never change an answer while SWEEP_BLOCKING is false (S4P-10, ledger #4/#10)", () => {
+  /** A sweep item marked "block" at a spot on the plain route, as an opened gate would make it. */
+  function blockingItem(at: Date): Alert {
+    return {
+      id: "sweep:on-route",
+      version: 1,
+      kind: "office_post",
+      scope: { point: { lat: 10.3399, lon: 123.9085 }, radiusM: 500 },
+      sourceUrl: "https://cebucity.gov.ph/advisories/1",
+      sourceOrg: "the Cebu City government",
+      eventAt: new Date(at.getTime() - 3_600_000).toISOString(),
+      expiresAt: new Date(at.getTime() + 3_600_000).toISOString(),
+      severity: "block",
+      origin: "sweep",
+      fields: { place: "Gorordo Avenue, Lahug, Cebu City", posted: new Date(at.getTime() - 3_600_000).toISOString(), words: "closure" },
+    };
+  }
+
+  it("the page's check and the watcher's check answer the same with and without it; the page shows it as a warning", async () => {
+    const without = handlerAt(NO_ADVISORY);
+    const alerts = new MemoryAlertStore();
+    await alerts.addIfAbsent([blockingItem(NO_ADVISORY)]);
+    const withItem = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), new MemoryReportStore(), MUSE_OFF, undefined, alerts);
+    const plain = await (await without.handler(real())).json();
+    const shown = await (await withItem.handler(real())).json();
+    expect(shown.answer).toEqual(plain.answer);
+    expect(shown.advisory).toEqual(plain.advisory);
+    expect(plain.sweepWarnings).toEqual([]);
+    expect(shown.sweepWarnings).toEqual([
+      {
+        id: "sweep:on-route",
+        text: "The Cebu City government reports a road closure at Gorordo Avenue, Lahug, Cebu City, posted 29 Oct, 11:00 a.m. PHT. Unconfirmed by Lusong.",
+        link: "https://cebucity.gov.ph/advisories/1",
+      },
+    ]);
+    const watched = await withItem.checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: Date.now() + 20_000 });
+    const unwatched = await without.checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: Date.now() + 20_000 });
+    expect(watched).toMatchObject({ ok: true, kind: plain.answer.kind });
+    expect(unwatched).toMatchObject({ ok: true, kind: plain.answer.kind });
   });
 });
