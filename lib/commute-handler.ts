@@ -1,4 +1,5 @@
 import { admit } from "./admission";
+import { advisoryAreasFor } from "./advisory-areas";
 import {
   advisoryStoreFromEnv,
   judgeRoute,
@@ -636,6 +637,7 @@ export function makeCommuteCheck(deps: CommuteDeps) {
         line: detour.line,
       },
       advisory: advisoryForPage(result.advisory, answer.route),
+      advisoryAreas: advisoryAreasFor(advisory, judgedLines.map((l) => l.line), at),
       reports: sent,
       muse: {
         pick: pickForPage(result, { now: at, advisory: result.advisory, rainingHere: check.rainingHere, pickable }),
