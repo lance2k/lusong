@@ -78,6 +78,16 @@ describe("admitting a sweep candidate (ledger #4/#10)", () => {
     expect(got).toEqual({ outcome: "refused", why: "the page doesn't name the province" });
   });
 
+  it("refuses a page that doesn't name the place the item says (ledger #4)", async () => {
+    const html = page("Traffic advisory: a street in Mandaue City, Cebu is closed to traffic due to flooding until further notice.");
+    expect(await harness({ [URL_GOV]: html }).admit(CANDIDATE)).toEqual({ outcome: "refused", why: "the page doesn't name the place" });
+  });
+
+  it("refuses a page that names the place with no closure or flood term near it (ledger #4)", async () => {
+    const html = page("A.S. Fortuna Street in Mandaue City, Cebu hosts the city's fiesta parade this weekend.");
+    expect(await harness({ [URL_GOV]: html }).admit(CANDIDATE)).toEqual({ outcome: "refused", why: "no closure or flood term near the place" });
+  });
+
   it.each([
     ["older than 48 hours", "2026-11-02T09:59:00+08:00", "older than 48 hours"],
     ["dated in the future", "2026-11-04T10:05:00+08:00", "published in the future"],
@@ -202,10 +212,16 @@ describe("the blocking gate's fixtures (S4P-10): with SWEEP_BLOCKING false, ever
 
   it("the gate is closed and every admitted item is a warning, even a plain closure on an official page", async () => {
     expect(SWEEP_BLOCKING).toBe(false);
+    let admitted = 0;
     for (const [, text, place] of cases) {
       const html = page(`${text} ${place} is in Mandaue City, Cebu.`);
       const got = await harness({ [URL_GOV]: html }).admit({ ...CANDIDATE, place });
-      if (got.outcome === "admitted") expect(got.alert.severity).toBe("warn");
+      if (got.outcome === "admitted") {
+        admitted += 1;
+        expect(got.alert.severity).toBe("warn");
+      }
     }
+    // Positive control: the loop must have checked something, or the test passes on no admissions at all.
+    expect(admitted).toBeGreaterThan(0);
   });
 });
