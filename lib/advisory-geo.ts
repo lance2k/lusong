@@ -320,8 +320,9 @@ export function isNationwide(area: CapArea): boolean {
 /**
  * Lean safe, as lib/advisory.ts was for Cebu: an area covers a route when any indicator it carries says so, its polygon
  * or the province or region its geocode or name bounds it by. PAGASA's own polygons are coarse: the 2026-10-30 Davao
- * Region record's Davao del Sur polygon leaves out downtown Davao City, which its SAME code 112400000 includes. A
- * nationwide area covers every route. Unbounded: no polygon and nothing names a place, so it never covers a route; the
+ * Region record's Davao del Sur polygon leaves out downtown Davao City, which its SAME code 112400000 includes.
+ * The province fallback after a readable polygon misses is deliberate: it widens coverage, the lean-safe direction.
+ * A nationwide area covers every route. Unbounded: no polygon and nothing names a place, so it never covers a route; the
  * caller shows it as a warning instead.
  */
 export function judgeArea(area: CapArea, line: readonly Point[]): AreaJudgement {

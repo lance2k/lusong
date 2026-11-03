@@ -222,7 +222,8 @@ describe("only live records change what is live (diff duck round 1, S1G-1, S1G-2
     const { snapshot, judge, net } = await snapshotAt("2026-10-30T21:11:06+08:00", listing([DAVAO_GFA1_ALERT, DAVAO_GFA1_UPDATE]));
     expect(net.calls).toContain(DAVAO_GFA1_UPDATE);
     expect(snapshot).toMatchObject({ complete: true, entries: [{ link: DAVAO_GFA1_UPDATE }, { link: DAVAO_GFA1_ALERT }] });
-    expect(judge(DAVAO_CITY_ROUTE).covering.map((p) => p.link)).toEqual([DAVAO_GFA1_UPDATE]);
+    // The update counts at once; the alert it replaces stays until the update is due (S1G-5), so both cover the route.
+    expect(judge(DAVAO_CITY_ROUTE).covering.map((p) => p.link)).toEqual([DAVAO_GFA1_UPDATE, DAVAO_GFA1_ALERT]);
   });
 
   it("a listed record that can't be fetched makes the snapshot incomplete however far ahead its entry is dated", async () => {
@@ -230,6 +231,59 @@ describe("only live records change what is live (diff duck round 1, S1G-1, S1G-2
     delete served[DAVAO_GFA1_UPDATE];
     const { snapshot } = await snapshotAt("2026-10-30T21:00:00+08:00", served);
     expect(snapshot.complete).toBe(false);
+  });
+});
+
+describe("a record not yet due never makes a reading say no advisory (diff round 2, S1G-5, S1G-6)", () => {
+  const sentAt = (iso: string) => (cap: string) => cap.replace(/<sent>[^<]*<\/sent>/, `<sent>${iso}</sent>`);
+  const CHECK = "2026-10-23T05:45:00+08:00";
+
+  it.each([
+    ["one minute ahead", "2026-10-23T05:46:00+08:00"],
+    ["exactly the 2-minute clock allowance ahead", "2026-10-23T05:47:00+08:00"],
+  ])("a cancellation one minute ahead doesn't turn an active route to none (S1G-5): %s", async (_label, sent) => {
+    const { snapshot, judge } = await snapshotAt(CHECK, listing([CAGAYAN_GFA4, CAGAYAN_GFA4_CANCEL], { [CAGAYAN_GFA4_CANCEL]: sentAt(sent) }));
+    expect(snapshot.products.map((p) => p.link)).toEqual([CAGAYAN_GFA4]);
+    expect(judge(TUGUEGARAO_ROUTE).state).toBe("active");
+    expect(snapshot.pendingAt).toBe(new Date(sent).toISOString());
+    // Once the cancellation is due, the snapshot that couldn't apply it is incomplete: still counted as active.
+    expect(judge(TUGUEGARAO_ROUTE, sent)).toMatchObject({ state: "unreadable", incomplete: expect.stringContaining("came due") });
+  });
+
+  it("a cancellation sent by the server's clock removes its product", async () => {
+    const { snapshot, judge } = await snapshotAt(CHECK, listing([CAGAYAN_GFA4, CAGAYAN_GFA4_CANCEL], { [CAGAYAN_GFA4_CANCEL]: sentAt(CHECK) }));
+    expect(snapshot).toMatchObject({ complete: true, products: [], pendingAt: null });
+    expect(judge(TUGUEGARAO_ROUTE).state).toBe("none");
+  });
+
+  it("a product sent after the snapshot was built makes the reading incomplete once its time passes (S1G-6)", async () => {
+    // Built at 05:20 PHT; GFA #4 (Cagayan) is sent at 05:33:27 and counts from 05:31:27, the clock allowance before it.
+    const served = listing([CAGAYAN_GFA4]);
+    const store = new MemoryAdvisoryStore();
+    const { snapshot, judge } = await snapshotAt("2026-10-23T05:20:00+08:00", served, store);
+    expect(snapshot).toMatchObject({ complete: true, products: [], pendingAt: "2026-10-22T21:31:27.000Z" });
+    expect(judge(TUGUEGARAO_ROUTE, "2026-10-23T05:31:26+08:00")).toMatchObject({ state: "none", incomplete: null });
+    expect(judge(TUGUEGARAO_ROUTE, "2026-10-23T05:34:00+08:00").state).toBe("unreadable");
+
+    // A check after it's due refreshes inline, as on a cold start, and finds the product.
+    const now = at("2026-10-23T05:34:00+08:00");
+    const reading = await snapshotForCheck({ store, fetch: pagasa(served).fetch, now, deadline: Date.now() + 5_000 });
+    expect(reading.snapshot!.generation).toBeGreaterThan(snapshot.generation);
+    expect(judgeRoute(reading, TUGUEGARAO_ROUTE, now)).toMatchObject({ state: "active", incomplete: null });
+  });
+});
+
+describe("a raw record the store couldn't keep (diff round 2, 🟡4)", () => {
+  it("publishes the snapshot as incomplete when writing a fetched record fails", async () => {
+    class NoRecordWrites extends MemoryAdvisoryStore {
+      override async set(): Promise<void> {
+        throw new Error("store write failed");
+      }
+    }
+    const { snapshot, judge } = await snapshotAt("2026-10-30T21:30:00+08:00", listing([DAVAO_GFA1_ALERT, DAVAO_GFA1_UPDATE]), new NoRecordWrites());
+    expect(snapshot.complete).toBe(false);
+    expect(snapshot.why).toMatch(/^storing .*: store write failed$/);
+    expect(judge(DAVAO_CITY_ROUTE).state).toBe("unreadable");
   });
 });
 

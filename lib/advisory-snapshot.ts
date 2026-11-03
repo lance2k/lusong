@@ -91,6 +91,11 @@ export interface AdvisorySnapshot {
   why: string | null;
   entries: FeedEntryView[];
   products: AdvisoryProduct[];
+  /**
+   * The earliest send time after the refresh of an Actual record it couldn't apply yet: an Alert not yet sent, or an
+   * Update or Cancel not yet sent. From then on the snapshot is out of date, so a check reads it as incomplete.
+   */
+  pendingAt?: string | null;
 }
 
 interface StoredRecord {
@@ -365,18 +370,33 @@ function readRecord(xml: string, link: string): ParsedRecord {
 /** A record sent this little after the server's clock counts as sent: PAGASA's clock and Vercel's needn't agree. */
 export const CLOCK_SKEW_MS = 2 * 60_000;
 
+const retires = (r: ParsedRecord) => r.msgType === "Update" || r.msgType === "Cancel";
+const showsProduct = (r: ParsedRecord) => r.msgType === "Alert" || r.msgType === "Update";
+
 /**
  * Product identity is the CAP identifier: an Update replaces, and a Cancel removes, exactly the products its references
- * name. Only an Actual record already sent does either, so a Test or Exercise cancellation never removes a live product.
- * What is left is every Actual Alert or Update already sent that nothing live names, with its live infos.
+ * name. Only an Actual record already sent by this clock does either, with no allowance for skew: lean safe, a product
+ * stays live until what retires it is due, and a Test or Exercise cancellation never removes one. A product counts from
+ * CLOCK_SKEW_MS before its send time. What is left is every such Actual Alert or Update nothing retires, with its live infos.
  */
 function liveProducts(records: readonly ParsedRecord[], now: number): AdvisoryProduct[] {
-  const live = records.filter((r) => r.status === "Actual" && r.sentMs <= now + CLOCK_SKEW_MS);
-  const replaced = new Set(live.filter((r) => r.msgType === "Update" || r.msgType === "Cancel").flatMap((r) => r.references));
-  return live
-    .filter((r) => (r.msgType === "Alert" || r.msgType === "Update") && !replaced.has(r.id))
+  const actual = records.filter((r) => r.status === "Actual");
+  const replaced = new Set(actual.filter((r) => retires(r) && r.sentMs <= now).flatMap((r) => r.references));
+  return actual
+    .filter((r) => showsProduct(r) && r.sentMs <= now + CLOCK_SKEW_MS && !replaced.has(r.id))
     .map((r) => ({ ...r.product, infos: r.product.infos.filter((i) => Date.parse(i.expires) > now) }))
     .filter((p) => p.infos.length > 0);
+}
+
+/** When the first Actual record this refresh couldn't apply yet is due, or null. */
+function pendingAtOf(records: readonly ParsedRecord[], now: number): string | null {
+  const due = records
+    .filter((r) => r.status === "Actual")
+    .flatMap((r) => [
+      ...(showsProduct(r) && r.sentMs > now + CLOCK_SKEW_MS ? [r.sentMs - CLOCK_SKEW_MS] : []),
+      ...(retires(r) && r.sentMs > now ? [r.sentMs] : []),
+    ]);
+  return due.length > 0 ? new Date(Math.min(...due)).toISOString() : null;
 }
 
 function parseStoredRecord(text: string | null): StoredRecord | null {
@@ -413,6 +433,7 @@ async function buildSnapshot(deps: BuildDeps, generation: number): Promise<Advis
     why,
     entries: entries.map((e) => ({ link: e.link, title: e.title, updated: e.updated })),
     products: liveProducts(records, now),
+    pendingAt: pendingAtOf(records, now),
   });
 
   let feed: ReturnType<typeof readFeed>;
@@ -443,7 +464,10 @@ async function buildSnapshot(deps: BuildDeps, generation: number): Promise<Advis
     } else {
       xml = await fetchText(entry.link, deps, limits, signal);
       const record: StoredRecord = { fetchedAt: deps.now.toISOString(), feedUpdated: entry.updated, link: entry.link, xml };
-      await deps.store.set(capKey(entry.link), JSON.stringify(record), CAP_TTL_MS).catch(() => {});
+      // A record not held is fetched again by every later refresh: the snapshot says so rather than reading as complete.
+      await deps.store.set(capKey(entry.link), JSON.stringify(record), CAP_TTL_MS).catch((err) => {
+        failure ??= `storing ${entry.link}: ${err instanceof Error ? err.message : String(err)}`;
+      });
     }
     records.push(readRecord(xml, entry.link));
   };
@@ -529,12 +553,14 @@ export function incompleteWhy(snapshot: AdvisorySnapshot | null, now: Date): str
   if (!snapshot) return "no snapshot of PAGASA's feed";
   if (!snapshot.complete) return snapshot.why ?? "the snapshot is incomplete";
   if (now.getTime() - Date.parse(snapshot.fetchedAt) > STALE_AFTER_MS) return `the snapshot is older than ${STALE_AFTER_MS / 60_000} minutes`;
+  if (snapshot.pendingAt && now.getTime() >= Date.parse(snapshot.pendingAt)) return `a record PAGASA sent at ${snapshot.pendingAt} came due after the snapshot`;
   return null;
 }
 
 function settled(snapshot: AdvisorySnapshot | null, now: Date): boolean {
   if (!snapshot) return false;
   const age = now.getTime() - Date.parse(snapshot.fetchedAt);
+  if (snapshot.pendingAt && now.getTime() >= Date.parse(snapshot.pendingAt)) return false;
   return age >= 0 && age < (snapshot.complete ? STALE_AFTER_MS : INCOMPLETE_RETRY_MS);
 }
 
