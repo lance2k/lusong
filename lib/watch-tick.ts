@@ -1,23 +1,41 @@
 import type { AnswerKind } from "./answer";
 import { SEND_TIMEOUT_MS, type Channel } from "./channel";
-import { TITLES, type ScheduledCheck } from "./commute-handler";
+import { COMMUTE_DEADLINE_MS, COMMUTE_TIMING, TITLES, type ScheduledCheck } from "./commute-handler";
 import { simplifyLine } from "./alert-corridor";
-import { clockLine, hhmm, inWindow, phtDay } from "./watch-window";
+import { beforeDeadline } from "./deadline";
+import { clockLine, hhmm, inWindow, phtDay, windowOpensAt } from "./watch-window";
 import type { WatchRecord, WatchStore, WatchTrip } from "./watch-store";
 
 export interface TickLimits {
-  /** Checks started in one tick; the rest wait for the next, longest-unchecked first. */
+  /** Checks started in one tick; the rest wait for the next, ahead of every watcher this tick checked (see dueSince). */
   maxPerTick: number;
-  /** The whole tick, under the tick route's maxDuration (60 s) with room for the response. */
+  /**
+   * The whole tick, the last trip's send and store writes included: under the tick route's maxDuration (60 s) with
+   * 5 s left for the response. A store call still running at its end is left to settle on its own.
+   */
   budgetMs: number;
-  /** No check starts with less than this left of the budget. */
+  /**
+   * Kept at the end of the budget for a trip's send and its store writes after its check: the send lease (8 s), inside
+   * which the send ends, and 2 s for recording it. No check runs into it.
+   */
+  afterCheckMs: number;
+  /** One trip's check, its settle included, when the tick has that long left: the page's 80 s check and one store call. */
+  checkMs: number;
+  /** No check starts with less than this left before the checks' end; the trip waits for the next tick, first in line. */
   minCheckMs: number;
   /** A watcher is checked at most once in this long. Under 10 minutes, so a scheduler that fires a little early every
    *  10 minutes doesn't skip every other run. */
   minGapMs: number;
 }
 
-export const TICK_LIMITS: TickLimits = { maxPerTick: 20, budgetMs: 45_000, minCheckMs: 15_000, minGapMs: 9 * 60_000 };
+export const TICK_LIMITS: TickLimits = {
+  maxPerTick: 20,
+  budgetMs: 55_000,
+  afterCheckMs: 10_000,
+  checkMs: COMMUTE_DEADLINE_MS + COMMUTE_TIMING.storeCallMs,
+  minCheckMs: 15_000,
+  minGapMs: 9 * 60_000,
+};
 
 /** A tick holds the watcher's send lease from its last check that the watcher is on until its send is recorded. */
 export const SEND_LEASE_MS = 8_000;
@@ -53,6 +71,16 @@ export interface TickSummary {
   deferred: number;
 }
 
+/**
+ * When the watcher last became due: its window's opening today or the end of its gap since its last check, whichever
+ * is later. A trip deferred by one tick became due by that tick's start; every trip that tick checked becomes due a
+ * gap after it, and every other trip after it too (its window opened later, or its gap hadn't passed), so sorting on
+ * this puts each deferred trip first at the next tick.
+ */
+export function dueSince(w: WatchRecord, at: Date, minGapMs: number): number {
+  return Math.max(w.checkedAt + minGapMs, windowOpensAt(w.window, at));
+}
+
 /** Built from Lusong's fixed answer words and the window's own times only, never from model text. */
 export function watchMessage(m: { kind: AnswerKind; was: AnswerKind | null; at: Date; window: WatchRecord["window"]; pageUrl: string }): string {
   const link = `Open Lusong and check your trip to see why: ${m.pageUrl}`;
@@ -70,24 +98,27 @@ export async function runTick(deps: TickDeps): Promise<TickSummary> {
   const limits = { ...TICK_LIMITS, ...deps.limits };
   const started = Date.now();
   const elapsed = deps.elapsedMs ?? (() => Date.now() - started);
-  const deadline = started + limits.budgetMs;
+  const end = started + limits.budgetMs;
+  const checksEnd = end - limits.afterCheckMs;
   const at = deps.now();
   const summary: TickSummary = { ok: true, due: 0, checked: 0, sent: 0, failed: 0, deferred: 0 };
 
   let watchers: WatchRecord[];
   try {
-    watchers = await deps.store.list();
+    watchers = await by(deps.store.list(), checksEnd);
   } catch (err) {
     console.error("watch store unreadable:", err instanceof Error ? err.message : err);
     return { ...summary, ok: false };
   }
   const due = watchers
     .filter((w) => w.chatId !== null && inWindow(w.window, at) && at.getTime() - w.checkedAt >= limits.minGapMs)
-    .sort((a, b) => a.checkedAt - b.checkedAt);
+    .map((w) => ({ w, since: dueSince(w, at, limits.minGapMs) }))
+    .sort((a, b) => a.since - b.since || (a.w.id < b.w.id ? -1 : a.w.id > b.w.id ? 1 : 0))
+    .map(({ w }) => w);
   summary.due = due.length;
 
   for (const [i, w] of due.entries()) {
-    if (i >= limits.maxPerTick || limits.budgetMs - elapsed() < limits.minCheckMs) {
+    if (i >= limits.maxPerTick || checksEnd - (started + elapsed()) < limits.minCheckMs) {
       summary.deferred = due.length - i;
       break;
     }
@@ -95,14 +126,16 @@ export async function runTick(deps: TickDeps): Promise<TickSummary> {
     const startAt = deps.now();
     if (!inWindow(w.window, startAt)) continue;
     try {
-      if (!(await deps.store.claimRun(w.id, w.gen, startAt.getTime(), limits.minGapMs))) continue;
+      if (!(await by(deps.store.claimRun(w.id, w.gen, startAt.getTime(), limits.minGapMs), checksEnd))) continue;
     } catch (err) {
       console.error("watch store failed on claim:", err instanceof Error ? err.message : err);
       summary.failed += 1;
       continue;
     }
     summary.checked += 1;
-    const outcome = await runOne(deps, w, { deadline });
+    // Its own deadline, from when it starts: the full check when the tick has that long, else the checks' end.
+    const deadline = Math.min(checksEnd, started + elapsed() + limits.checkMs);
+    const outcome = await runOne(deps, w, { deadline, end });
     if (outcome === "sent") summary.sent += 1;
     if (outcome === "failed") summary.failed += 1;
   }
@@ -112,50 +145,72 @@ export async function runTick(deps: TickDeps): Promise<TickSummary> {
 async function runOne(
   deps: TickDeps,
   w: WatchRecord,
-  run: { deadline: number },
+  run: { deadline: number; end: number },
 ): Promise<"sent" | "quiet" | "failed"> {
-  let result: ScheduledCheck;
+  let result: ScheduledCheck | "late";
   try {
-    result = await deps.check(w.trip, { deadline: run.deadline });
+    // A check ends by its deadline; one that runs on until no send could fit is a failed check, left to end on its own.
+    result = await beforeDeadline(deps.check(w.trip, { deadline: run.deadline }), run.end - SEND_LEASE_MS);
   } catch (err) {
     console.error("watcher check failed:", err instanceof Error ? err.message : err);
     return "failed";
   }
-  if (!result.ok) return "failed";
+  if (result === "late" || !result.ok) return "failed";
   try {
-    return await sendAnswer(deps, w, result.kind);
+    return await sendAnswer(deps, w, result.kind, run.end);
   } finally {
-    // The alert delivery's corridor (S4P-6), kept after the send so it never delays one. A failed write leaves the last
-    // line, or the fallback box, in use.
+    // The alert delivery's corridor (S4P-6), kept after the send so it never delays one. A failed or late write leaves
+    // the last line, or the fallback box, in use.
     if (result.line) {
-      await deps.store.saveRoute(w.id, w.gen, simplifyLine(result.line)).catch((err) => {
+      const saving = deps.store.saveRoute(w.id, w.gen, simplifyLine(result.line)).catch((err) => {
         console.error("watch store failed saving the route line:", err instanceof Error ? err.message : err);
       });
+      await beforeDeadline(saving, run.end);
     }
   }
 }
 
-async function sendAnswer(deps: TickDeps, w: WatchRecord, kind: AnswerKind): Promise<"sent" | "quiet" | "failed"> {
+/**
+ * Every store call here ends by `end`, the tick's: one still running then is left to settle on its own. Each is safe to
+ * land late: a lease lapses in SEND_LEASE_MS, a mark that lands counts as sent (a missed message, never a second one),
+ * and a commit or a drop is made for the watcher's generation only.
+ */
+async function sendAnswer(deps: TickDeps, w: WatchRecord, kind: AnswerKind, end: number): Promise<"sent" | "quiet" | "failed"> {
+  // With less than a lease left of the tick, the send couldn't end inside it. Nothing is marked, so the next check sends it.
+  if (end - Date.now() < SEND_LEASE_MS) return "failed";
   const leaseAsked = Date.now();
-  let lease: string | null;
+  let lease: string | null | "late";
   try {
-    lease = await deps.store.takeSendLease(w.id, SEND_LEASE_MS);
+    lease = await beforeDeadline(deps.store.takeSendLease(w.id, SEND_LEASE_MS), end);
   } catch (err) {
     console.error("watch store failed on the send lease:", err instanceof Error ? err.message : err);
     return "failed";
   }
+  if (lease === "late") return "failed";
   // A switch-off holds the lease while it deletes the watcher.
   if (!lease) return "quiet";
+  const held = lease;
   try {
-    return await sendUnderLease(deps, w, kind, leaseAsked);
+    return await sendUnderLease(deps, w, kind, leaseAsked, end);
   } finally {
-    await deps.store.releaseSendLease(w.id, lease).catch((err) => {
+    const releasing = deps.store.releaseSendLease(w.id, held).catch((err) => {
       console.error("watch store failed releasing the send lease:", err instanceof Error ? err.message : err);
     });
+    await beforeDeadline(releasing, end);
   }
 }
 
-async function sendUnderLease(deps: TickDeps, w: WatchRecord, kind: AnswerKind, leaseAsked: number): Promise<"sent" | "quiet" | "failed"> {
+/** The call's value; one that answers after `end` is a store failure, left to settle on its own. */
+async function by<T>(call: Promise<T>, end: number): Promise<T> {
+  const result = await beforeDeadline(call, end);
+  if (result === "late") {
+    call.catch(() => {});
+    throw new Error("no answer before the tick's end");
+  }
+  return result;
+}
+
+async function sendUnderLease(deps: TickDeps, w: WatchRecord, kind: AnswerKind, leaseAsked: number, end: number): Promise<"sent" | "quiet" | "failed"> {
   // The check can outlast the window: what is sent is decided on the clock as it is now.
   const at = deps.now();
   if (!inWindow(w.window, at)) return "quiet";
@@ -169,16 +224,17 @@ async function sendUnderLease(deps: TickDeps, w: WatchRecord, kind: AnswerKind, 
   try {
     // Recorded before the send, so a send whose outcome is unknown, or whose commit fails, is never sent again.
     // False when switched off (or switched on again) while the check ran: this run speaks for no one.
-    if (!(await deps.store.markSending(w.id, w.gen, answer))) return "quiet";
+    if (!(await by(deps.store.markSending(w.id, w.gen, answer), end))) return "quiet";
+    // The lease was asked for with at least its own length left of the tick, so a send that ends inside it ends in time.
     if (Date.now() - leaseAsked > SEND_LEASE_MS - SEND_TIMEOUT_MS - LEASE_MARGIN_MS) {
       // Too little of the lease is left for the send to end inside it, where a switch-off waits for it.
-      await deps.store.dropSending(w.id, w.gen);
+      await by(deps.store.dropSending(w.id, w.gen), end);
       return "failed";
     }
     // Recording the answer takes time too, and the window may close during it; the answer was recorded for `day`.
     sendAt = deps.now();
     if (!inWindow(w.window, sendAt) || phtDay(sendAt) !== day) {
-      await deps.store.dropSending(w.id, w.gen);
+      await by(deps.store.dropSending(w.id, w.gen), end);
       return "quiet";
     }
   } catch (err) {
@@ -189,10 +245,10 @@ async function sendUnderLease(deps: TickDeps, w: WatchRecord, kind: AnswerKind, 
   const sent = await deps.channel.send(w.chatId!, text);
   try {
     if (sent.ok) {
-      await deps.store.commit(w.id, w.gen, answer);
+      await by(deps.store.commit(w.id, w.gen, answer), end);
     } else if (sent.rejected) {
-      if (sent.permanent) await deps.store.remove(w.id);
-      else await deps.store.dropSending(w.id, w.gen);
+      if (sent.permanent) await by(deps.store.remove(w.id), end);
+      else await by(deps.store.dropSending(w.id, w.gen), end);
     }
   } catch (err) {
     // The mark stays, so the answer counts as sent: after a refusal that means one missed message, never a duplicate.

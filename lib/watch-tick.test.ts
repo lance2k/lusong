@@ -1,11 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeChannel } from "../test/fake-channel";
 import type { AnswerKind } from "./answer";
 import { SEND_TIMEOUT_MS, TelegramChannel } from "./channel";
-import type { ScheduledCheck } from "./commute-handler";
+import { COMMUTE_TIMING, type ScheduledCheck } from "./commute-handler";
 import { watchStores } from "../test/watch-stores";
 import { MemoryWatchStore, type NewWatcher, type WatchStore } from "./watch-store";
-import { runTick, SEND_LEASE_MS, type TickDeps } from "./watch-tick";
+import { runTick, SEND_LEASE_MS, TICK_LIMITS, type TickDeps } from "./watch-tick";
 
 const BANILAD = { lat: 10.346, lon: 123.911 };
 const IT_PARK = { lat: 10.3307, lon: 123.9058 };
@@ -338,19 +338,153 @@ describe("the watcher's tick (fake clock, fake channel)", () => {
     expect(await runTick(deps)).toMatchObject({ due: 3, checked: 2, deferred: 1 });
   });
 
-  it("gives each check the tick's deadline", async () => {
+  it("gives each trip its own deadline from when its check starts: the whole check when the tick has that long, else the checks' end (#26)", async () => {
     const { store, deps } = setup("2026-10-30T06:00:00+08:00");
-    await linkedWatcher(store);
+    for (const c of "ab") await linkedWatcher(store, { id: c.repeat(64) }, c);
+    let elapsed = 0;
+    deps.elapsedMs = () => elapsed;
+    deps.limits = { budgetMs: 300_000, afterCheckMs: 10_000, checkMs: 85_000 };
+    const offsets: number[] = [];
+    const started = Date.now();
+    deps.check = async (_trip, opts) => {
+      offsets.push(opts.deadline - started);
+      elapsed += 30_000;
+      return { ok: true, kind: "go" };
+    };
+    await runTick(deps);
+    // Not one deadline shared by the tick: the second trip's is counted from its own start, 30 s later.
+    expect(offsets[0]).toBeGreaterThanOrEqual(85_000);
+    expect(offsets[0]).toBeLessThan(85_000 + 1_000);
+    expect(offsets[1]).toBeGreaterThanOrEqual(115_000);
+    expect(offsets[1]).toBeLessThan(115_000 + 1_000);
+  });
+
+  it("the first trip of a real tick gets a full check's budget, capped at the checks' end: 45 s in, 10 s before the tick's end for its send (#26)", async () => {
+    const { store, deps } = setup("2026-10-30T06:00:00+08:00");
+    for (const c of "ab") await linkedWatcher(store, { id: c.repeat(64) }, c);
     const deadlines: number[] = [];
     const before = Date.now();
-    deps.limits = { budgetMs: 45_000 };
     deps.check = async (_trip, opts) => {
       deadlines.push(opts.deadline);
       return { ok: true, kind: "go" };
     };
     await runTick(deps);
-    expect(deadlines[0]).toBeGreaterThanOrEqual(before + 45_000);
-    expect(deadlines[0]).toBeLessThanOrEqual(Date.now() + 45_000);
+    const checksEnd = TICK_LIMITS.budgetMs - TICK_LIMITS.afterCheckMs;
+    expect(checksEnd).toBe(45_000);
+    // The whole check would end 85 s after its start; the tick's end comes first.
+    expect(TICK_LIMITS.checkMs).toBe(COMMUTE_TIMING.deadlineMs + COMMUTE_TIMING.storeCallMs);
+    expect(deadlines[0]).toBeGreaterThanOrEqual(before + checksEnd);
+    expect(deadlines[0]).toBeLessThanOrEqual(Date.now() + checksEnd);
+  });
+
+  it("a trip with too little of the tick left is deferred, and goes first at the next tick, ahead of a watcher unchecked for longer whose window opened since (#26)", async () => {
+    const { clock, store, deps } = setup("2026-10-30T06:00:00+08:00");
+    // Each trip its own ends, so the check can tell them apart.
+    const a = await linkedWatcher(store, { id: "a".repeat(64), trip: { from: BANILAD, to: IT_PARK } }, "a");
+    const b = await linkedWatcher(store, { id: "b".repeat(64), trip: { from: IT_PARK, to: BANILAD } }, "b");
+    // c's window opens at 06:05. Last checked yesterday, earlier in the day than b was, so it is unchecked for longer.
+    const c = await linkedWatcher(store, { id: "c".repeat(64), trip: { from: BANILAD, to: BANILAD }, window: { startMin: 365, endMin: 480 } }, "c");
+    expect(await store.claimRun(c.id, c.gen, Date.parse("2026-10-29T06:05:00+08:00"), 0)).toBe(true);
+    expect(await store.claimRun(b.id, b.gen, Date.parse("2026-10-29T07:50:00+08:00"), 0)).toBe(true);
+    const name = new Map([a, b, c].map((w) => [JSON.stringify(w.trip), w.id[0]]));
+    let elapsed = 0;
+    deps.elapsedMs = () => elapsed;
+    const order: string[] = [];
+    deps.check = async (trip) => {
+      order.push(name.get(JSON.stringify(trip))!);
+      // 35 s a check: after one, 10 s is left before the checks' end, short of the 15 s a check needs.
+      elapsed += 35_000;
+      return { ok: true, kind: "go" };
+    };
+
+    expect(await runTick(deps)).toMatchObject({ due: 2, checked: 1, deferred: 1 });
+    expect(order).toEqual(["a"]);
+
+    clock.set("2026-10-30T06:10:00+08:00");
+    elapsed = 0;
+    expect(await runTick(deps)).toMatchObject({ due: 3, checked: 1, deferred: 2 });
+    // By its last check alone, c would go first: yesterday 06:05, before b's 07:50.
+    expect(order).toEqual(["a", "b"]);
+
+    clock.set("2026-10-30T06:20:00+08:00");
+    elapsed = 0;
+    expect(await runTick(deps)).toMatchObject({ due: 3, checked: 1, deferred: 2 });
+    expect(order).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("the watcher's tick keeps inside its budget with slow dependencies (fake timers, #26)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Every call to the store waits `storeMs`; each check runs to its deadline; Telegram takes its whole timeout. */
+  function slowTick(storeMs: number) {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const { store, channel, deps } = setup("2026-10-30T06:00:00+08:00");
+    const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, ms)));
+    const slow = new Proxy(store, {
+      get(target, key, receiver) {
+        const value = Reflect.get(target, key, receiver);
+        if (typeof value !== "function") return value;
+        return async (...args: unknown[]) => {
+          await wait(storeMs);
+          return value.apply(target, args);
+        };
+      },
+    });
+    const sends: number[] = [];
+    deps.store = slow;
+    deps.channel = {
+      send: async (chatId, text) => {
+        sends.push(Date.now());
+        await wait(SEND_TIMEOUT_MS);
+        return channel.send(chatId, text);
+      },
+    };
+    deps.check = async (_trip, opts) => {
+      await wait(opts.deadline - Date.now());
+      return { ok: true, kind: "go", line: [BANILAD, IT_PARK] };
+    };
+    return { store, channel, deps, sends };
+  }
+
+  async function timed(deps: TickDeps) {
+    const started = Date.now();
+    let summary: Awaited<ReturnType<typeof runTick>> | undefined;
+    void runTick(deps).then((s) => (summary = s));
+    for (let i = 0; i < 1_000 && !summary; i++) await vi.advanceTimersByTimeAsync(100);
+    return { summary: summary!, started, tookMs: Date.now() - started };
+  }
+
+  it.each([
+    { storeMs: 1_000, sent: 1 },
+    { storeMs: 4_000, sent: 0 },
+    { storeMs: 20_000, sent: 0 },
+  ])("a store taking $storeMs ms a call: the tick ends inside its 55 s, and sends $sent", async ({ storeMs, sent }) => {
+    const { store, deps, sends, channel } = slowTick(storeMs);
+    for (const c of "abc") await linkedWatcher(store, { id: c.repeat(64) }, c);
+
+    const { summary, started, tookMs } = await timed(deps);
+
+    expect(summary).toBeDefined();
+    expect(tookMs).toBeLessThanOrEqual(TICK_LIMITS.budgetMs);
+    expect(TICK_LIMITS.budgetMs).toBe(55_000);
+    expect(channel.sent).toHaveLength(sent);
+    expect(summary.sent).toBe(sent);
+    // A send is started only when it ends before the tick does.
+    for (const at of sends) expect(at + SEND_TIMEOUT_MS).toBeLessThanOrEqual(started + TICK_LIMITS.budgetMs);
+  });
+
+  it("with a quick store, a check that runs to its deadline still leaves its send the time it needs", async () => {
+    const { store, deps, channel } = slowTick(0);
+    for (const c of "abc") await linkedWatcher(store, { id: c.repeat(64) }, c);
+
+    const { summary, tookMs } = await timed(deps);
+
+    expect(summary).toMatchObject({ due: 3, checked: 1, sent: 1, deferred: 2 });
+    expect(channel.sent).toHaveLength(1);
+    expect(tookMs).toBeLessThanOrEqual(TICK_LIMITS.budgetMs);
   });
 });
 
