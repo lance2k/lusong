@@ -43,7 +43,7 @@ export class TelegramFileApi implements TelegramFiles {
       }
       return await readCapped(file.body, opts);
     } catch (err) {
-      if (Date.now() >= opts.deadline) return { ok: false, reason: "too_slow" };
+      if (signal.aborted) return { ok: false, reason: "too_slow" };
       console.error("Telegram file download failed:", err instanceof Error ? err.name : "error");
       return { ok: false, reason: "failed" };
     }
