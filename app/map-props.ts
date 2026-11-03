@@ -10,13 +10,21 @@ interface Answered {
 }
 
 /**
- * Where the map opens and stays until a check is sent: a fixed view over Metro Cebu. OpenStreetMap's tile server sees
- * every tile the map asks for, so the view never moves to a saved trip on its own.
+ * Where the map opens: a fixed view over the Philippines. OpenStreetMap's tile server sees every tile the map asks for,
+ * so the view never moves to a saved trip on its own, only after the rider picks or taps an end (`riderMoved`).
  */
-export const METRO_CEBU_VIEW = { centre: { lat: 10.33, lon: 123.92 }, zoom: 11 } as const;
+export const PHILIPPINES_VIEW = { centre: { lat: 12.6, lon: 122.4 }, zoom: 5 } as const;
 
-/** What the map draws: a demo trip's ends or the commuter's taps, and once answered, the routes and report pins. */
-export function tripMapProps(input: { demo: { from: Point; to: Point } | null; draft: TripDraft; result: Answered | null }): Omit<TripMapProps, "onTap"> {
+/**
+ * What the map draws: a demo trip's ends or the commuter's taps, and once answered, the routes and report pins. It
+ * frames the routes once answered, a demo trip's own ends, or the rider's ends after the rider's own pick or tap.
+ */
+export function tripMapProps(input: {
+  demo: { from: Point; to: Point } | null;
+  draft: TripDraft;
+  riderMoved?: boolean;
+  result: Answered | null;
+}): Omit<TripMapProps, "onTap"> {
   const { demo, draft, result } = input;
   const ends = demo
     ? [
@@ -33,7 +41,11 @@ export function tripMapProps(input: { demo: { from: Point; to: Point } | null; d
         : draft.work
           ? [{ at: draft.work, label: "Work" }]
           : [];
-  const frame = result ? [...result.route.line, ...(result.detour?.line ?? [])] : null;
+  const frame = result
+    ? [...result.route.line, ...(result.detour?.line ?? [])]
+    : demo || (input.riderMoved && ends.length > 0)
+      ? ends.map((e) => e.at)
+      : null;
   return {
     ends,
     route: result?.route.line ?? null,

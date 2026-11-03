@@ -103,12 +103,12 @@ function Elapsed({ since }: { since: number }) {
 function Advisory({ advisory }: { advisory: PageAdvisory }) {
   return (
     <section className="space-y-1 rounded-2xl border border-zinc-200 px-4 py-3 text-[15px] dark:border-zinc-800">
-      <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">PAGASA flood advisory for Cebu</h3>
+      <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">PAGASA flood advisory for this trip</h3>
       {advisory.state === "active" ? (
         <>
           <p className="font-medium">{advisory.headline ?? "General Flood Advisory"}: active</p>
           {advisory.rainForecast && <p>Rain forecast: {advisory.rainForecast}.</p>}
-          {advisory.rivers && <p>Rivers named for Cebu: {advisory.rivers}.</p>}
+          {advisory.rivers && <p>Rivers named in the advisory: {advisory.rivers}.</p>}
           <p className="text-zinc-600 dark:text-zinc-400">
             Sent {advisory.sent}. Expires {advisory.expires}.
           </p>
@@ -216,7 +216,12 @@ export default function CommuteCheck() {
     restored.current = true;
     dispatch({ type: "change", inputs: { trip: OWN_TRIP } });
   }, [savedTrip]);
-  const map = tripMapProps({ demo: ownTrip ? null : DEMO_TRIPS[trip], draft: own.draft, result: view.step === "done" ? view.result : null });
+  const map = tripMapProps({
+    demo: ownTrip ? null : DEMO_TRIPS[trip],
+    draft: own.draft,
+    riderMoved: own.touched,
+    result: view.step === "done" ? view.result : null,
+  });
 
   async function check() {
     const ticket = state.ticket + 1;

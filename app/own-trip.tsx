@@ -50,6 +50,8 @@ export interface OwnTrip {
   clearFailed: boolean;
   tap: (at: Point) => void;
   clear: () => void;
+  /** The rider has picked or tapped an end on this page since it opened or was cleared: only then may the map move to it. */
+  touched: boolean;
 }
 
 /** `changed` runs whenever a tap, a clear or another tab changes the trip, so an answer for the old one isn't left showing. */
@@ -63,6 +65,7 @@ export function useOwnTrip(changed: () => void): OwnTrip {
   const [outside, setOutside] = useState(false);
   const [kept, setKept] = useState(true);
   const [clearFailed, setClearFailed] = useState(false);
+  const [touched, setTouched] = useState(false);
   const latestChanged = useRef(changed);
   useEffect(() => {
     latestChanged.current = changed;
@@ -88,6 +91,7 @@ export function useOwnTrip(changed: () => void): OwnTrip {
     const startsNew = draft.step === "set" || (draft.step === "home" && !draft.work);
     const fillsFrom = draft.step === "home" && Boolean(draft.work);
     if (!apply(tapTrip(draft, at))) return;
+    setTouched(true);
     const tapped = { name: "Point tapped on the map", at };
     if (startsNew) setNamed({ from: tapped, to: null });
     else if (fillsFrom) setNamed((l) => ({ ...l, from: tapped }));
@@ -96,6 +100,7 @@ export function useOwnTrip(changed: () => void): OwnTrip {
 
   function pick(end: "from" | "to", place: Place) {
     if (!apply(pickTrip(draft, end, place))) return;
+    setTouched(true);
     const name = place.area ? `${place.name}, ${place.area}` : place.name;
     setNamed((l) => ({ ...l, [end]: { name, at: { lat: place.lat, lon: place.lon } } }));
   }
@@ -110,13 +115,14 @@ export function useOwnTrip(changed: () => void): OwnTrip {
     setNamed({ from: null, to: null });
     setOutside(false);
     setKept(true);
+    setTouched(false);
     changed();
   }
 
   const home = draft.step === "set" ? draft.trip.home : draft.step === "work" ? draft.home : undefined;
   const work = draft.step === "set" ? draft.trip.work : draft.step === "home" ? draft.work : undefined;
   const labels = { from: nameFor(named.from, home), to: nameFor(named.to, work) };
-  return { draft, outside, kept, clearFailed, labels, bias, setBias, pick, tap, clear };
+  return { draft, outside, kept, clearFailed, labels, bias, setBias, pick, tap, clear, touched };
 }
 
 export function OwnTripPanel({ own }: { own: OwnTrip }) {
@@ -167,8 +173,8 @@ export function OwnTripPanel({ own }: { own: OwnTrip }) {
         )}
         {own.outside && (
           <p role="status" className="font-medium text-amber-800 dark:text-amber-300">
-            That spot is outside {TRIP_AREA_NAME}. Lusong checks trips in {TRIP_AREA_NAME} only, because the flood advisory it
-            reads is placed there.
+            That spot is outside {TRIP_AREA_NAME}. Lusong checks trips in {TRIP_AREA_NAME} only, where PAGASA&apos;s flood
+            advisories are placed.
           </p>
         )}
       </div>

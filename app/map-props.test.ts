@@ -21,12 +21,20 @@ const FAR_PIN = {
 describe("where the map looks", () => {
   it.each([
     ["a saved trip restored", { demo: null, draft: { step: "set", trip: { home: HOME, work: WORK } } }],
-    ["a home tapped, work not yet", { demo: null, draft: { step: "work", home: HOME } }],
-    ["no trip yet", { demo: null, draft: { step: "home" } }],
-    ["a demo trip", { demo: DEMO, draft: { step: "home" } }],
-  ] as const)("before an answer (%s) it stays on the fixed Metro Cebu view: tiles never reveal the trip's area", (_why, input) => {
+    ["a saved trip restored, with the rider's flag left unset", { demo: null, draft: { step: "set", trip: { home: HOME, work: WORK } }, riderMoved: false }],
+    ["no trip yet, even after a pick that was refused", { demo: null, draft: { step: "home" }, riderMoved: true }],
+  ] as const)("before an answer (%s) your own trip stays on the fixed view of the Philippines: tiles never reveal the trip's area", (_why, input) => {
     const props = tripMapProps({ ...input, result: null });
     expect(props.frame).toBeNull();
+  });
+
+  it("a demo trip frames its own ends before an answer", () => {
+    expect(tripMapProps({ demo: DEMO, draft: { step: "home" }, result: null }).frame).toEqual([DEMO.from, DEMO.to]);
+  });
+
+  it("after the rider's own pick or tap, the map frames the rider's ends", () => {
+    expect(tripMapProps({ demo: null, draft: { step: "work", home: HOME }, riderMoved: true, result: null }).frame).toEqual([HOME]);
+    expect(tripMapProps({ demo: null, draft: { step: "set", trip: { home: HOME, work: WORK } }, riderMoved: true, result: null }).frame).toEqual([HOME, WORK]);
   });
 
   it("the saved trip's ends are still drawn, without moving the view", () => {
