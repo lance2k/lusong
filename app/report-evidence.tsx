@@ -31,8 +31,8 @@ const ROLE_WORDS: Record<PageReport["role"], string> = {
   clear: "Shows the spot clear",
 };
 
-/** One report in a commute check's evidence list. */
-export function ReportEvidence({ r }: { r: PageReport }) {
+/** One report in a commute check's evidence list; `onShow` adds a button that flies the map to its pin. */
+export function ReportEvidence({ r, onShow }: { r: PageReport; onShow?: () => void }) {
   const where = r.onRoute ? "" : r.onDetour ? "On the other way. " : r.routes.length > 0 ? "On a way around Lusong checked and isn't showing. " : null;
   const status = !r.counts ? "Older than 3 hours: shown, not counted." : where === null ? "Not on your route." : where + ROLE_WORDS[r.role] + ".";
   return (
@@ -57,6 +57,11 @@ export function ReportEvidence({ r }: { r: PageReport }) {
             See the photo
           </a>
         </p>
+      )}
+      {onShow && (
+        <button type="button" onClick={onShow} className="mt-1 min-h-11 rounded-chip border border-line bg-surface px-4 text-sm font-medium text-ink">
+          Show on map
+        </button>
       )}
     </li>
   );

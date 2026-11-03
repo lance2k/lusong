@@ -12,14 +12,14 @@ export interface PageMuse {
 export function MusePick({ pick }: { pick: PageMuse["pick"] }) {
   if (!pick.shown && !pick.note) return null;
   return (
-    <section className="space-y-1 rounded-2xl border border-violet-200 px-4 py-3 text-[15px] dark:border-violet-900">
-      <h3 className="text-sm font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">{pick.label}</h3>
+    <section className="space-y-1 rounded-card border border-advisory/40 bg-surface px-4 py-3 text-[15px]">
+      <h3 className="text-sm font-semibold uppercase tracking-wide text-advisory">{pick.label}</h3>
       {pick.shown ? (
         pick.sentences.map((sentence, i) => <p key={i}>{sentence}</p>)
       ) : (
-        <p className="text-zinc-600 dark:text-zinc-400">{pick.note}</p>
+        <p className="text-ink-2">{pick.note}</p>
       )}
-      <p className="text-sm text-zinc-500">Muse Spark chose which evidence to show. Lusong wrote these lines, and its rules picked the answer.</p>
+      <p className="text-sm text-ink-2">Muse Spark chose which evidence to show. Lusong wrote these lines, and its rules picked the answer.</p>
     </section>
   );
 }
@@ -27,17 +27,17 @@ export function MusePick({ pick }: { pick: PageMuse["pick"] }) {
 export function WebFindings({ web }: { web: PageMuse["web"] }) {
   return (
     <section className="space-y-2 text-[15px]">
-      <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">Road closures on the web</h3>
-      <p className="text-zinc-600 dark:text-zinc-400">{web.line}</p>
-      {web.coverage.note && <p className="font-medium text-amber-800 dark:text-amber-300">{web.coverage.note}</p>}
+      <h3 className="text-sm font-semibold uppercase tracking-wide text-ink-2">Road closures on the web</h3>
+      <p className="text-ink-2">{web.line}</p>
+      {web.coverage.note && <p className="font-medium text-warn-ink">{web.coverage.note}</p>}
       {web.findings.length > 0 && (
-        <ul className="divide-y divide-zinc-200 rounded-2xl border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+        <ul className="divide-y divide-line rounded-card border border-line bg-surface">
           {web.findings.map((f, i) => (
             <li key={i} className="space-y-1 px-4 py-3">
               <p className="font-medium">{f.place}</p>
               <p>{f.description}</p>
-              <p className="text-zinc-600 dark:text-zinc-400">{f.note}</p>
-              <a className="break-all text-sm text-sky-700 underline dark:text-sky-400" href={f.url} rel="noopener noreferrer nofollow" target="_blank">
+              <p className="text-ink-2">{f.note}</p>
+              <a className="break-all text-sm text-brand underline" href={f.url} rel="noopener noreferrer nofollow" target="_blank">
                 {f.site}
               </a>
             </li>
