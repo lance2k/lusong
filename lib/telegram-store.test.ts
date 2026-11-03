@@ -59,7 +59,7 @@ describe.each(telegramStores)("pairing a chat's photo and location on the %s (S6
     const half: Half = { side: "media", kind: "voice", fileId: "voice-file", date: T, durationS: 4, fileSize: 9000, language: "tl" };
     await store.pair(CHAT, half, 99);
     const kept = await held();
-    expect(Object.keys(kept)).toEqual([`lusong:tg:pending:${chatKey(CHAT)}`]);
+    expect(Object.keys(kept).sort()).toEqual([`lusong:tg:pending:${chatKey(CHAT)}`, "lusong:tg:update:99"]);
     expect(JSON.stringify(kept)).not.toContain(CHAT);
   });
 });
@@ -86,6 +86,15 @@ describe.each(telegramStores)("update ids and language choices on the %s", (_nam
     await store.releaseUpdate(2);
     await wait(400);
     expect(await store.claimUpdate(2)).toBe(false);
+  });
+
+  it("an update whose half waits is finished in the same step, so it can't be taken again (S6D-3)", async () => {
+    const { store, wait } = make({ processingMs: 300 });
+    expect(await store.claimUpdate(1)).toBe(true);
+    await store.pair(CHAT, photo("p"), 1);
+    await store.releaseUpdate(1);
+    await wait(400);
+    expect(await store.claimUpdate(1)).toBe(false);
   });
 
   it("an update being worked on is taken again once its hold lapses", async () => {

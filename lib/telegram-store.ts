@@ -38,8 +38,9 @@ export interface TelegramStore {
   /**
    * Atomic, one call per arrival: if the chat's waiting half is the other side and dated within PAIR_WINDOW_S, it is
    * taken and both are returned; otherwise this half waits in its place (the latest wins). Only one arrival can take
-   * a waiting half. A pairing also marks `updateId` paired for UPDATE_DONE_MS in the same step, so the update can't
-   * be claimed again and form a second job if its worker dies before finishing it.
+   * a waiting half. The same step ends `updateId` for UPDATE_DONE_MS: marked paired when it takes a half, done when it
+   * waits. Neither the arriving update nor the one whose half it takes can be claimed again and form a second job,
+   * whenever a worker dies.
    */
   pair(chat: string, half: Half, updateId: number): Promise<Pairing>;
   setLanguage(chat: string, language: VoiceLanguage): Promise<void>;
@@ -131,6 +132,7 @@ export class MemoryTelegramStore implements TelegramStore {
       return paired(half, waiting);
     }
     this.set(key, encodeHalf(half), this.pendingTtlMs);
+    this.set(`update:${updateId}`, "done", UPDATE_DONE_MS);
     return { paired: false };
   }
 
@@ -156,6 +158,7 @@ if current then
   end
 end
 redis.call('SET', KEYS[1], ARGV[3], 'PX', ARGV[5])
+redis.call('SET', KEYS[2], 'done', 'PX', ARGV[6])
 return false
 `;
 

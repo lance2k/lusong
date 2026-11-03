@@ -34,7 +34,7 @@ type Reply = (init: RequestInit) => Response | Promise<Response>;
 const hangs: Reply = (init) => new Promise<Response>((_, reject) => init.signal?.addEventListener("abort", () => reject(init.signal!.reason)));
 
 /** Meta faked at fetch: SAM answers empty, Muse Spark with `spark`, Voice Transcribe with Tagalog words. */
-function stubMeta(spark: Reply = () => sparkJson({ is_flooded_street: true, caveats: "", readings: [] })) {
+function stubMeta(spark: Reply = () => sparkJson({ is_flooded_street: true, caveats: "", readings: [] }), sam?: Reply) {
   const calls: string[] = [];
   const realFetch = globalThis.fetch;
   const upstash = process.env.LUSONG_TEST_UPSTASH_URL;
@@ -46,6 +46,7 @@ function stubMeta(spark: Reply = () => sparkJson({ is_flooded_street: true, cave
       calls.push(String(url).replace("https://api.meta.ai/v1", ""));
       if (url.endsWith("/asr/transcribe")) return Response.json({ sessionId: "s", transcript: "Baha dito sa Cuenco Avenue, hanggang tuhod.", audioDurationMs: 3_000, turns: [] });
       if (url.endsWith("/chat/completions")) return spark(init);
+      if (sam) return sam(init);
       return Response.json({ status: "completed", output: [{ status: "completed", content: [{ type: "output_text", text: "" }] }], usage: { images_processed: 1 } });
     }),
   );
@@ -315,6 +316,41 @@ describe.each(telegramStores)("a photo report through Telegram, on the %s", (_na
     expect(calls).toHaveLength(paid);
     expect(b.server.requests.filter((r) => r.startsWith("download"))).toHaveLength(1);
     expect(await b.reportStore.recent(NOW)).toHaveLength(1);
+  });
+
+  it("a waiting update is finished when it is stored, so its redelivery never pairs (S6D-3)", async () => {
+    let failRead = true;
+    const failing: Reply = () => new Response("detail", { status: 500 });
+    const ok: Reply = () => Response.json({ status: "completed", output: [{ status: "completed", content: [{ type: "output_text", text: "" }] }], usage: { images_processed: 1 } });
+    const calls = stubMeta(undefined, (init) => (failRead ? failing(init) : ok(init)));
+    const under = make({ processingMs: 300 } satisfies TelegramStoreOptions);
+    const ph = photo();
+    const finish = under.store.finishUpdate.bind(under.store);
+    // The photo's worker dies right after storing it as pending: it never finishes the update itself.
+    under.store.finishUpdate = async (id) => {
+      if (id !== ph.update_id) await finish(id);
+    };
+    const b = bot({ store: under.store });
+    await b.send(ph);
+    expect(b.replies()).toEqual([TELEGRAM_REPLIES.photoWaiting]);
+
+    await b.send(location({ date: T + 10 }));
+    expect(b.replies().at(-1)).toBe(TELEGRAM_REPLIES.couldntRead);
+    const paid = calls.length;
+    expect(paid).toBeGreaterThan(0);
+    expect(await b.reportStore.recent(NOW)).toEqual([]);
+    failRead = false;
+
+    await under.wait(400);
+    await b.send(location({ date: T + 100 }));
+    expect(b.replies().at(-1)).toBe(TELEGRAM_REPLIES.locationWaiting);
+    const repliesBefore = b.replies().length;
+    expect((await b.send(ph)).status).toBe(200);
+    expect(b.replies()).toHaveLength(repliesBefore);
+    expect(b.server.requests.filter((r) => r.startsWith("download"))).toHaveLength(1);
+    expect(calls).toHaveLength(paid);
+    expect(await b.reportStore.recent(NOW)).toEqual([]);
+    expect(Object.keys(await under.held()).some((k) => k.includes(":tg:pending:"))).toBe(true);
   });
 
   it("a store failure after pairing replies that it couldn't read it; redeliveries, even after the hold lapses, repeat nothing (S6P-2)", async () => {
