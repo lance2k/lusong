@@ -456,8 +456,20 @@ describe("photo reports that are refused before any paid read", () => {
   it("a location outside the trip area is refused", async () => {
     stubMeta();
     const b = bot();
-    await b.send(location({ at: { lat: 14.6, lon: 120.98 } }));
+    await b.send(location({ at: { lat: 5.84, lon: 118.11 } }));
     expect(b.replies()).toEqual([TELEGRAM_REPLIES.outside]);
+  });
+
+  it("a location in the sea off Cebu, inside the Philippines box but in no province, is refused before any Meta call", async () => {
+    const calls = stubMeta();
+    const b = bot();
+    await b.send(photo());
+    // In the Bohol Strait, between Cebu and Bohol (lib/advisory-geo.test.ts).
+    await b.send(location({ at: { lat: 10.05, lon: 123.9 } }));
+    expect(b.replies()).toEqual([TELEGRAM_REPLIES.photoWaiting, TELEGRAM_REPLIES.outside]);
+    expect(calls).toEqual([]);
+    expect(b.server.requests).toEqual([]);
+    expect(await b.reportStore.recent(NOW)).toEqual([]);
   });
 
   it("a photo over 3 MB is refused before any Meta call, stated or as it arrives", async () => {

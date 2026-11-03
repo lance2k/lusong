@@ -5,7 +5,8 @@ import { decodeVoiceNote } from "./ogg-opus";
 import { MAX_BYTES as MAX_PHOTO_BYTES, MAX_SIDE, makePhotoReporter, photoSchedule, TIMING, type PhotoReportDeps, type PhotoReportOutcome, type Timing } from "./report-handler";
 import { telegramStoreFromEnv, type Half, type LocationHalf, type MediaHalf, type TelegramStore } from "./telegram-store";
 import { telegramFilesFromEnv, type TelegramFiles } from "./telegram-files";
-import { inTripBound, TRIP_AREA_NAME } from "./trip-bound";
+import { inServerTripBound } from "./province-index";
+import { TRIP_AREA_NAME } from "./trip-bound";
 import { BISAYA_VOICE_ENABLED, VOICE_LANGUAGES, type VoiceLanguage } from "./voice-language";
 import { makeVoiceReporter, VOICE_TIMING, voiceSchedule, type VoiceReportDeps, type VoiceReportOutcome, type VoiceTiming } from "./voice-report-handler";
 import { encodeWav, MAX_VOICE_MS, parseVoiceWav } from "./wav";
@@ -269,7 +270,8 @@ export function makeTelegramReports(deps: TelegramReportDeps): TelegramReports {
         half = { side: "media", kind: "voice", fileId: voice.file_id, date, durationS: voice.duration, fileSize, language };
       } else {
         const { latitude: lat, longitude: lon } = message.location ?? {};
-        if (!isNumber(lat) || !isNumber(lon) || !inTripBound({ lat, lon })) return finish(TELEGRAM_REPLIES.outside);
+        // The same check as a web report: inside the box and inside a Philippine province.
+        if (!isNumber(lat) || !isNumber(lon) || !inServerTripBound({ lat, lon })) return finish(TELEGRAM_REPLIES.outside);
         half = { side: "location", lat, lon, date };
       }
 
