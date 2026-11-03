@@ -4,14 +4,24 @@ import type { PageMuse } from "./commute-muse";
 import type { AdvisoryArea } from "./map-layers";
 import type { PageReport } from "./report-evidence";
 
+export interface PageProduct {
+  counts: boolean;
+  event: string;
+  area: string;
+  sent: string;
+  expires: string;
+  link: string;
+  rainForecast: string | null;
+  rivers: string | null;
+}
+
+/** Every PAGASA product covering the way the answer recommends, and those Lusong couldn't place on the map. */
 export interface PageAdvisory {
   state: "active" | "none" | "unreadable";
-  headline?: string | null;
-  rainForecast?: string | null;
-  rivers?: string | null;
-  sent?: string;
-  expires?: string;
-  link?: string;
+  about: "your way" | "the other way";
+  products: PageProduct[];
+  warnings: PageProduct[];
+  incomplete: boolean;
   note: string | null;
 }
 
@@ -32,7 +42,7 @@ export interface CommuteResult {
     line: Point[];
   } | null;
   advisory: PageAdvisory;
-  /** Not sent yet: the server adds it when the province polygons land. */
+  /** The PAGASA areas covering any checked way; optional so an older reply still renders. */
   advisoryAreas?: AdvisoryArea[];
   muse: PageMuse;
   reports: PageReport[];

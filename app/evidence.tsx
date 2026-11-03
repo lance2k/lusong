@@ -1,29 +1,51 @@
-import type { CommuteResult, PageAdvisory } from "./commute-result";
+import type { CommuteResult, PageAdvisory, PageProduct } from "./commute-result";
 import { MusePick, WebFindings } from "./commute-muse";
-import { ROUTE_CREDIT } from "./credits";
+import { ADVISORY_INCOMPLETE_LINE, ROUTE_CREDIT } from "./credits";
 import { ReportEvidence } from "./report-evidence";
 import { detourWords } from "../lib/commute-words";
 
-function Advisory({ advisory }: { advisory: PageAdvisory }) {
+function Product({ product }: { product: PageProduct }) {
+  return (
+    <li className="space-y-0.5">
+      <p className="font-medium">
+        {product.event} for {product.area}
+        {product.counts ? "" : " (shown only)"}
+      </p>
+      {product.rainForecast && <p>Rain forecast: {product.rainForecast}.</p>}
+      {product.rivers && <p>Rivers named: {product.rivers}.</p>}
+      <p className="text-ink-2">
+        Sent {product.sent}. Expires {product.expires}.
+      </p>
+      <a className="break-all text-brand underline" href={product.link}>
+        PAGASA&apos;s record
+      </a>
+    </li>
+  );
+}
+
+/** Every PAGASA product on the recommended way, an incomplete read flagged first, then those not placed on the map. */
+export function Advisory({ advisory }: { advisory: PageAdvisory }) {
   return (
     <section className="space-y-1 rounded-card border border-line bg-surface px-4 py-3 text-[15px]">
-      <h3 className="text-label uppercase tracking-wide text-ink-2">PAGASA flood advisory for this trip</h3>
-      {advisory.state === "active" ? (
+      <h3 className="text-label uppercase tracking-wide text-ink-2">PAGASA advisories on {advisory.about}</h3>
+      {advisory.incomplete && <p className="font-medium text-warn-ink">{ADVISORY_INCOMPLETE_LINE}</p>}
+      {advisory.products.length > 0 && (
+        <ul className="space-y-2">
+          {advisory.products.map((p) => (
+            <Product key={p.link} product={p} />
+          ))}
+        </ul>
+      )}
+      {advisory.note && !advisory.incomplete && <p>{advisory.note}</p>}
+      {advisory.warnings.length > 0 && (
         <>
-          <p className="font-medium">{advisory.headline ?? "General Flood Advisory"}: active</p>
-          {advisory.rainForecast && <p>Rain forecast: {advisory.rainForecast}.</p>}
-          {advisory.rivers && <p>Rivers named in the advisory: {advisory.rivers}.</p>}
-          <p className="text-ink-2">
-            Sent {advisory.sent}. Expires {advisory.expires}.
-          </p>
-          {advisory.link && (
-            <a className="break-all text-brand underline" href={advisory.link}>
-              PAGASA&apos;s record
-            </a>
-          )}
+          <p className="text-ink-2">PAGASA advisories Lusong couldn&apos;t place on the map:</p>
+          <ul className="space-y-2">
+            {advisory.warnings.map((p) => (
+              <Product key={`w-${p.link}`} product={p} />
+            ))}
+          </ul>
         </>
-      ) : (
-        <p className={advisory.state === "unreadable" ? "font-medium text-warn-ink" : ""}>{advisory.note}</p>
       )}
     </section>
   );

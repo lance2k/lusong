@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import type { AdvisoryArea as ServerAdvisoryArea } from "../lib/advisory-areas";
 import {
   advisoryAreasOf,
   ageMinutes,
@@ -58,12 +59,38 @@ describe("PAGASA areas on the map", () => {
   it.each([
     ["absent", reply()],
     ["empty", reply({ advisoryAreas: [] })],
-    ["only rings too short to be shapes", reply({ advisoryAreas: [{ ...AREA, rings: [[[10.3, 123.85]]] }] })],
   ])("with the field %s, the layer is off and the legend says so", (_why, r) => {
     expect(advisoryAreasOf(r)).toEqual([]);
     const row = legendRows(r, null).find((x) => x.id === "areas")!;
     expect(row.available).toBe(false);
     expect(row.lines).toEqual(["No area in this reply"]);
+  });
+
+  it("an area with no ring (no polygon, or PAGASA's whole area of responsibility) is listed in the legend but not drawn", () => {
+    const wide: AdvisoryArea = { ...AREA, rings: [], headline: "Weather advisory for the Philippine Area of Responsibility" };
+    const r = reply({ advisoryAreas: [wide] });
+    expect(areaShapes(advisoryAreasOf(r))).toEqual([]);
+    const row = legendRows(r, null).find((x) => x.id === "areas")!;
+    expect(row.available).toBe(false);
+    expect(row.lines).toContain("Weather advisory for the Philippine Area of Responsibility");
+    expect(row.lines).not.toContain("No area in this reply");
+  });
+
+  it("with one drawn area and one listed only, the map draws one and the legend names both", () => {
+    const r = reply({ advisoryAreas: [AREA, { ...AREA, rings: [], headline: "Listed only" }] });
+    expect(areaShapes(advisoryAreasOf(r))).toHaveLength(1);
+    const row = legendRows(r, null).find((x) => x.id === "areas")!;
+    expect(row.available).toBe(true);
+    expect(row.lines).toEqual(expect.arrayContaining(["General Flood Advisory for Cebu", "Listed only"]));
+  });
+
+  it("PAGASA's own +08:00 times are shown in PHT like the rest of the page", () => {
+    const [shape] = areaShapes([{ ...AREA, sent: "2026-11-03T21:12:00+08:00", expires: "2026-11-04T03:00:00+08:00" }]);
+    expect(shape.tooltip[1]).toBe("Sent 3 Nov, 9:12 p.m. PHT · expires 4 Nov, 3:00 a.m. PHT");
+  });
+
+  it("the page's area type is the server's own", () => {
+    expectTypeOf<AdvisoryArea>().toEqualTypeOf<ServerAdvisoryArea>();
   });
 
   it("before any answer the legend has no area either", () => {
@@ -78,9 +105,14 @@ describe("PAGASA areas on the map", () => {
   });
 
   it("an unreadable PAGASA reading carries its own note into the legend row", () => {
-    const note = "Lusong couldn't read PAGASA's alert feed, so it counts an advisory as active.";
+    const note = "Lusong couldn't read all of PAGASA's advisories, so it counts one as active.";
     const row = legendRows(reply({ advisory: { state: "unreadable", note } }), null).find((x) => x.id === "areas")!;
     expect(row.lines).toContain(note);
+  });
+
+  it("an incomplete read says so in the legend row, in the evidence card's words", () => {
+    const row = legendRows(reply({ advisory: { state: "unreadable", note: "x", incomplete: true } }), null).find((x) => x.id === "areas")!;
+    expect(row.lines).toContain("Incomplete: Lusong couldn't read all of PAGASA's feed, so it counts an advisory as active.");
   });
 });
 

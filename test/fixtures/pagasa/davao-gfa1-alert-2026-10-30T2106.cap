@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<alert xmlns="urn:oasis:names:tc:emergency:cap:1.2"><identifier>7b675765-3a4d-42b0-944c-2605f7ed77d8</identifier><sender>PAGASA-DOST</sender><sent>2026-10-30T21:06:28+08:00</sent><status>Actual</status><msgType>Alert</msgType><scope>Public</scope><info><category>Met</category><event>General Flood Advisory (Moderate)</event><responseType>Monitor</responseType><urgency>Future</urgency><severity>Moderate</severity><certainty>Possible</certainty><expires>2026-10-31T09:06:28+08:00</expires><senderName>PAGASA-DOST</senderName><headline>General Flood Advisory</headline><description>Under present weather conditions, At 3:00 PM today, the Low Pressure Area (LPA) was estimated based on all available data at 805 km East of Eastern Visayas (12.0&#xB0;N, 132.8&#xB0;E). Shear Line affecting the eastern sections of Northern and Central Luzon. Northeast Monsoon affecting the rest of Northern Luzon.  
+The 12-hour rainfall forecast is Light to moderate rains and thunderstorms.  
+WATERCOURSES LIKELY TO BE AFFECTED :  
+
+ + **Davao De Oro** - Rivers and its tributaries particularly Matiao, Hijo, Agusan, and Manat.  
+ + **Davao Oriental** - Rivers and its tributaries particularly Cateel, Dapnan, Baganga Mahan-ub, Manorigao, Caraga, Casaunan, Quinonoan, Bagwan, Mayo, Bitanayan, Sumlog, Tangmoan, Dacongbonwa, Kabasagan, Manay, Maya and Sumlao/Cuabo  
+ + **Davao Del Norte** - Rivers and its tributaries particularly Tagum-Libuganon, Tuganay, and Saug.  
+ + **Davao Occidental** - Rivers and its tributaries particularly Panglan, Malita, Batanan (Lais, Lawan, Latuan, Calian, Lamita, Lawayon, Culaman, Caburan Big, Meybio, Carahayan, Tubayon, Kayapung, Malala, Capisolo, Tanoman Bi, Tanoman Smal, Kalbay, Butuan, Nuing, Butula, Bukid, Malagupo, Balagona, Batulaki  
+ + **Davao Del Sur** - Rivers and its tributaries particularly Davao, Lasang, Bunawan, Matina, Talomo, Lipadas, Tagulaya Sibulan, Digos, and Padada Mainit.  
+</description><instruction>People living near the mountain slopes and in the low lying areas of the above mentioned river systems and the **Local Disaster Risk Reduction and Management Councils** concerned advised to take necessary precautionary measures.</instruction><web>http://www.pagasa.dost.gov.ph/index.php/26-hydromet/1582-flood-forecast-terms-and-symbols</web><contact>PAGASA-DOST</contact><parameter><valueName>layer:Google:Region:0.1</valueName><value>Region 11 (Davao Region)</value></parameter><area><areaDesc>Davao De Oro</areaDesc><polygon>7.9938949979805,126.16813907289 7.6227410633315,126.30637566514 7.2655920324366,126.32280835732 7.0837694236365,125.93535449741 7.365394659869,125.83294214455 7.5426640940899,125.92161276194 7.7867945867183,125.70837753301 7.9982354370218,125.6699854791 7.9938949979805,126.16813907289</polygon><geocode><valueName>SAME</valueName><value>118200000</value></geocode></area><area><areaDesc>Davao Oriental</areaDesc><polygon>7.9979708042337,126.37017105096 7.9426373067654,126.3754579218 7.8393753014896,126.37712491833 7.7009345387989,126.55057457884 7.2881090697952,126.60693057049 7.0004438761582,126.43988582387 7.0044068035035,126.33900420214 6.7539778269544,126.26365249765 6.4336739779034,126.22900405972 6.4945602010125,126.0984480976 6.8522145142061,126.08165331995 7.0837694236365,125.93535449741 7.2655920324366,126.32280835732 7.6227410633315,126.30637566514 7.9938949979805,126.16813907289 7.9979708042337,126.37017105096</polygon><geocode><valueName>SAME</valueName><value>112500000</value></geocode></area><area><areaDesc>Davao Del Norte</areaDesc><polygon>7.9982354370218,125.6699854791 7.7867945867183,125.70837753301 7.5426640940899,125.92161276194 7.365394659869,125.83294214455 7.2521870706089,125.68063871691 7.225146893946,125.55225580634 7.5933521215324,125.55383002194 7.5933593839057,125.29035220527 7.6636680591945,125.43177921394 7.9980713496152,125.39861450968 7.9982354370218,125.6699854791</polygon><geocode><valueName>SAME</valueName><value>112300000</value></geocode></area><area><areaDesc>Davao Del Sur</areaDesc><polygon>7.2521870706089,125.68063871691 7.1183440290034,125.66344915525 7.0427940312661,125.54200703051 6.8022678006349,125.39126194486 6.6195098986631,125.38237302489 6.4912441472571,125.58911424024 6.1716230406779,125.71324093803 5.9755773450075,125.6908669923 5.5741684512393,125.41710206343 5.5767396139916,125.31438368483 5.6398856140771,125.3767909947 6.0698317474063,125.53194643683 6.2956864938046,125.47405061472 6.3167776431142,125.2710065279 6.4376847285497,125.13644027564 6.5364719569536,125.16895976884 6.7691066375417,125.08955085108 6.9646075449489,125.26750095146 7.4468327279564,125.28793293266 7.5937415464445,125.26378197814 7.5933593839057,125.29035220527 7.5933521215324,125.55383002194 7.225146893946,125.55225580634 7.2521870706089,125.68063871691</polygon><geocode><valueName>SAME</valueName><value>112400000</value></geocode></area></info><Signature xmlns="http://www.w3.org/2000/09/xmldsig#"><SignedInfo><CanonicalizationMethod Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"/><SignatureMethod Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1"/><Reference URI=""><Transforms><Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/></Transforms><DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"/><DigestValue>Nb0S3nqtCkhrh4dYmLoVY6oU+rY=</DigestValue></Reference></SignedInfo><SignatureValue>AI3rx3twiV1nr/BVaqfC5vQoGz29LxBmgwiC3XP5tyxlgF//x8wTE0S4ZxlzstA0
+IbjGINwZ+OINYboP6ZDVWoE6I7p2kYd20NtekGRH7/pCoJlu7RbVof6veZI7EeNn
+FHwRuULej7hzMa+hXum/gYm/MEmJri7xByoICOrNQbPDMNperu8BhchxVDJiFE0e
+AtzvL5p1kV5O8IiK5oexMGBtAKFRieEz1iJvFiC13VoVV36f1C1DgDH89i0GEgk1
+f18rj4WmsZq7FLomLaJH8GfJizJIZT5Eaaq7GqgwmgXamICtaAmRXytjjp0TCfPU
+qpN4wpAKCbVcRGX5EfO/DTecCbGdAHtBD9tzkctd2+qxl6mf9+y5i3IM2dyEEg/0
+ZJOavtkrFu6gm63HBFRIx8nb7alPbPMEOWqpfn2h2RreycznvzIVAE41BRKDhyw4
+TkYPu5KRhnFnQMsUxVOZcpUTmtC/lLM6qiHZTDukWhi+i2g3FBm71hHV6Aa4cxiL
+yyfX/i54wElVT3DcoviAZB2FCpxYN3KOePLBvMPqOOP4tSSdMRZWxA/pSCT4KiaS
+vZ089VD9PAwKGjxCVheeChQ9McHjoZd+f2J5TkVhatyK6Q0mJ9VSrYIBB0J2nCZc
+A5uMci5lrpO5e1sVhHBTUNYWsHNJ+UtPWZOsugLjLi4=</SignatureValue><KeyInfo><KeyValue>
+<RSAKeyValue>
+<Modulus>
+1pm7X28TTIESx7uWklHbVIlO0Y+fUBZ7LynhaRQ9w1rMsMhF0dNEvUdYBKVF1xPz
+SGD0IrbU6Uemw8Xb/sOy263ZOkSxqWIh3UEluOW7s6J3Hgv8UMDZkWDgj3+m2qWT
+UTgbNO3drHGvlRBg6liD15iNusSdSMw/kqmHxe/9tnStpsHo/u57rsH3/ROTvuz2
+yHD2t7I7zo0Kv7mfAAHodU4QoL8/7c3u29szxRu13M4SRkiLKwbgrwlsMCvXhkys
+oEKlX8/SnXDL8iSPExAiP7xVpfbmh8TNiGvtbjH7Ro2EYjUsEcv9qC7G5jLu7Klt
+8TkTobHqES26/F5/u42Ra3rIDunTxczbIHF1qoumAzdsJmFCBc9D1IKTTWKR3D2J
+eAZfpuvMeOEcpRxBayYf2jOBx8iD8gag5cIZWl2/62IfUxTk92A00M5QrzTocNkg
+0U5K1gN5WmhObUN/3fa/Ob5uriELGzRdzXJ+3QE8FpPmSPJZFA//UWmpJqsboO7p
+AhbB8efPIV42nxjwQEbJdkxUOlfAyPMRGcp4RhmaAnX7KmB33j4klYeNktH+OeV8
+S9q/nMJoA/d76K1hCbo9PJTa/UxwZJYh0LEs1YnHP/5wgydZJcyNjmcu7P5ur90L
+qyr2FB0fZYAmWi6SEaA0F7yi2Y0uqV4FP7dfcbfOf+E=
+</Modulus>
+<Exponent>
+AQAB
+</Exponent>
+</RSAKeyValue>
+</KeyValue></KeyInfo></Signature></alert>

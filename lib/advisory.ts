@@ -3,8 +3,8 @@ import { childOf, childrenOf, parseXml, textOf, type XmlElement } from "./xml";
 export const FEED_URL = "https://publicalert.pagasa.dost.gov.ph/feeds/";
 export const USER_AGENT = "Lusong/0.1 (hackathon entry; github.com/lance2k/lusong)";
 
-const ATOM = "http://www.w3.org/2005/Atom";
-const CAP = "urn:oasis:names:tc:emergency:cap:1.2";
+export const ATOM = "http://www.w3.org/2005/Atom";
+export const CAP = "urn:oasis:names:tc:emergency:cap:1.2";
 
 export interface AdvisoryLimits {
   /** At most this many CAP records are fetched per reading; needing more than that to settle every region is 'unreadable'. */
@@ -34,15 +34,20 @@ export type AdvisoryReading =
   | { state: "none" }
   | { state: "unreadable"; why: string };
 
-class Unreadable extends Error {}
+export class Unreadable extends Error {}
 
-function time(text: string | null, what: string): number {
+export function time(text: string | null, what: string): number {
   const t = text === null ? NaN : Date.parse(text);
   if (!Number.isFinite(t)) throw new Unreadable(`${what} is not a time`);
   return t;
 }
 
-async function fetchText(url: string, deps: { fetch: typeof fetch }, limits: AdvisoryLimits, deadline: AbortSignal): Promise<string> {
+export async function fetchText(
+  url: string,
+  deps: { fetch: typeof fetch },
+  limits: Pick<AdvisoryLimits, "maxBytes" | "timeoutMs">,
+  deadline: AbortSignal,
+): Promise<string> {
   const res = await deps.fetch(url, {
     headers: { "User-Agent": USER_AGENT, Accept: "application/atom+xml, application/cap+xml, text/xml" },
     signal: AbortSignal.any([AbortSignal.timeout(limits.timeoutMs), deadline]),
@@ -112,7 +117,7 @@ const CEBU_CITY = { lat: 10.3157, lon: 123.8854 };
 export type AreaCoverage = "cebu" | "outside" | "unknown";
 
 /** CAP polygons are "lat,lon" pairs, at least four, first equal to last; anything else can't be read. */
-function readPolygon(text: string): { lat: number; lon: number }[] | null {
+export function readPolygon(text: string): { lat: number; lon: number }[] | null {
   const points = text.trim().split(/\s+/).map((pair) => {
     const parts = pair.split(",");
     return parts.length === 2 ? { lat: Number(parts[0]), lon: Number(parts[1]) } : null;
@@ -179,9 +184,9 @@ function riversFor(description: string): string | null {
  * docs.oasis-open.org/emergency/cap/v1.2/CAP-v1.2-os.html (checked 2026-10-30, 19 of 19). Anything else is a record
  * Lusong can't read.
  */
-const STATUSES = new Set(["Actual", "Exercise", "System", "Test", "Draft"]);
-const MSG_TYPES = new Set(["Alert", "Update", "Cancel", "Ack", "Error"]);
-const RESPONSE_TYPES = new Set(["Shelter", "Evacuate", "Prepare", "Execute", "Avoid", "Monitor", "Assess", "AllClear", "None"]);
+export const STATUSES = new Set(["Actual", "Exercise", "System", "Test", "Draft"]);
+export const MSG_TYPES = new Set(["Alert", "Update", "Cancel", "Ack", "Error"]);
+export const RESPONSE_TYPES = new Set(["Shelter", "Evacuate", "Prepare", "Execute", "Avoid", "Monitor", "Assess", "AllClear", "None"]);
 
 function required(el: XmlElement, name: string, link: string): string {
   const value = textOf(el, CAP, name);

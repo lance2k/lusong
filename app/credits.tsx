@@ -19,3 +19,5 @@ export const TILES_LINE = "Map tiles come from OpenStreetMap's servers, which se
 export const ROUTE_CREDIT = "Route from Valhalla (FOSSGIS) on OpenStreetMap data, © OpenStreetMap contributors.";
 export const CHECKING_LINE =
   "Reading PAGASA's flood advisory, getting the motorbike route, gathering reports, checking the web for road closures and, if your way is blocked, looking for another…";
+export const ADVISORY_INCOMPLETE_LINE =
+  "Incomplete: Lusong couldn't read all of PAGASA's feed, so it counts an advisory as active.";

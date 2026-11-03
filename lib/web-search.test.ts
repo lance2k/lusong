@@ -27,7 +27,7 @@ import {
 import { fakeMeta, META_RESPONSES_URL, searchReply } from "../test/muse-derived";
 import { setProvinceIndexForTests, type Province } from "./province-index";
 
-const CEBU = { code: "702200000", name: "Cebu" };
+const CEBU = { code: "0702200000", name: "Cebu" };
 const WEB_SEARCH_KEY = webSearchKey(CEBU);
 const WEB_SEARCH_LEASE_KEY = webSearchLeaseKey(CEBU);
 
@@ -66,7 +66,7 @@ describe("the web search for road closures in one province today", () => {
       state: "searched",
       searchedAt: NOW.toISOString(),
       findings: [
-        { id: "web-702200000-0", place: "Juan Luna Ave, Mabolo", at: { lat: 10.3175, lon: 123.9146 }, url: "https://example.ph/mabolo-flood", sourceDate: "2026-10-30", kind: "flooded" },
+        { id: "web-0702200000-0", place: "Juan Luna Ave, Mabolo", at: { lat: 10.3175, lon: 123.9146 }, url: "https://example.ph/mabolo-flood", sourceDate: "2026-10-30", kind: "flooded" },
       ],
     });
   });
@@ -106,7 +106,7 @@ describe("the web search for road closures in one province today", () => {
 
     const web = await searchOnce(new MemoryKvStore());
 
-    expect(web.findings.map((f) => f.id)).toEqual(["web-702200000-3"]);
+    expect(web.findings.map((f) => f.id)).toEqual(["web-0702200000-3"]);
   });
 
   describe("a finding's link counts only if the search tool itself opened or cited that page (review 🔴T7-8)", () => {
@@ -119,7 +119,7 @@ describe("the web search for road closures in one province today", () => {
 
       const web = await searchOnce(new MemoryKvStore());
 
-      expect(web.findings.map((f) => [f.id, f.url])).toEqual([["web-702200000-0", opened]]);
+      expect(web.findings.map((f) => [f.id, f.url])).toEqual([["web-0702200000-0", opened]]);
     });
 
     it("a link with a sentence in its host, path, query or fragment that the tool never opened is dropped", async () => {
@@ -160,7 +160,7 @@ describe("the web search for road closures in one province today", () => {
 
     const web = await searchOnce(new MemoryKvStore());
 
-    expect(web.findings.map((f) => [f.id, f.kind])).toEqual([["web-702200000-0", "closed"], ["web-702200000-1", "flooded"], ["web-702200000-2", "not_passable"], ["web-702200000-3", "other_blocking"]]);
+    expect(web.findings.map((f) => [f.id, f.kind])).toEqual([["web-0702200000-0", "closed"], ["web-0702200000-1", "flooded"], ["web-0702200000-2", "not_passable"], ["web-0702200000-3", "other_blocking"]]);
   });
 
   it("a place must read as a place name: a sentence, a long text or odd characters drop the finding (review 🔴2)", async () => {
@@ -266,7 +266,7 @@ describe("one search is shared by every check for a while", () => {
 
   it("a stored finding that fails today's checks, such as one kept with a free summary and no kind, is searched again", async () => {
     const store = new MemoryKvStore();
-    const finding = { id: "web-702200000-0", place: "Juan Luna Ave, Mabolo", at: null, url: "https://example.ph/m", sourceDate: null, summary: "Passable to all types of vehicles." };
+    const finding = { id: "web-0702200000-0", place: "Juan Luna Ave, Mabolo", at: null, url: "https://example.ph/m", sourceDate: null, summary: "Passable to all types of vehicles." };
     const evidence = { state: "searched", searchedAt: NOW.toISOString(), findings: [finding] };
     const record = (findings: object[]) => JSON.stringify({ expiresAt: NOW.getTime() + 60_000, startedAt: NOW.getTime(), evidence: { ...evidence, findings }, pages: [finding.url] });
     await store.set(WEB_SEARCH_KEY, record([{ ...finding, summary: undefined, kind: "closed" }]), 60_000);
@@ -278,7 +278,7 @@ describe("one search is shared by every check for a while", () => {
 
   it("a stored finding whose link isn't among the pages its search opened, or a record without them, is searched again (review 🔴T7-8)", async () => {
     const store = new MemoryKvStore();
-    const finding = { id: "web-702200000-0", place: "Juan Luna Ave, Mabolo", at: null, url: "https://example.ph/m", sourceDate: null, kind: "closed" };
+    const finding = { id: "web-0702200000-0", place: "Juan Luna Ave, Mabolo", at: null, url: "https://example.ph/m", sourceDate: null, kind: "closed" };
     const record = (extra: object) =>
       JSON.stringify({ expiresAt: NOW.getTime() + 60_000, startedAt: NOW.getTime(), evidence: { state: "searched", searchedAt: NOW.toISOString(), findings: [finding] }, ...extra });
 
@@ -321,7 +321,7 @@ describe("one search is shared by every check for a while", () => {
     const down = () => Promise.reject(new Error("down"));
     const readOnly: KvStore = { get: async () => null, set: down, setIfAbsent: async () => true, deleteIfEquals: async () => {}, compareAndSet: down };
 
-    expect(await searchOnce(readOnly)).toMatchObject({ state: "searched", findings: [{ id: "web-702200000-0" }] });
+    expect(await searchOnce(readOnly)).toMatchObject({ state: "searched", findings: [{ id: "web-0702200000-0" }] });
   });
 });
 
@@ -652,7 +652,7 @@ describe("which provinces a trip's searches cover", () => {
     expect(searchAreasFor({ lat: 10.3, lon: 123.95 }, { lat: 10.3, lon: 123.96 }).map((a) => a.name)).toEqual(["B"]);
   });
 
-  it("with the temporary box index, a Cebu City trip searches Cebu and a Cubao → Makati trip Metro Manila", () => {
+  it("with the province polygons, a Cebu City trip searches Cebu and a Cubao → Makati trip Metro Manila, its NCR districts one area", () => {
     expect(searchAreasFor({ lat: 10.346, lon: 123.911 }, { lat: 10.3307, lon: 123.9058 }).map((a) => a.name)).toEqual(["Cebu"]);
     expect(searchAreasFor({ lat: 14.62291, lon: 121.05326 }, { lat: 14.57049, lon: 121.02722 }).map((a) => a.name)).toEqual(["Metro Manila"]);
   });
@@ -663,7 +663,7 @@ describe("which provinces a trip's searches cover", () => {
     const record = JSON.stringify({ expiresAt: NOW.getTime() + 60_000, startedAt: NOW.getTime(), evidence: { state: "searched", searchedAt: NOW.toISOString(), findings: [finding] }, pages: [finding.url] });
     await store.set(WEB_SEARCH_KEY, record, 60_000);
     expect(await planWebSearch(CEBU, store, NOW, roomy())).toMatchObject({ kind: "search" });
-    await store.set(WEB_SEARCH_KEY, record.replace("web-1300000000-0", "web-702200000-0"), 60_000);
+    await store.set(WEB_SEARCH_KEY, record.replace("web-1300000000-0", "web-0702200000-0"), 60_000);
     expect(await planWebSearch(CEBU, store, NOW, roomy())).toMatchObject({ kind: "cached" });
   });
 

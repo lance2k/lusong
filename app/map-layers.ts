@@ -1,8 +1,12 @@
+import type { AdvisoryArea } from "../lib/advisory-areas";
 import { phtTime } from "../lib/commute-words";
+import { ADVISORY_INCOMPLETE_LINE } from "./credits";
 import type { MapPin } from "./map";
 
-/** One PAGASA advisory area as the commute reply will carry it; rings are [lat, lon] and read by the even-odd rule. */
-export type AdvisoryArea = { kind: string; rings: [number, number][][]; sent: string | null; expires: string | null; headline: string };
+/** The server's own type (a type-only import, so none of its geometry code reaches the page); rings are [lat, lon]. */
+export type { AdvisoryArea };
+
+const drawable = (ring: unknown): ring is [number, number][] => Array.isArray(ring) && ring.length >= 3;
 
 /** The map's own controls. Its credits sit top right, which no sheet height covers. */
 export const MAP_OPTIONS = { attributionControl: false, zoomControl: false, scrollWheelZoom: true } as const;
@@ -12,10 +16,10 @@ export const ZOOM_CONTROL = { position: "bottomright" } as const;
 export const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 export const TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 
-/** The reply's advisory areas; until the server sends them the field is absent, and the layer stays off. */
+/** The reply's advisory areas, drawn or not: an area with no ring (no polygon, or PAGASA's whole area of responsibility) is listed only. */
 export function advisoryAreasOf(reply: { advisoryAreas?: AdvisoryArea[] | null } | null): AdvisoryArea[] {
   const areas = reply?.advisoryAreas ?? [];
-  return Array.isArray(areas) ? areas.filter((a) => Array.isArray(a?.rings) && a.rings.some((r) => Array.isArray(r) && r.length >= 3)) : [];
+  return Array.isArray(areas) ? areas.filter((a) => typeof a?.headline === "string" && Array.isArray(a.rings)) : [];
 }
 
 /** An ISO time in PHT words; anything else, such as text the server already wrote, as it is. */
@@ -34,9 +38,10 @@ export interface AreaShape {
   tooltip: string[];
 }
 
+/** The areas the map draws: only those with a ring to shade. */
 export function areaShapes(areas: AdvisoryArea[]): AreaShape[] {
-  return areas.map((a) => ({
-    rings: a.rings.filter((r) => r.length >= 3),
+  return areas.filter((a) => a.rings.some(drawable)).map((a) => ({
+    rings: a.rings.filter(drawable),
     className: `lusong-area lusong-area-${a.kind.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
     tooltip: [a.headline, sentExpires(a)].filter((line): line is string => Boolean(line)),
   }));
@@ -126,7 +131,7 @@ export interface LegendReply {
   detour: unknown | null;
   reports: { age: string; sample: boolean }[];
   advisoryAreas?: AdvisoryArea[] | null;
-  advisory: { state: string; note: string | null };
+  advisory: { state: string; note: string | null; incomplete?: boolean };
 }
 
 export function legendRows(reply: LegendReply | null, checkedAt: string | null): LegendRow[] {
@@ -140,9 +145,13 @@ export function legendRows(reply: LegendReply | null, checkedAt: string | null):
       : [ages.length > 1 ? `Newest ${ages[0].age} · oldest ${ages[ages.length - 1].age}` : ages.length === 1 ? ages[0].age : null, "Older than 3 hours: shown, not counted."].filter(
           (l): l is string => Boolean(l),
         );
-  const first = areas[0];
-  const areaLines = areas.length === 0 ? ["No area in this reply"] : [first.headline, sentExpires(first), "PAGASA, CC BY 4.0"].filter((l): l is string => Boolean(l));
-  if (reply?.advisory.state === "unreadable" && reply.advisory.note) areaLines.push(reply.advisory.note);
+  const drawn = areaShapes(areas).length;
+  const areaLines =
+    areas.length === 0
+      ? ["No area in this reply"]
+      : [...areas.flatMap((a) => [a.headline, sentExpires(a)]), "PAGASA, CC BY 4.0"].filter((l): l is string => Boolean(l));
+  if (reply?.advisory.incomplete) areaLines.push(ADVISORY_INCOMPLETE_LINE);
+  else if (reply?.advisory.state === "unreadable" && reply.advisory.note) areaLines.push(reply.advisory.note);
   return [
     {
       id: "routes",
@@ -151,7 +160,7 @@ export function legendRows(reply: LegendReply | null, checkedAt: string | null):
       lines: checkedAt ? [`Checked ${timeWords(checkedAt)}`] : [],
     },
     { id: "reports", label: "Reports", available: Boolean(reply && reply.reports.length > 0), lines: reportLines },
-    { id: "areas", label: "PAGASA areas", available: areas.length > 0, lines: areaLines },
+    { id: "areas", label: "PAGASA areas", available: drawn > 0, lines: areaLines },
     { id: "closures", label: "Road closures", available: false, lines: ["Coming soon"] },
     { id: "rain", label: "Rain now", available: false, lines: ["Coming soon"] },
   ];

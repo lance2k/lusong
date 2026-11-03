@@ -1,0 +1,710 @@
+{
+  "demo": true,
+  "trip": {
+    "id": "mabolo-cbp",
+    "label": "Mabolo → Cebu Business Park"
+  },
+  "rainingHere": false,
+  "answer": {
+    "kind": "no_one_knows",
+    "title": "No one knows",
+    "reason": "Your usual way is blocked at M.J. Cuenco Avenue at H. Joaquino Street, Mabolo and nobody has reported the other way.",
+    "thin": null
+  },
+  "route": {
+    "lengthKm": 1.372,
+    "timeMin": 5,
+    "streets": [
+      "M.J. Cuenco Avenue",
+      "Mactan Road",
+      "Leyte Loop",
+      "Samar Loop"
+    ],
+    "line": [
+      {
+        "lat": 10.3143,
+        "lon": 123.914731
+      },
+      {
+        "lat": 10.314264,
+        "lon": 123.914659
+      },
+      {
+        "lat": 10.314223,
+        "lon": 123.914581
+      },
+      {
+        "lat": 10.314011,
+        "lon": 123.914148
+      },
+      {
+        "lat": 10.313983,
+        "lon": 123.914092
+      },
+      {
+        "lat": 10.313944,
+        "lon": 123.914014
+      },
+      {
+        "lat": 10.313901,
+        "lon": 123.913923
+      },
+      {
+        "lat": 10.313801,
+        "lon": 123.913728
+      },
+      {
+        "lat": 10.313762,
+        "lon": 123.913649
+      },
+      {
+        "lat": 10.313386,
+        "lon": 123.912898
+      },
+      {
+        "lat": 10.313338,
+        "lon": 123.912805
+      },
+      {
+        "lat": 10.313224,
+        "lon": 123.912581
+      },
+      {
+        "lat": 10.313004,
+        "lon": 123.91213
+      },
+      {
+        "lat": 10.312709,
+        "lon": 123.911471
+      },
+      {
+        "lat": 10.312699,
+        "lon": 123.911448
+      },
+      {
+        "lat": 10.312682,
+        "lon": 123.911411
+      },
+      {
+        "lat": 10.312598,
+        "lon": 123.911243
+      },
+      {
+        "lat": 10.312584,
+        "lon": 123.911212
+      },
+      {
+        "lat": 10.312551,
+        "lon": 123.911141
+      },
+      {
+        "lat": 10.312419,
+        "lon": 123.910884
+      },
+      {
+        "lat": 10.312348,
+        "lon": 123.910733
+      },
+      {
+        "lat": 10.312282,
+        "lon": 123.910606
+      },
+      {
+        "lat": 10.312211,
+        "lon": 123.910452
+      },
+      {
+        "lat": 10.312161,
+        "lon": 123.910352
+      },
+      {
+        "lat": 10.31201,
+        "lon": 123.910096
+      },
+      {
+        "lat": 10.311862,
+        "lon": 123.90986
+      },
+      {
+        "lat": 10.312109,
+        "lon": 123.909644
+      },
+      {
+        "lat": 10.312334,
+        "lon": 123.909385
+      },
+      {
+        "lat": 10.312423,
+        "lon": 123.909323
+      },
+      {
+        "lat": 10.312489,
+        "lon": 123.909304
+      },
+      {
+        "lat": 10.31257,
+        "lon": 123.90931
+      },
+      {
+        "lat": 10.313178,
+        "lon": 123.909474
+      },
+      {
+        "lat": 10.313266,
+        "lon": 123.909486
+      },
+      {
+        "lat": 10.313327,
+        "lon": 123.909485
+      },
+      {
+        "lat": 10.313441,
+        "lon": 123.909458
+      },
+      {
+        "lat": 10.313529,
+        "lon": 123.909415
+      },
+      {
+        "lat": 10.313963,
+        "lon": 123.909067
+      },
+      {
+        "lat": 10.313892,
+        "lon": 123.908945
+      },
+      {
+        "lat": 10.313849,
+        "lon": 123.908816
+      },
+      {
+        "lat": 10.313833,
+        "lon": 123.908688
+      },
+      {
+        "lat": 10.313855,
+        "lon": 123.90853
+      },
+      {
+        "lat": 10.313923,
+        "lon": 123.908418
+      },
+      {
+        "lat": 10.313981,
+        "lon": 123.908343
+      },
+      {
+        "lat": 10.31408,
+        "lon": 123.908267
+      },
+      {
+        "lat": 10.314868,
+        "lon": 123.907884
+      },
+      {
+        "lat": 10.315039,
+        "lon": 123.907801
+      },
+      {
+        "lat": 10.315186,
+        "lon": 123.907744
+      },
+      {
+        "lat": 10.315263,
+        "lon": 123.907731
+      },
+      {
+        "lat": 10.315393,
+        "lon": 123.907735
+      },
+      {
+        "lat": 10.315541,
+        "lon": 123.907753
+      },
+      {
+        "lat": 10.315549,
+        "lon": 123.907684
+      },
+      {
+        "lat": 10.315571,
+        "lon": 123.907607
+      },
+      {
+        "lat": 10.315659,
+        "lon": 123.907417
+      },
+      {
+        "lat": 10.315779,
+        "lon": 123.907156
+      },
+      {
+        "lat": 10.315881,
+        "lon": 123.906962
+      },
+      {
+        "lat": 10.315969,
+        "lon": 123.906781
+      },
+      {
+        "lat": 10.316027,
+        "lon": 123.906635
+      },
+      {
+        "lat": 10.316079,
+        "lon": 123.906485
+      },
+      {
+        "lat": 10.316116,
+        "lon": 123.906314
+      },
+      {
+        "lat": 10.316135,
+        "lon": 123.906229
+      },
+      {
+        "lat": 10.316177,
+        "lon": 123.906041
+      },
+      {
+        "lat": 10.316213,
+        "lon": 123.905881
+      }
+    ]
+  },
+  "detour": {
+    "routeId": "detour",
+    "state": "unknown",
+    "proposedBy": "rules",
+    "lengthKm": 1.909,
+    "timeMin": 7,
+    "extraKm": 0.5,
+    "extraMin": 2,
+    "streets": [
+      "Pope John Paul Ⅱ Avenue",
+      "Cardinal Rosales Avenue",
+      "Samar Loop"
+    ],
+    "line": [
+      {
+        "lat": 10.3143,
+        "lon": 123.914731
+      },
+      {
+        "lat": 10.314398,
+        "lon": 123.914673
+      },
+      {
+        "lat": 10.314657,
+        "lon": 123.914519
+      },
+      {
+        "lat": 10.315023,
+        "lon": 123.914287
+      },
+      {
+        "lat": 10.315616,
+        "lon": 123.913911
+      },
+      {
+        "lat": 10.315986,
+        "lon": 123.913693
+      },
+      {
+        "lat": 10.31668,
+        "lon": 123.913246
+      },
+      {
+        "lat": 10.317602,
+        "lon": 123.912699
+      },
+      {
+        "lat": 10.318247,
+        "lon": 123.912313
+      },
+      {
+        "lat": 10.31856,
+        "lon": 123.912123
+      },
+      {
+        "lat": 10.31886,
+        "lon": 123.911943
+      },
+      {
+        "lat": 10.318883,
+        "lon": 123.911925
+      },
+      {
+        "lat": 10.318901,
+        "lon": 123.911915
+      },
+      {
+        "lat": 10.319092,
+        "lon": 123.911771
+      },
+      {
+        "lat": 10.319259,
+        "lon": 123.911676
+      },
+      {
+        "lat": 10.319689,
+        "lon": 123.911424
+      },
+      {
+        "lat": 10.319834,
+        "lon": 123.911334
+      },
+      {
+        "lat": 10.32,
+        "lon": 123.911233
+      },
+      {
+        "lat": 10.320054,
+        "lon": 123.911197
+      },
+      {
+        "lat": 10.32048,
+        "lon": 123.910918
+      },
+      {
+        "lat": 10.320567,
+        "lon": 123.910866
+      },
+      {
+        "lat": 10.320609,
+        "lon": 123.910843
+      },
+      {
+        "lat": 10.320696,
+        "lon": 123.910791
+      },
+      {
+        "lat": 10.320656,
+        "lon": 123.910726
+      },
+      {
+        "lat": 10.320603,
+        "lon": 123.91064
+      },
+      {
+        "lat": 10.320404,
+        "lon": 123.910319
+      },
+      {
+        "lat": 10.319954,
+        "lon": 123.909606
+      },
+      {
+        "lat": 10.319909,
+        "lon": 123.909533
+      },
+      {
+        "lat": 10.319711,
+        "lon": 123.909219
+      },
+      {
+        "lat": 10.319675,
+        "lon": 123.909173
+      },
+      {
+        "lat": 10.319612,
+        "lon": 123.909101
+      },
+      {
+        "lat": 10.319584,
+        "lon": 123.90907
+      },
+      {
+        "lat": 10.319556,
+        "lon": 123.909036
+      },
+      {
+        "lat": 10.319207,
+        "lon": 123.908622
+      },
+      {
+        "lat": 10.318953,
+        "lon": 123.908344
+      },
+      {
+        "lat": 10.318877,
+        "lon": 123.908263
+      },
+      {
+        "lat": 10.318748,
+        "lon": 123.908145
+      },
+      {
+        "lat": 10.318719,
+        "lon": 123.90812
+      },
+      {
+        "lat": 10.318576,
+        "lon": 123.908001
+      },
+      {
+        "lat": 10.318485,
+        "lon": 123.907926
+      },
+      {
+        "lat": 10.318454,
+        "lon": 123.9079
+      },
+      {
+        "lat": 10.318369,
+        "lon": 123.907835
+      },
+      {
+        "lat": 10.318298,
+        "lon": 123.907919
+      },
+      {
+        "lat": 10.318267,
+        "lon": 123.907954
+      },
+      {
+        "lat": 10.318193,
+        "lon": 123.908039
+      },
+      {
+        "lat": 10.317898,
+        "lon": 123.908378
+      },
+      {
+        "lat": 10.3178,
+        "lon": 123.908464
+      },
+      {
+        "lat": 10.317738,
+        "lon": 123.908519
+      },
+      {
+        "lat": 10.317394,
+        "lon": 123.908824
+      },
+      {
+        "lat": 10.3173,
+        "lon": 123.908871
+      },
+      {
+        "lat": 10.317243,
+        "lon": 123.908899
+      },
+      {
+        "lat": 10.317172,
+        "lon": 123.908936
+      },
+      {
+        "lat": 10.317106,
+        "lon": 123.908959
+      },
+      {
+        "lat": 10.316956,
+        "lon": 123.908989
+      },
+      {
+        "lat": 10.316785,
+        "lon": 123.909
+      },
+      {
+        "lat": 10.316656,
+        "lon": 123.908996
+      },
+      {
+        "lat": 10.316482,
+        "lon": 123.908948
+      },
+      {
+        "lat": 10.316348,
+        "lon": 123.908887
+      },
+      {
+        "lat": 10.316283,
+        "lon": 123.908854
+      },
+      {
+        "lat": 10.316274,
+        "lon": 123.908848
+      },
+      {
+        "lat": 10.316209,
+        "lon": 123.908807
+      },
+      {
+        "lat": 10.316168,
+        "lon": 123.908775
+      },
+      {
+        "lat": 10.316148,
+        "lon": 123.908755
+      },
+      {
+        "lat": 10.315746,
+        "lon": 123.908361
+      },
+      {
+        "lat": 10.315655,
+        "lon": 123.908248
+      },
+      {
+        "lat": 10.315604,
+        "lon": 123.908154
+      },
+      {
+        "lat": 10.315568,
+        "lon": 123.908061
+      },
+      {
+        "lat": 10.315543,
+        "lon": 123.907964
+      },
+      {
+        "lat": 10.315538,
+        "lon": 123.90789
+      },
+      {
+        "lat": 10.315537,
+        "lon": 123.90787
+      },
+      {
+        "lat": 10.315541,
+        "lon": 123.907753
+      },
+      {
+        "lat": 10.315549,
+        "lon": 123.907684
+      },
+      {
+        "lat": 10.315571,
+        "lon": 123.907607
+      },
+      {
+        "lat": 10.315659,
+        "lon": 123.907417
+      },
+      {
+        "lat": 10.315779,
+        "lon": 123.907156
+      },
+      {
+        "lat": 10.315881,
+        "lon": 123.906962
+      },
+      {
+        "lat": 10.315969,
+        "lon": 123.906781
+      },
+      {
+        "lat": 10.316027,
+        "lon": 123.906635
+      },
+      {
+        "lat": 10.316079,
+        "lon": 123.906485
+      },
+      {
+        "lat": 10.316116,
+        "lon": 123.906314
+      },
+      {
+        "lat": 10.316135,
+        "lon": 123.906229
+      },
+      {
+        "lat": 10.316177,
+        "lon": 123.906041
+      },
+      {
+        "lat": 10.316213,
+        "lon": 123.905881
+      }
+    ]
+  },
+  "advisory": {
+    "state": "active",
+    "about": "your way",
+    "products": [
+      {
+        "kind": "flood",
+        "counts": true,
+        "event": "General Flood Advisory (Moderate)",
+        "area": "Cebu",
+        "sent": "25 Oct, 5:27 p.m. PHT",
+        "expires": "26 Oct, 5:27 a.m. PHT",
+        "link": "https://publicalert.pagasa.dost.gov.ph/output/gfa/f1232c02-5d52-4786-90aa-46865ab991a4.cap",
+        "rainForecast": "light to moderate rains and thunderstorms",
+        "rivers": "Cebu: Kotkot, Mananga, Guinabasan, Balamban and Sabangdaku"
+      }
+    ],
+    "warnings": [],
+    "incomplete": false,
+    "note": null
+  },
+  "reports": [
+    {
+      "id": "sample-quiapo-2024-waders",
+      "sample": true,
+      "place": "M.J. Cuenco Avenue at H. Joaquino Street, Mabolo",
+      "at": {
+        "lat": 10.313004,
+        "lon": 123.91213
+      },
+      "age": "1 h 10 min ago",
+      "depth": "ankle- to thigh-deep (5–72 cm)",
+      "passability": "Not passable to any vehicle (MMDA gauge, Metro Manila)",
+      "origin": "Quiapo, City of Manila, during the Habagat and Typhoon Carina (Gaemi) floods of July 2024",
+      "credit": "Michael Peronce (User:Mikeee 07), CC BY-SA 4.0, via Wikimedia Commons",
+      "sourceUrl": "https://commons.wikimedia.org/wiki/File:Quiapo,_Manila_Floods_Habagat-Carina_2024-1.jpg",
+      "photoUrl": null,
+      "counts": true,
+      "onRoute": true,
+      "onDetour": false,
+      "routes": [
+        "plain"
+      ],
+      "role": "block"
+    },
+    {
+      "id": "sample-bacoor-2013",
+      "sample": true,
+      "place": "Leyte Loop, Cebu Business Park",
+      "at": {
+        "lat": 10.313981,
+        "lon": 123.908343
+      },
+      "age": "3 h 20 min ago",
+      "depth": "depth not measured",
+      "passability": "Lusong couldn't measure the water in this photo",
+      "origin": "Aguinaldo Highway at Bacoor, Cavite, 19 August 2013",
+      "credit": "Au Morandarte from Chiswick/Romford, London, England, CC BY-SA 2.0, via Wikimedia Commons",
+      "sourceUrl": "https://commons.wikimedia.org/wiki/File:Au_Morandarte_Flickr_Stranded_7_Eleven_store_in_Bacoor_due_to_floods,_19_08_13_(9550361920).jpg",
+      "photoUrl": null,
+      "counts": false,
+      "onRoute": true,
+      "onDetour": false,
+      "routes": [
+        "plain"
+      ],
+      "role": "neutral"
+    }
+  ],
+  "muse": {
+    "pick": {
+      "shown": false,
+      "label": "Muse Spark picked this evidence",
+      "sentences": [],
+      "note": "Muse Spark couldn't pick the evidence for this check."
+    },
+    "web": {
+      "line": "Web search skipped: Muse Spark is off.",
+      "coverage": {
+        "searched": [],
+        "missed": [
+          "Cebu"
+        ],
+        "note": "The web search didn't cover this route. Not searched: Cebu (Muse Spark is off)."
+      },
+      "findings": []
+    }
+  },
+  "mmdaCredit": "The passability lines are from Metro Manila's MMDA flood gauge, which Lusong uses for every trip."
+}

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { FakeChannel } from "../test/fake-channel";
-import { FEED, SAVED } from "../test/pagasa-fixtures";
+import { SAVED, SAVED_FEED } from "../test/pagasa-fixtures";
 import { watchStores } from "../test/watch-stores";
 import { FEED_URL } from "./advisory";
 import { createBudget, MemoryBudgetStore, type Budget } from "./budget";
@@ -303,7 +303,7 @@ function savedNetwork() {
   const fetch = vi.fn(async (url: string | URL) => {
     const u = String(url);
     calls.push(u);
-    const pagasa: Record<string, string> = { [FEED_URL]: FEED, ...SAVED };
+    const pagasa: Record<string, string> = { [FEED_URL]: SAVED_FEED, ...SAVED };
     if (u in pagasa) return new Response(pagasa[u]);
     if (u === `${VALHALLA_URL}/route`) return new Response(readFileSync("test/fixtures/valhalla/banilad-itpark-plain.json", "utf8"));
     throw new TypeError("fetch failed");
