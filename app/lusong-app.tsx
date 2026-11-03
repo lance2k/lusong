@@ -236,7 +236,6 @@ function Shell() {
           {sheetView && (
             <div>
               <SheetHeader id={VIEW_HEADING} ref={viewHeading} title={VIEW_TITLES[sheetView]} onBack={closeView} />
-              {sheetView === "report" && <ReportView />}
               {sheetView === "check" && <CheckView />}
               {sheetView === "watch" && <WatchView trip={savedTrip} />}
               {sheetView === "about" && <AboutView />}
@@ -245,6 +244,10 @@ function Shell() {
               )}
             </div>
           )}
+          {/* Mounted for the whole visit, so a report being sent survives leaving the view. */}
+          <div hidden={sheetView !== "report"}>
+            <ReportView shown={sheetView === "report"} notify={toast} />
+          </div>
           {/* Kept mounted under a view, so a half-typed place or a running check survives a trip to Report and back. */}
           <div hidden={sheetView !== null} className="space-y-5 pt-1">
             <WhereTo

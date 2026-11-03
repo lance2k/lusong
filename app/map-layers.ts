@@ -33,18 +33,22 @@ export function sentExpires(area: Pick<AdvisoryArea, "sent" | "expires">): strin
 }
 
 export interface AreaShape {
-  rings: [number, number][][];
+  /** One CAP polygon, [lat, lon]. */
+  ring: [number, number][];
   className: string;
   tooltip: string[];
 }
 
-/** The areas the map draws: only those with a ring to shade. */
+/**
+ * The shapes the map shades: one per CAP polygon. An area's polygons are separate pieces of ground (the server counts
+ * a route covered by any of them), so they are never joined into one shape, where a second ring would cut a hole.
+ */
 export function areaShapes(areas: AdvisoryArea[]): AreaShape[] {
-  return areas.filter((a) => a.rings.some(drawable)).map((a) => ({
-    rings: a.rings.filter(drawable),
-    className: `lusong-area lusong-area-${a.kind.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
-    tooltip: [a.headline, sentExpires(a)].filter((line): line is string => Boolean(line)),
-  }));
+  return areas.flatMap((a) => {
+    const className = `lusong-area lusong-area-${a.kind.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+    const tooltip = [a.headline, sentExpires(a)].filter((line): line is string => Boolean(line));
+    return a.rings.filter(drawable).map((ring) => ({ ring, className, tooltip }));
+  });
 }
 
 export interface FitPadding {

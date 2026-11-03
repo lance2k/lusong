@@ -9,7 +9,8 @@ import { Chip } from "./ui/chip";
 import VoiceNote from "./voice-note";
 import { WatcherPanel } from "./watcher-panel";
 
-export function ReportView() {
+/** Kept mounted while hidden, so a send in flight lands and is told even after the rider leaves the view. */
+export function ReportView({ shown, notify }: { shown: boolean; notify: (line: string) => void }) {
   const [tab, setTab] = useState<"photo" | "voice">("photo");
   return (
     <div className="space-y-4 text-[15px]">
@@ -22,14 +23,13 @@ export function ReportView() {
           Voice note
         </Chip>
       </div>
-      {tab === "photo" ? (
-        <div className="space-y-3">
-          <p className="text-small text-ink-2">{PHOTO_PRIVACY_LINE}</p>
-          <ReportStreet />
-        </div>
-      ) : (
-        <VoiceNote />
-      )}
+      <div hidden={tab !== "photo"} className="space-y-3">
+        <p className="text-small text-ink-2">{PHOTO_PRIVACY_LINE}</p>
+        <ReportStreet shown={shown && tab === "photo"} notify={notify} />
+      </div>
+      <div hidden={tab !== "voice"}>
+        <VoiceNote shown={shown && tab === "voice"} notify={notify} />
+      </div>
     </div>
   );
 }
