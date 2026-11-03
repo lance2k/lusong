@@ -6,6 +6,159 @@
   font-size: 22px;
 }
 
+.leaflet-container {
+  background: var(--ground);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+}
+
 .leaflet-popup-content p {
   margin: 0 0 0.25rem;
+}
+
+/* A muted map, so the routes, pins and areas stand out. Only the tiles are filtered, never the overlays. */
+.lusong-tiles {
+  filter: saturate(0.55);
+}
+
+@media (prefers-color-scheme: dark) {
+  .lusong-tiles {
+    filter: invert(1) hue-rotate(180deg) brightness(0.9) saturate(0.6);
+  }
+}
+
+.lusong-map .leaflet-bottom {
+  bottom: calc(var(--map-bottom, 0px) + 8px);
+  transition: bottom var(--dur-3) var(--ease-spring);
+}
+
+@media (min-width: 1024px) {
+  .lusong-map .leaflet-bottom {
+    bottom: 8px;
+  }
+}
+
+.lusong-map .leaflet-control-zoom {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.16);
+}
+
+.lusong-map .leaflet-control-zoom a {
+  background: var(--glass);
+  color: var(--ink);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  backdrop-filter: blur(20px) saturate(1.6);
+  border-color: var(--line);
+}
+
+.lusong-map .leaflet-control-attribution {
+  background: var(--glass);
+  color: var(--ink);
+  font-size: 12px;
+  border-bottom-left-radius: 8px;
+}
+
+.lusong-map .leaflet-control-attribution a {
+  color: var(--brand);
+}
+
+.lusong-route {
+  stroke: var(--brand);
+}
+
+.lusong-detour {
+  stroke: var(--another);
+}
+
+.lusong-end {
+  stroke: var(--ink);
+  fill: var(--surface);
+}
+
+.lusong-area {
+  stroke: var(--advisory);
+  fill: var(--advisory);
+  fill-opacity: var(--advisory-fill);
+}
+
+.lusong-area-tip p {
+  margin: 0;
+}
+
+.lusong-pin-box {
+  background: none;
+  border: none;
+}
+
+.lusong-pin {
+  position: relative;
+  width: 44px;
+  height: 48px;
+  --tone: var(--unknown);
+  --on-tone: var(--on-unknown);
+}
+
+.lusong-pin.tone-wait {
+  --tone: var(--wait);
+  --on-tone: var(--on-wait);
+}
+
+.lusong-pin.tone-go {
+  --tone: var(--go);
+  --on-tone: var(--on-go);
+}
+
+.lusong-pin.tone-stale {
+  --tone: var(--stale);
+  --on-tone: #ffffff;
+}
+
+.lusong-pin .drop {
+  position: absolute;
+  left: 4px;
+  top: 2px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+  background: var(--tone);
+  border: 2px solid var(--surface);
+  box-shadow: 0 3px 10px rgb(0 0 0 / 0.3);
+}
+
+.lusong-pin.sample .drop {
+  outline: 2px dashed var(--ink);
+  outline-offset: 2px;
+}
+
+.lusong-pin .glyph {
+  position: absolute;
+  left: 4px;
+  top: 2px;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--on-tone);
+}
+
+.lusong-pin .badge {
+  position: absolute;
+  left: 40px;
+  top: 8px;
+  white-space: nowrap;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+}
+
+.lusong-map[data-hide-bottom="true"] .leaflet-bottom {
+  display: none;
 }

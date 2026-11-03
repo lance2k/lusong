@@ -1,11 +1,11 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Role } from "@/lib/answer";
 import { readExifTimeText, withExifTime } from "@/lib/exif";
 import type { ReportView } from "@/lib/report-handler";
 import { phoneLocation } from "./phone-location";
-import VoiceNote from "./voice-note";
+import { photoOutcomeLine } from "./report-outcome";
 
 const MAX_SIDE = 1600;
 const JPEG_QUALITY = 0.85;
@@ -39,15 +39,15 @@ async function preparePhoto(file: File): Promise<Blob> {
 }
 
 const ROLE_TONES: Record<Role, string> = {
-  clear: "border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-100",
-  block: "border-red-300 bg-red-50 text-red-900 dark:border-red-900 dark:bg-red-950 dark:text-red-100",
-  neutral: "border-zinc-300 bg-zinc-50 text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100",
+  clear: "border-go bg-go/10 text-ink",
+  block: "border-wait bg-wait/10 text-ink",
+  neutral: "border-line bg-surface text-ink",
 };
 
 function Reading({ state }: { state: Extract<State, { step: "done" }> }) {
   const { report, duplicate } = state;
   return (
-    <div className={`space-y-2 rounded-2xl border px-5 py-4 ${ROLE_TONES[report.counts ? report.role : "neutral"]}`} data-testid="report-reading">
+    <div className={`space-y-2 rounded-card border-2 px-5 py-4 ${ROLE_TONES[report.counts ? report.role : "neutral"]}`} data-testid="report-reading">
       <p className="text-sm font-medium uppercase tracking-wide opacity-75">Lusong read your photo</p>
       <p className="text-xl font-semibold">{report.passability}</p>
       <p>Depth: {report.depth}</p>
@@ -62,8 +62,20 @@ function Reading({ state }: { state: Extract<State, { step: "done" }> }) {
   );
 }
 
-export default function ReportStreet() {
+/**
+ * `shown` is false while the rider is elsewhere (another view or tab): the component stays mounted so a send still
+ * lands here, and its outcome is also told through `notify`.
+ */
+export default function ReportStreet({ shown = true, notify }: { shown?: boolean; notify?: (line: string) => void } = {}) {
   const [state, setState] = useState<State>({ step: "idle" });
+  const seen = useRef({ shown, notify });
+  useEffect(() => {
+    seen.current = { shown, notify };
+  });
+  function finish(next: Extract<State, { step: "done" | "failed" }>) {
+    setState(next);
+    if (!seen.current.shown) seen.current.notify?.(photoOutcomeLine(next.step === "done" ? { report: next.report } : { message: next.message }));
+  }
   const input = useRef<HTMLInputElement>(null);
   /** Set synchronously, so a second pick can't start a second paid read. */
   const inFlight = useRef(false);
@@ -81,7 +93,7 @@ export default function ReportStreet() {
       try {
         [at, photo] = await Promise.all([phoneLocation(), prepared]);
       } catch (err) {
-        setState({ step: "failed", message: err instanceof Error ? err.message : "Something went wrong." });
+        finish({ step: "failed", message: err instanceof Error ? err.message : "Something went wrong." });
         return;
       }
       setState({ step: "reading", startedAt: Date.now() });
@@ -93,9 +105,9 @@ export default function ReportStreet() {
         const res = await fetch("/api/report", { method: "POST", body: form });
         const body = await res.json();
         if (!res.ok) throw new Error(body.error ?? "Something went wrong.");
-        setState({ step: "done", report: body.report, duplicate: body.duplicate });
+        finish({ step: "done", report: body.report, duplicate: body.duplicate });
       } catch (err) {
-        setState({ step: "failed", message: err instanceof Error ? err.message : "Something went wrong." });
+        finish({ step: "failed", message: err instanceof Error ? err.message : "Something went wrong." });
       }
     } finally {
       inFlight.current = false;
@@ -121,20 +133,19 @@ export default function ReportStreet() {
         type="button"
         disabled={busy}
         onClick={() => input.current?.click()}
-        className="w-full rounded-2xl bg-sky-600 px-5 py-4 text-lg font-semibold text-white shadow-sm transition hover:bg-sky-700 disabled:opacity-60"
+        className="min-h-14 w-full rounded-control bg-brand px-5 text-lg font-semibold text-on-brand shadow-sm transition hover:brightness-110 disabled:opacity-60"
       >
         {state.step === "locating" ? "Finding where you are…" : state.step === "reading" ? "Reading the water…" : "Report this street"}
       </button>
       {state.step === "reading" && (
-        <p className="text-center text-zinc-600 dark:text-zinc-400">Finding the water, people and cars… usually about 15 s</p>
+        <p className="text-center text-ink-2">Finding the water, people and cars… usually about 15 s</p>
       )}
       {state.step === "done" && <Reading state={state} />}
       {state.step === "failed" && (
-        <p className="rounded-2xl border border-red-300 bg-red-50 px-5 py-4 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+        <p role="alert" className="rounded-card border border-wait bg-wait/10 px-5 py-4 font-medium text-ink">
           {state.message}
         </p>
       )}
-      <VoiceNote />
     </div>
   );
 }

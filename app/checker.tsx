@@ -83,10 +83,10 @@ function gaugeWords(i: Interval): string {
 }
 
 const TONES = {
-  green: "bg-emerald-600 text-white",
-  amber: "bg-amber-500 text-black",
-  red: "bg-red-600 text-white",
-  grey: "bg-zinc-600 text-white",
+  green: "bg-go text-on-go",
+  amber: "bg-unknown text-on-unknown",
+  red: "bg-wait text-on-wait",
+  grey: "bg-stale text-white",
 };
 
 function headline(v: Verdict): { title: string; code: string | null; tone: keyof typeof TONES } {
@@ -116,7 +116,7 @@ function VerdictCard({ result }: { result: PageResult }) {
   const v = result.verdict;
   const h = headline(v);
   return (
-    <section className="overflow-hidden rounded-2xl border border-zinc-200 dark:border-zinc-800">
+    <section className="overflow-hidden rounded-card border border-line bg-surface">
       <div className={`px-5 py-4 ${TONES[h.tone]}`}>
         <p className="text-xl font-semibold leading-tight">{h.title}</p>
         {h.code && <p className="mt-1 text-sm opacity-90">MMDA class {h.code}</p>}
@@ -156,7 +156,7 @@ function VerdictCard({ result }: { result: PageResult }) {
                   : "Some readings were missing or inconsistent, and a missing one could be the deepest, so Lusong won't give a class."}
               </p>
             )}
-            <p className="text-zinc-600 dark:text-zinc-400">Confidence: {CONFIDENCE_WORDS[v.confidence]}</p>
+            <p className="text-ink-2">Confidence: {CONFIDENCE_WORDS[v.confidence]}</p>
           </>
         )}
         {v.kind === "cannot_measure" &&
@@ -220,7 +220,7 @@ function Overlay({ result, imageUrl, label }: { result: PageResult; imageUrl: st
   const { width, height } = result.image;
   const pct = (value: number, of: number) => `${(value / of) * 100}%`;
   return (
-    <div className="relative overflow-hidden rounded-2xl">
+    <div className="relative overflow-hidden rounded-card">
       <Scene result={result} imageUrl={imageUrl} label={label} />
       {result.objects.map((o) => (
         <span
@@ -245,10 +245,10 @@ function Crops({ result, imageUrl }: { result: PageResult; imageUrl: string }) {
   if (read.length === 0) return null;
   return (
     <section>
-      <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-500">Up close</h2>
+      <h2 className="mb-2 text-label uppercase tracking-wide text-ink-2">Up close</h2>
       <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {read.map((o) => (
-          <li key={o.label} className="overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800">
+          <li key={o.label} className="overflow-hidden rounded-control border border-line bg-surface">
             <Scene result={result} imageUrl={imageUrl} viewBox={cropBox(o.box, result.image)} label={`${o.label} up close`} />
             <p className="px-2 py-1.5 text-[13px] leading-snug">
               <b>{o.label}</b> {LANDMARK_WORDS[o.landmark!]}
@@ -278,7 +278,7 @@ function Refused({ state, onShow }: { state: Extract<State, { step: "refused" }>
   const current = state.samples?.[state.shown];
   return (
     <>
-      <div className="rounded-2xl border border-amber-300 bg-amber-50 px-5 py-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
+      <div className="rounded-card border border-unknown bg-unknown/15 px-5 py-4 text-ink">
         <p className="font-semibold">{state.message}</p>
         <p className="mt-1 text-[15px]">
           Your photo was not measured.
@@ -293,7 +293,7 @@ function Refused({ state, onShow }: { state: Extract<State, { step: "refused" }>
               type="button"
               aria-pressed={i === state.shown}
               onClick={() => onShow(i)}
-              className="rounded-full border border-zinc-300 px-3 py-1.5 text-sm aria-pressed:bg-zinc-900 aria-pressed:text-white dark:border-zinc-700 dark:aria-pressed:bg-zinc-100 dark:aria-pressed:text-zinc-900"
+              className="min-h-11 rounded-chip border border-line bg-surface px-4 text-sm text-ink aria-pressed:border-brand aria-pressed:bg-brand aria-pressed:text-on-brand"
             >
               {sample.title}
             </button>
@@ -302,7 +302,7 @@ function Refused({ state, onShow }: { state: Extract<State, { step: "refused" }>
       )}
       {current && (
         <>
-          <p className="rounded-xl bg-zinc-900 px-4 py-2 text-sm text-white dark:bg-zinc-100 dark:text-zinc-900">
+          <p className="min-h-11 rounded-control bg-ink px-4 text-sm font-semibold text-ground">
             Sample photo, not yours · measured {current.sample.measuredOn} · Photo: {current.sample.credit}
           </p>
           <ResultView
@@ -320,8 +320,8 @@ function ReadingList({ objects }: { objects: PageObject[] }) {
   if (objects.length === 0) return null;
   return (
     <section>
-      <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-500">What Lusong measured against</h2>
-      <ul className="divide-y divide-zinc-200 rounded-2xl border border-zinc-200 text-[15px] dark:divide-zinc-800 dark:border-zinc-800">
+      <h2 className="mb-2 text-label uppercase tracking-wide text-ink-2">What Lusong measured against</h2>
+      <ul className="divide-y divide-line rounded-card border border-line bg-surface text-[15px]">
         {objects.map((o) => (
           <li key={o.label} className="flex gap-3 px-4 py-3">
             <span className={`mt-0.5 h-fit rounded px-1.5 text-xs font-bold ${o.usable ? "bg-yellow-400 text-black" : "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"}`}>
@@ -336,12 +336,12 @@ function ReadingList({ objects }: { objects: PageObject[] }) {
           </li>
         ))}
       </ul>
-      <p className="mt-2 text-sm text-zinc-500">
+      <p className="mt-2 text-sm text-ink-2">
         Cyan lines mark where the segmentation found the water meeting a person or car. Readings with no line still
         count; the line is drawn only where the mask clearly meets the water.
       </p>
       {objects.some((o) => o.tyreCm) && (
-        <p className="mt-2 text-sm text-zinc-500">
+        <p className="mt-2 text-sm text-ink-2">
           A tyre estimate assumes a car tyre 58–70 cm across, seen side-on. It counts all of the tyre it can&apos;t see
           as under water, so it reads deeper when the car&apos;s body hides the top of the tyre. On a wheel seen at an
           angle it can read shallower than the water is. It can make the verdict deeper, never shallower.
@@ -447,7 +447,7 @@ export default function Checker() {
         type="button"
         disabled={busy}
         onClick={() => input.current?.click()}
-        className="w-full rounded-2xl bg-sky-600 px-5 py-4 text-lg font-semibold text-white shadow-sm transition hover:bg-sky-700 disabled:opacity-60"
+        className="min-h-14 w-full rounded-control bg-brand px-5 text-lg font-semibold text-on-brand shadow-sm transition hover:brightness-110 disabled:opacity-60"
       >
         {state.step === "idle" ? "Choose or take a photo" : busy ? "Measuring…" : "Check another photo"}
       </button>
@@ -455,8 +455,8 @@ export default function Checker() {
       {state.step === "measuring" && (
         <div className="space-y-3">
           {/* eslint-disable-next-line @next/next/no-img-element -- a local blob URL, nothing to optimise */}
-          <img src={state.previewUrl} alt="Your photo, being measured" className="block w-full animate-pulse rounded-2xl" />
-          <p className="text-center text-zinc-600 dark:text-zinc-400">
+          <img src={state.previewUrl} alt="Your photo, being measured" className="block w-full animate-pulse rounded-card motion-reduce:animate-none" />
+          <p className="text-center text-ink-2">
             Finding the water, people and cars… <Elapsed since={state.startedAt} /> s (usually about 15)
           </p>
         </div>
@@ -475,7 +475,7 @@ export default function Checker() {
       )}
 
       {state.step === "failed" && (
-        <p className="rounded-2xl border border-red-300 bg-red-50 px-5 py-4 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+        <p className="rounded-card border border-wait bg-wait/10 px-5 py-4 font-medium text-ink">
           {state.message}
         </p>
       )}

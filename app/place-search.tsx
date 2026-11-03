@@ -23,15 +23,21 @@ export interface PlaceSearchProps {
   /** The phone's rounded location, used to bias suggestions when the rider shared it. */
   bias: { lat: number; lon: number } | null;
   onLocated?: (at: { lat: number; lon: number }) => void;
+  /** Runs when the box gets focus, so the panel can open to full height. */
+  onFocusBox?: () => void;
+  /** Focuses the box each time it changes to a new number above 0. */
+  focusSignal?: number;
 }
 
-export function PlaceSearch({ label, chosen, onPick, myLocation, bias, onLocated }: PlaceSearchProps) {
+export function PlaceSearch({ label, chosen, onPick, myLocation, bias, onLocated, onFocusBox, focusSignal = 0 }: PlaceSearchProps) {
   const id = useId();
   const listId = `${id}-list`;
   const [box, send] = useReducer(boxReducer, initialBox);
   const [note, setNote] = useState<string | null>(null);
   const [locating, setLocating] = useState(false);
   const input = useRef<HTMLInputElement>(null);
+  const wrapper = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLUListElement>(null);
   const query = searchFor(box);
   const fallback = useRef(box.lookup.places);
   useEffect(() => {
@@ -89,6 +95,15 @@ export function PlaceSearch({ label, chosen, onPick, myLocation, bias, onLocated
   }
 
   const open = isOpen(box);
+
+  useEffect(() => {
+    if (focusSignal > 0) input.current?.focus();
+  }, [focusSignal]);
+
+  // In a sheet the list can open below the fold; it is brought into view once it has suggestions.
+  useEffect(() => {
+    if (open) list.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [open]);
   const { lookup, active } = box;
   const empty = query && lookup.status === "ok" && lookup.places.length === 0;
   const statusLine = box.editing ? STATUS_LINE[lookup.status] : undefined;
@@ -106,8 +121,8 @@ export function PlaceSearch({ label, chosen, onPick, myLocation, bias, onLocated
   }
 
   return (
-    <div className="relative">
-      <label htmlFor={`${id}-input`} className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300">
+    <div ref={wrapper} className="relative scroll-mt-4">
+      <label htmlFor={`${id}-input`} className="block text-label text-ink-2">
         {label}
       </label>
       <div className="mt-1 flex gap-2">
@@ -125,7 +140,14 @@ export function PlaceSearch({ label, chosen, onPick, myLocation, bias, onLocated
           maxLength={MAX_QUERY}
           placeholder={chosen ?? `Search a place in ${TRIP_AREA_NAME}`}
           value={shownValue(box, chosen)}
-          onFocus={() => send({ type: "focus" })}
+          onFocus={() => {
+            send({ type: "focus" });
+            if (onFocusBox) {
+              onFocusBox();
+              // After the panel has grown, so the box and its suggestions are in view.
+              setTimeout(() => wrapper.current?.scrollIntoView({ block: "start", behavior: "smooth" }), 420);
+            }
+          }}
           onBlur={() =>
             setTimeout(() => {
               if (document.activeElement !== input.current) send({ type: "blur" });
@@ -133,25 +155,26 @@ export function PlaceSearch({ label, chosen, onPick, myLocation, bias, onLocated
           }
           onChange={(e) => send({ type: "type", value: e.target.value })}
           onKeyDown={onKeyDown}
-          className="min-h-11 w-full rounded-xl border border-zinc-300 bg-white px-3 text-base dark:border-zinc-700 dark:bg-zinc-900"
+          className="min-h-11 w-full rounded-control border border-line bg-surface px-3 text-base text-ink placeholder:text-ink-2"
         />
         {myLocation && (
           <button
             type="button"
             onClick={useMyLocation}
             disabled={locating}
-            className="min-h-11 shrink-0 rounded-xl border border-zinc-300 px-3 text-sm font-medium disabled:opacity-60 dark:border-zinc-700"
+            className="min-h-11 shrink-0 rounded-control border border-line bg-surface px-3 text-sm font-medium text-ink disabled:opacity-60"
           >
             {locating ? "Locating…" : "Use my location"}
           </button>
         )}
       </div>
       <ul
+        ref={list}
         id={listId}
         role="listbox"
         aria-label={`${label} suggestions`}
         hidden={!open}
-        className="absolute z-[1000] mt-1 max-h-72 w-full overflow-auto rounded-xl border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
+        className="relative z-[1000] mt-1 max-h-72 w-full overflow-auto rounded-control border border-line bg-surface shadow-lg"
       >
         {lookup.places.map((place, i) => (
           <li
@@ -163,14 +186,14 @@ export function PlaceSearch({ label, chosen, onPick, myLocation, bias, onLocated
               e.preventDefault();
               pick(place);
             }}
-            className="cursor-pointer px-3 py-2 aria-selected:bg-sky-100 dark:aria-selected:bg-sky-900"
+            className="cursor-pointer px-3 py-2 aria-selected:bg-brand/15"
           >
             <span className="block font-medium">{place.name}</span>
-            {place.area && <span className="block text-sm text-zinc-500">{place.area}</span>}
+            {place.area && <span className="block text-sm text-ink-2">{place.area}</span>}
           </li>
         ))}
       </ul>
-      <p className="mt-1 text-sm text-zinc-500" aria-live="polite">
+      <p className="mt-1 text-sm text-ink-2" aria-live="polite">
         {box.editing && box.text.length > 0 && box.text.trim().length < MIN_QUERY && `Type at least ${MIN_QUERY} letters.`}
         {lookup.status === "searching" && query && "Searching…"}
         {empty && `No place by that name in ${TRIP_AREA_NAME}. Try another name, or tap the map.`}

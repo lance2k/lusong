@@ -1,26 +1,159 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+  --ground: #f4f6f9;
+  --surface: #ffffff;
+  --glass: rgb(255 255 255 / 0.74);
+  --ink: #0b1220;
+  --ink-2: #475467;
+  --line: #e3e7ed;
+  --brand: #1d4ed8;
+  --on-brand: #ffffff;
+  --go: #15803d;
+  --on-go: #ffffff;
+  --another: #0f766e;
+  --on-another: #ffffff;
+  --wait: #b91c1c;
+  --on-wait: #ffffff;
+  --unknown: #fbbf24;
+  --on-unknown: #1c1917;
+  --advisory: #7c3aed;
+  --advisory-fill: 0.16;
+  --stale: #71717a;
+  --warn-ink: #92400e;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --dur-1: 120ms;
+  --dur-2: 220ms;
+  --dur-3: 380ms;
+  /* About 4% overshoot, then settle. */
+  --ease-spring: linear(0, 0.25 8%, 0.62 20%, 0.9 34%, 1.03 48%, 1.04 56%, 1.01 72%, 1);
+
+  /* The top band the full sheet never covers: the brand, the map buttons and the map's credits stay visible. */
+  --top-band: 84px;
+  --peek: 176px;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --ground: #0d1117;
+    --surface: #161b22;
+    --glass: rgb(22 27 34 / 0.7);
+    --ink: #eef2f7;
+    --ink-2: #a6b0bf;
+    --line: #2a313c;
+    --brand: #7aa7ff;
+    --on-brand: #0b1220;
+    --go: #4ade80;
+    --on-go: #052e16;
+    --another: #2dd4bf;
+    --on-another: #042f2e;
+    --wait: #f87171;
+    --on-wait: #450a0a;
+    --advisory: #a78bfa;
+    --advisory-fill: 0.22;
+    --stale: #8b8b94;
+    --warn-ink: #fcd34d;
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-1: 0.01ms;
+    --dur-2: 0.01ms;
+    --dur-3: 0.01ms;
+    --ease-spring: linear;
+  }
+}
+
+@theme inline {
+  --color-ground: var(--ground);
+  --color-surface: var(--surface);
+  --color-glass: var(--glass);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-line: var(--line);
+  --color-brand: var(--brand);
+  --color-on-brand: var(--on-brand);
+  --color-go: var(--go);
+  --color-on-go: var(--on-go);
+  --color-another: var(--another);
+  --color-on-another: var(--on-another);
+  --color-wait: var(--wait);
+  --color-on-wait: var(--on-wait);
+  --color-unknown: var(--unknown);
+  --color-on-unknown: var(--on-unknown);
+  --color-advisory: var(--advisory);
+  --color-stale: var(--stale);
+  --color-warn-ink: var(--warn-ink);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --radius-chip: 999px;
+  --radius-control: 16px;
+  --radius-card: 24px;
+  --radius-sheet: 28px;
+  --text-display: 34px;
+  --text-display--line-height: 38px;
+  --text-display--font-weight: 800;
+  --text-title: 22px;
+  --text-title--line-height: 28px;
+  --text-title--font-weight: 700;
+  --text-body: 16px;
+  --text-body--line-height: 24px;
+  --text-label: 13px;
+  --text-label--line-height: 16px;
+  --text-label--font-weight: 600;
+  --text-small: 13px;
+  --text-small--line-height: 18px;
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--ground);
+  color: var(--ink);
+}
+
+.glass {
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  backdrop-filter: blur(20px) saturate(1.6);
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass {
+    background: var(--surface);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .glass {
+    background: var(--surface);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+:focus-visible {
+  outline: 3px solid var(--brand);
+  outline-offset: 2px;
+}
+
+@keyframes lusong-indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+
+.progress-indeterminate {
+  animation: lusong-indeterminate 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-indeterminate {
+    animation: none;
+    transform: none;
+    width: 100%;
+    opacity: 0.5;
+  }
 }
