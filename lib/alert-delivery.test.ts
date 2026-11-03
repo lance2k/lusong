@@ -5,7 +5,7 @@ import { watchStores } from "../test/watch-stores";
 import { FEED_URL } from "./advisory";
 import { judgeArea } from "./advisory-geo";
 import { MemoryAdvisoryStore, refreshSnapshot, SNAPSHOT_KEY, type AdvisoryProduct, type AdvisorySnapshot } from "./advisory-snapshot";
-import { DELIVERY_LIMITS, HISTORY_BATCH, runDelivery, type DeliveryDeps } from "./alert-delivery";
+import { CLEANUP_RESERVE_MS, DELIVERY_LIMITS, HISTORY_BATCH, runDelivery, type DeliveryDeps } from "./alert-delivery";
 import { corridorFor, simplifyLine, touches } from "./alert-corridor";
 import { alertMessage, MemoryAlertStore, pagasaAlerts, SEEN_TTL_MS, UpstashAlertStore, type Alert, type AlertStore } from "./alerts";
 import type { Point } from "./answer";
@@ -154,8 +154,8 @@ describe("alert delivery: who gets what (ledger #7)", () => {
     const t = setup();
     for (const id of ["a1", "a2"]) await linked(t.watches, id, CEBU_TRIP);
     await publish(t.advisory, snapshotOf([product("tc", COUNTRY_AREA, SENT_AM, UNTIL_PM)], AFTERNOON));
-    // Less than a history read, a lease and a store call left: no history is read and nothing is started.
-    expect(await t.deliver({ limits: { budgetMs: 12_000 } })).toMatchObject({ sent: 0, unread: 2 });
+    // Less than a history read, a lease and a store call left of the working time: no history is read, nothing started.
+    expect(await t.deliver({ limits: { budgetMs: CLEANUP_RESERVE_MS + 12_000 } })).toMatchObject({ sent: 0, unread: 2 });
     expect(await t.deliver()).toMatchObject({ sent: 2 });
   });
 
@@ -640,15 +640,65 @@ describe("store commands at 100 watchers with 3 nationwide alerts (S4P-9)", () =
     expect(runs).toBe(8);
     expect(calls["watches.list"]).toBe(runs);
     expect(calls["watches.routes"]).toBe(runs);
-    expect(calls["watches.alertStatesMany"]).toBe((100 / HISTORY_BATCH) * runs);
+    // A run stops reading once its sends stop, so at most one history read per 25 watchers.
+    expect(calls["watches.alertStatesMany"]).toBeLessThanOrEqual((100 / HISTORY_BATCH) * runs);
     expect(calls["watches.alertStates"]).toBeUndefined();
     for (const perSend of ["watches.takeSendLease", "watches.claimAlert", "watches.settleAlert", "watches.releaseSendLease", "alerts.isActive"]) {
       expect(calls[perSend]).toBe(300);
     }
     const total = Object.values(calls).reduce((a, b) => a + b, 0);
     // Per run: rebuild, alert list, watcher list, cursor read, route read, cursor write; then one history read a batch.
-    expect(total).toBe(runs * (6 + 100 / HISTORY_BATCH) + 300 * 5);
+    expect(total).toBe(runs * 6 + calls["watches.alertStatesMany"] + 300 * 5);
+    expect(total).toBeLessThanOrEqual(runs * (6 + 100 / HISTORY_BATCH) + 300 * 5);
   });
+});
+
+describe("slow store calls can't spend the run, on real timers (S4D-8)", () => {
+  /** The store, every listed method answering after `ms` of real time. */
+  function slowed<T extends object>(store: T, delays: Record<string, number>): T {
+    return new Proxy(store, {
+      get(target, key, receiver) {
+        const value = Reflect.get(target, key, receiver);
+        if (typeof value !== "function") return value;
+        const ms = delays[String(key)];
+        if (ms === undefined) return value.bind(target);
+        return async (...args: unknown[]) => {
+          await new Promise((resolve) => setTimeout(resolve, ms));
+          return value.apply(target, args);
+        };
+      },
+    });
+  }
+
+  it(
+    "100 watchers, 3 s reads and 4.9 s send-path calls: the run ends inside 55 s, an unsent claim is given back (not left attempted), and the next run sends",
+    async () => {
+      const t = setup();
+      for (let i = 0; i < 100; i++) await linked(t.watches, `w${String(i).padStart(3, "0")}`, CEBU_TRIP);
+      await publish(t.advisory, snapshotOf([product("n1", COUNTRY_AREA, SENT_AM, UNTIL_PM)], AFTERNOON));
+      const READ = 3_000;
+      const SEND_PATH = 4_900;
+      const watches = slowed(t.watches, { list: READ, routes: READ, alertStatesMany: READ, takeSendLease: SEND_PATH, claimAlert: SEND_PATH, settleAlert: SEND_PATH, releaseSendLease: SEND_PATH, remove: SEND_PATH });
+      const alerts = slowed(t.alerts, { all: READ, cursor: READ, rebuildPagasa: READ, isActive: SEND_PATH, setCursor: SEND_PATH });
+      const advisory = slowed(t.advisory, { get: READ });
+      const started = Date.now();
+      const slow = await t.deliver({ watches, alerts, advisory });
+      const took = Date.now() - started;
+      expect(took).toBeLessThan(55_000);
+      expect(slow.sent).toBe(0);
+      // Every item not sent is as it was read, so the next run tries it again.
+      const states = await Promise.all(Array.from({ length: 100 }, (_, i) => t.watches.alertStates(`w${String(i).padStart(3, "0")}`, ["pagasa:n1@1"])));
+      expect(states.flat().filter((s) => s !== null)).toEqual([]);
+      let sent = 0;
+      for (let run = 0; run < 5 && sent < 100; run++) {
+        t.clock.advance(2_000);
+        sent += (await t.deliver()).sent;
+      }
+      expect(sent).toBe(100);
+      expect(new Set(t.channel.attempts.map((a) => a.chatId)).size).toBe(100);
+    },
+    120_000,
+  );
 });
 
 describe("slow history reads can't spend the run (S4D-1)", () => {

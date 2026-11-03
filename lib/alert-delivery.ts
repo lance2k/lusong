@@ -24,20 +24,48 @@ export interface DeliveryLimits {
   retryWaitMs: number;
 }
 
-export const DELIVERY_LIMITS: DeliveryLimits = { budgetMs: 45_000, maxSends: 40, chatGapMs: 1_000, maxRetries: 3, retryWaitMs: 60_000 };
+export const DELIVERY_LIMITS: DeliveryLimits = { budgetMs: 55_000, maxSends: 40, chatGapMs: 1_000, maxRetries: 3, retryWaitMs: 60_000 };
 
 /** A send starts only with Telegram's timeout and this margin left of the lease, so it always ends inside it. */
 const LEASE_MARGIN_MS = 500;
-/** No send is started with less than a lease and a store call left of the run. */
+/** Every store call's bound (S4D-8): no call is waited on for longer, nor past the run's working time. */
 const STORE_CALL_MS = 5_000;
+/** Kept at the end of the run for what must still be written: a claim given back, the lease, the cursor. */
+export const CLEANUP_RESERVE_MS = 3 * STORE_CALL_MS;
+/** No send is started with less than a lease and a store call left of the working time. */
+const SEND_START_MS = SEND_LEASE_MS + STORE_CALL_MS;
 /** Watchers whose alert history one store call reads. */
 export const HISTORY_BATCH = 25;
 
-/** The promise's value, or "late" once `ms` have passed; a late read is left to settle on its own. */
-function withinMs<T>(promise: Promise<T>, ms: number): Promise<T | "late"> {
+const LATE = Symbol("late");
+type Late = typeof LATE;
+
+/**
+ * The call's value, or LATE once `ms` have passed; a call with no time at all isn't started. A late call is left to
+ * settle on its own, so whatever it may still write has to be safe to find later.
+ */
+async function within<T>(ms: number, call: () => Promise<T>): Promise<T | Late> {
+  if (ms <= 0) return LATE;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const late = new Promise<"late">((resolve) => (timer = setTimeout(() => resolve("late"), ms)));
-  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+  const late = new Promise<Late>((resolve) => (timer = setTimeout(() => resolve(LATE), ms)));
+  return Promise.race([call(), late]).finally(() => clearTimeout(timer));
+}
+
+/** One run's clock: working store calls end by `workEnd`; cleanup (claims given back, lease, cursor) by `end`. */
+interface RunClock {
+  store<T>(call: () => Promise<T>): Promise<T | Late>;
+  cleanup<T>(call: () => Promise<T>): Promise<T | Late>;
+  workLeft(): number;
+}
+
+function runClock(budgetMs: number): RunClock {
+  const end = Date.now() + budgetMs;
+  const workEnd = end - CLEANUP_RESERVE_MS;
+  return {
+    store: (call) => within(Math.min(STORE_CALL_MS, workEnd - Date.now()), call),
+    cleanup: (call) => within(Math.min(STORE_CALL_MS, end - Date.now()), call),
+    workLeft: () => workEnd - Date.now(),
+  };
 }
 
 export interface DeliveryDeps {
@@ -89,15 +117,21 @@ function fromCursor(watchers: WatchRecord[], cursor: string | null): WatchRecord
 export async function runDelivery(deps: DeliveryDeps): Promise<DeliverySummary> {
   const limits = { ...DELIVERY_LIMITS, ...deps.limits };
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const deadline = Date.now() + limits.budgetMs;
+  const clock = runClock(limits.budgetMs);
   const now = deps.now();
   const summary: DeliverySummary = { ok: true, alerts: 0, pagasaHeld: null, watchers: 0, due: 0, sent: 0, rejected: 0, ambiguous: 0, deferred: 0, unread: 0 };
+  const read = async <T>(what: string, call: () => Promise<T>): Promise<T> => {
+    const value = await clock.store(call);
+    if (value === LATE) throw new Error(`${what}: out of time`);
+    return value;
+  };
 
   // PAGASA's alerts are rebuilt from the snapshot, which has already applied every Update's and Cancel's references.
   try {
-    const snapshot = deps.advisory ? await readStoredSnapshot(deps.advisory) : null;
-    summary.pagasaHeld = deps.advisory ? pagasaUsable(snapshot, now) : "no advisory store";
-    if (snapshot && summary.pagasaHeld === null) await deps.alerts.rebuildPagasa(snapshot.generation, pagasaAlerts(snapshot, now), now.getTime());
+    const advisory = deps.advisory;
+    const snapshot = advisory ? await read("snapshot", () => readStoredSnapshot(advisory)) : null;
+    summary.pagasaHeld = advisory ? pagasaUsable(snapshot, now) : "no advisory store";
+    if (snapshot && summary.pagasaHeld === null) await read("rebuild", () => deps.alerts.rebuildPagasa(snapshot.generation, pagasaAlerts(snapshot, now), now.getTime()));
   } catch (err) {
     summary.pagasaHeld = `store: ${message(err)}`;
   }
@@ -108,10 +142,10 @@ export async function runDelivery(deps: DeliveryDeps): Promise<DeliverySummary> 
   let cursor: string | null;
   try {
     // Lean safe: a PAGASA alert is sent only while the snapshot behind it is complete and fresh.
-    alerts = (await deps.alerts.all(now.getTime())).filter((a) => a.origin !== "pagasa" || summary.pagasaHeld === null);
-    watchers = (await deps.watches.list()).filter((w) => w.chatId !== null && !w.stopping);
-    cursor = await deps.alerts.cursor().catch(() => null);
-    lines = await deps.watches.routes(watchers.map((w) => w.id));
+    alerts = (await read("alerts", () => deps.alerts.all(now.getTime()))).filter((a) => a.origin !== "pagasa" || summary.pagasaHeld === null);
+    watchers = (await read("watchers", () => deps.watches.list())).filter((w) => w.chatId !== null && !w.stopping);
+    cursor = await read("cursor", () => deps.alerts.cursor()).catch(() => null);
+    lines = await read("routes", () => deps.watches.routes(watchers.map((w) => w.id)));
   } catch (err) {
     console.error("alert delivery couldn't read its stores:", message(err));
     return { ...summary, ok: false };
@@ -121,13 +155,14 @@ export async function runDelivery(deps: DeliveryDeps): Promise<DeliverySummary> 
   if (alerts.length === 0 || watchers.length === 0) return summary;
   const lineOf = new Map(watchers.map((w, i) => [w.id, lines[i]]));
 
-  // Each watcher's owed alerts, oldest event first. Histories are read HISTORY_BATCH watchers to a store call, and no
-  // batch starts without a read's timeout and a send's room left, so slow reads can't spend the run (S4D-1).
-  const queues: Owed[][] = [];
+  // HISTORY_BATCH watchers at a time: their histories in one store call, then their sends, then the next batch
+  // (S4D-1, S4D-8). Within a batch, one alert per watcher per round, so each chat's sends are spaced by the others'.
   const ordered = fromCursor(watchers, cursor);
-  let readUpTo: string | null = null;
-  let readStopped = false;
-  for (let start = 0; start < ordered.length; ) {
+  const lastSentAt = new Map<string, number>();
+  let attempted = 0;
+  let reached: string | null = null;
+  let stopped = false;
+  for (let start = 0; start < ordered.length && !stopped; ) {
     const batch: { watcher: WatchRecord; touching: { alert: Alert; areas: string[] }[] }[] = [];
     let next = start;
     for (; next < ordered.length && batch.length < HISTORY_BATCH; next++) {
@@ -140,133 +175,147 @@ export async function runDelivery(deps: DeliveryDeps): Promise<DeliverySummary> 
       if (touching.length > 0) batch.push({ watcher, touching });
     }
     if (batch.length > 0) {
-      const room = deadline - Date.now() - SEND_LEASE_MS - STORE_CALL_MS;
-      if (room < STORE_CALL_MS) {
-        readStopped = true;
+      // A batch is read only when its sends could start after the read.
+      let states: (string | null)[][] | Late = LATE;
+      if (clock.workLeft() >= STORE_CALL_MS + SEND_START_MS) {
+        try {
+          states = await clock.store(() => deps.watches.alertStatesMany(batch.map((b) => ({ id: b.watcher.id, members: b.touching.map((t) => memberOf(t.alert)) }))));
+        } catch (err) {
+          console.error("alert delivery couldn't read the watchers' alert history:", message(err));
+          summary.ok = false;
+        }
+      }
+      if (states === LATE) {
         summary.unread = ordered.length - start;
+        stopped = true;
         break;
       }
-      let states: (string | null)[][] | "late";
-      try {
-        states = await withinMs(
-          deps.watches.alertStatesMany(batch.map((b) => ({ id: b.watcher.id, members: b.touching.map((t) => memberOf(t.alert)) }))),
-          Math.min(room, STORE_CALL_MS),
-        );
-      } catch (err) {
-        console.error("alert delivery couldn't read the watchers' alert history:", message(err));
-        summary.ok = false;
-        states = "late";
+      const read = states;
+      const queues = batch
+        .map((b, i) =>
+          b.touching
+            .map((t, j) => ({ watcher: b.watcher, alert: t.alert, areas: t.areas, prior: read[i][j] }))
+            .filter((o) => o.prior === null || /^retry:/.test(o.prior)),
+        )
+        .filter((q) => q.length > 0);
+      summary.due += queues.reduce((n, q) => n + q.length, 0);
+      for (let round = 0; queues.some((q) => q.length > round); round++) {
+        for (const queue of queues) {
+          const owed = queue[round];
+          if (!owed) continue;
+          if (stopped || attempted >= limits.maxSends || clock.workLeft() < SEND_START_MS) {
+            stopped = true;
+            summary.deferred += 1;
+            continue;
+          }
+          const chatId = owed.watcher.chatId!;
+          const gap = (lastSentAt.get(chatId) ?? -Infinity) + limits.chatGapMs - deps.now().getTime();
+          if (gap > 0) await sleep(gap);
+          attempted += 1;
+          const outcome = await deliverOne(deps, limits, clock, owed);
+          if (outcome === "sent" || outcome === "rejected" || outcome === "ambiguous") lastSentAt.set(chatId, deps.now().getTime());
+          if (outcome === "sent") summary.sent += 1;
+          else if (outcome === "rejected") summary.rejected += 1;
+          else if (outcome === "ambiguous") summary.ambiguous += 1;
+          else if (outcome === "deferred") summary.deferred += 1;
+          else if (outcome === "failed") summary.ok = false;
+          if (round === 0) reached = owed.watcher.id;
+        }
       }
-      if (states === "late") {
-        readStopped = true;
-        summary.unread = ordered.length - start;
-        break;
-      }
-      batch.forEach((b, i) => {
-        const owed = b.touching.filter((_, j) => states[i][j] === null || /^retry:/.test(states[i][j]!)).map((t) => ({ watcher: b.watcher, alert: t.alert, areas: t.areas }));
-        if (owed.length > 0) queues.push(owed);
-      });
     }
-    readUpTo = ordered[next - 1].id;
+    if (!stopped) reached = ordered[next - 1].id;
+    else summary.unread = ordered.length - next;
     start = next;
-  }
-  summary.due = queues.reduce((n, q) => n + q.length, 0);
-
-  // One alert per watcher per round, so a watcher with many alerts doesn't hold up the rest and each chat's sends are
-  // spaced out by everyone else's.
-  const lastSentAt = new Map<string, number>();
-  let attempted = 0;
-  let lastWatcher: string | null = null;
-  let stoppedEarly = false;
-  for (let round = 0; queues.some((q) => q.length > round); round++) {
-    for (const queue of queues) {
-      const owed = queue[round];
-      if (!owed) continue;
-      if (stoppedEarly || attempted >= limits.maxSends || deadline - Date.now() < SEND_LEASE_MS + STORE_CALL_MS) {
-        stoppedEarly = true;
-        summary.deferred += 1;
-        continue;
-      }
-      const chatId = owed.watcher.chatId!;
-      const gap = (lastSentAt.get(chatId) ?? -Infinity) + limits.chatGapMs - deps.now().getTime();
-      if (gap > 0) await sleep(gap);
-      attempted += 1;
-      const outcome = await deliverOne(deps, limits, owed);
-      if (outcome === "sent" || outcome === "rejected" || outcome === "ambiguous") lastSentAt.set(chatId, deps.now().getTime());
-      if (outcome === "sent") summary.sent += 1;
-      else if (outcome === "rejected") summary.rejected += 1;
-      else if (outcome === "ambiguous") summary.ambiguous += 1;
-      else if (outcome === "deferred") summary.deferred += 1;
-      else if (outcome === "failed") summary.ok = false;
-      if (round === 0) lastWatcher = owed.watcher.id;
-    }
   }
   // Where the next run starts: after the last watcher this one reached, or from the beginning once everyone was.
   // A run that reached no one keeps the cursor it started from.
-  const resumeAfter = stoppedEarly ? (lastWatcher ?? cursor) : readStopped ? (readUpTo ?? cursor) : null;
-  await deps.alerts.setCursor(resumeAfter).catch((err) => console.error("alert delivery couldn't save its cursor:", message(err)));
+  const resumeAfter = stopped ? (reached ?? cursor) : null;
+  const saved = await clock.cleanup(() => deps.alerts.setCursor(resumeAfter)).catch((err) => console.error("alert delivery couldn't save its cursor:", message(err)));
+  if (saved === LATE) console.error("alert delivery's cursor write was still pending at the end of the run");
   return summary;
 }
 
 type Outcome = "sent" | "rejected" | "ambiguous" | "deferred" | "skipped" | "failed";
 
-/** One alert to one watcher, under the watcher's send lease, which a switch-off also takes (S4P-1, S4P-2). */
-async function deliverOne(deps: DeliveryDeps, limits: DeliveryLimits, owed: Owed): Promise<Outcome> {
+/**
+ * One alert to one watcher, under the watcher's send lease, which a switch-off also takes (S4P-1, S4P-2). A claim that
+ * isn't followed by a send is given back to the state it was read in, so the next run tries it again (S4D-8).
+ */
+async function deliverOne(deps: DeliveryDeps, limits: DeliveryLimits, clock: RunClock, owed: Owed & { prior: string | null }): Promise<Outcome> {
   const { watcher, alert } = owed;
   const member = memberOf(alert);
-  const leaseAsked = Date.now();
-  let lease: string | null;
+  let lease: string | null | Late;
+  let leaseAsked: number;
   try {
     // S4P-5: a Cancel published since the run began has removed it.
-    if (!(await deps.alerts.isActive(alert.id, alert.version, deps.now().getTime()))) return "skipped";
-    lease = await deps.watches.takeSendLease(watcher.id, SEND_LEASE_MS);
+    const active = await clock.store(() => deps.alerts.isActive(alert.id, alert.version, deps.now().getTime()));
+    if (active === LATE) return "deferred";
+    if (!active) return "skipped";
+    leaseAsked = Date.now();
+    lease = await clock.store(() => deps.watches.takeSendLease(watcher.id, SEND_LEASE_MS));
   } catch (err) {
     console.error("alert delivery store failed before the lease:", message(err));
     return "failed";
   }
-  if (!lease) return "deferred";
+  // A lease that lands late is never released here; it lapses after SEND_LEASE_MS.
+  if (lease === LATE || !lease) return "deferred";
+  const held = lease;
+  const claimAt = deps.now().getTime();
+  const attempt = `attempt:${claimAt}`;
+  const giveBack = async () => {
+    const back = await clock.cleanup(() => deps.watches.settleAlert(watcher.id, member, attempt, owed.prior)).catch(() => LATE);
+    if (back === LATE) console.error("alert delivery couldn't give back an unsent claim in time");
+  };
   try {
     let claim;
     try {
-      claim = await deps.watches.claimAlert(watcher.id, watcher.gen, member, deps.now().getTime(), limits.chatGapMs);
+      claim = await clock.store(() => deps.watches.claimAlert(watcher.id, watcher.gen, member, claimAt, limits.chatGapMs));
     } catch (err) {
       // The claim may have been written: then it is an attempt whose outcome is unknown, never retried.
       console.error("alert delivery store failed on the claim:", message(err));
       return "failed";
     }
+    if (claim === LATE) {
+      // Not sent: the claim, if it landed, is given back.
+      await giveBack();
+      return "deferred";
+    }
     if (!claim.claimed) return claim.why === "soon" ? "deferred" : "skipped";
     if (Date.now() - leaseAsked > SEND_LEASE_MS - SEND_TIMEOUT_MS - LEASE_MARGIN_MS) {
       // Too little of the lease is left for the send to end inside it, where a switch-off waits for it: given back.
-      const restore = claim.tries > 0 ? `retry:${claim.tries}:0` : null;
-      await deps.watches.settleAlert(watcher.id, member, claim.value, restore).catch(() => {});
+      await giveBack();
       return "deferred";
     }
 
     const sent = await deps.channel.send(watcher.chatId!, alertMessage(alert, owed.areas));
+    // After a send the attempt stays unless its outcome is written: one missed message, never a duplicate.
+    const settle = async (next: string) => {
+      if ((await clock.cleanup(() => deps.watches.settleAlert(watcher.id, member, attempt, next))) === LATE) console.error("alert delivery's state write after a send was late; the attempt stays");
+    };
     try {
       if (sent.ok) {
-        await deps.watches.settleAlert(watcher.id, member, claim.value, "sent");
+        await settle("sent");
         return "sent";
       }
       if (!sent.rejected) {
-        await deps.watches.settleAlert(watcher.id, member, claim.value, "ambiguous");
+        await settle("ambiguous");
         return "ambiguous";
       }
       if (sent.permanent) {
-        await deps.watches.remove(watcher.id);
+        await clock.cleanup(() => deps.watches.remove(watcher.id));
         return "rejected";
       }
       const tries = claim.tries + 1;
       const wait = sent.retryAfterS !== undefined ? sent.retryAfterS * 1_000 : limits.retryWaitMs;
-      const next = tries <= limits.maxRetries ? `retry:${tries}:${deps.now().getTime() + wait}` : "rejected";
-      await deps.watches.settleAlert(watcher.id, member, claim.value, next);
+      await settle(tries <= limits.maxRetries ? `retry:${tries}:${deps.now().getTime() + wait}` : "rejected");
       return "rejected";
     } catch (err) {
-      // The `attempt:` stays, which never sends again: after a refusal, one missed message, never a duplicate.
       console.error("alert delivery store failed after sending:", message(err));
       return sent.ok ? "sent" : sent.rejected ? "rejected" : "ambiguous";
     }
   } finally {
-    await deps.watches.releaseSendLease(watcher.id, lease).catch((err) => console.error("alert delivery couldn't release the lease:", message(err)));
+    await clock
+      .cleanup(() => deps.watches.releaseSendLease(watcher.id, held))
+      .catch((err) => console.error("alert delivery couldn't release the lease:", message(err)));
   }
 }
