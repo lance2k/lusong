@@ -1,7 +1,8 @@
+import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { PageAdvisory, PageProduct } from "./commute-result";
-import { Advisory } from "./evidence";
+import type { CommuteResult, PageAdvisory, PageProduct } from "./commute-result";
+import { Advisory, Evidence } from "./evidence";
 
 const PRODUCT: PageProduct = {
   counts: true,
@@ -37,5 +38,22 @@ describe("the advisory card in the evidence (S1's wording, moved)", () => {
   it("with nothing covering the way, the server's note shows", () => {
     const t = text({ state: "none", about: "your way", products: [], warnings: [], incomplete: false, note: "No PAGASA advisory in its feed covers this way right now." });
     expect(t).toContain("No PAGASA advisory in its feed covers this way right now.");
+  });
+});
+
+describe("the sweep's posts in the evidence (S4b)", () => {
+  const reply = JSON.parse(readFileSync("test/fixtures/commute/mabolo-flooded-advisory-active.reply-f52f847.json", "utf8")) as CommuteResult;
+  const render = (r: CommuteResult) =>
+    renderToStaticMarkup(<Evidence result={r} onShowReport={() => {}} onReport={() => {}} />).replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/\s+/g, " ");
+
+  it("are listed as unconfirmed with their source, and leave the answer's evidence as it was", () => {
+    const post = { id: "sweep:1", text: "The Cebu City government reports a road closure at Gorordo Avenue, posted 4 Nov, 9:30 a.m. PHT. Unconfirmed by Lusong.", link: "https://cebucity.gov.ph/a/1" };
+    const t = render({ ...reply, sweepWarnings: [post] });
+    expect(t).toContain("Posts near your way");
+    expect(t).toContain("hasn't confirmed them. They don't change the answer.");
+    expect(t).toContain(post.text);
+    expect(renderToStaticMarkup(<Evidence result={{ ...reply, sweepWarnings: [post] }} onShowReport={() => {}} onReport={() => {}} />)).toContain('href="https://cebucity.gov.ph/a/1"');
+    expect(render({ ...reply, sweepWarnings: [] })).not.toContain("Posts near your way");
+    expect(render(reply)).not.toContain("Posts near your way");
   });
 });
