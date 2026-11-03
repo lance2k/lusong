@@ -15,6 +15,12 @@ export const ALERTS_GENERATION_FIELD = "_pagasa_generation";
 /** The watcher delivery last stopped at, so a cut-off run's successor starts with the watchers it didn't reach. */
 export const DELIVERY_CURSOR_KEY = "lusong:alerts:cursor:v1";
 const DELIVERY_CURSOR_TTL_MS = 24 * 3_600_000;
+/**
+ * A sweep item's first sighting, kept past the item's own pruning (S4D-6): an item found again keeps the time and expiry
+ * it was first seen with, and an expired one stays expired. A sweep page older than 48 hours is refused anyway.
+ */
+export const SEEN_KEY_PREFIX = "lusong:alerts:seen:v1:";
+export const SEEN_TTL_MS = 7 * 24 * 3_600_000;
 
 export type AlertKind = "advisory" | "closure" | "office_post";
 export type AlertOrigin = "pagasa" | "sweep";
@@ -142,7 +148,10 @@ export interface AlertStore {
    * newer generation is already stored.
    */
   rebuildPagasa(generation: number, alerts: readonly Alert[], nowMs: number): Promise<boolean>;
-  /** Adds each alert whose id isn't stored yet; one already stored keeps its first version, time and expiry. */
+  /**
+   * Adds each alert whose id was never seen in the last SEEN_TTL_MS; one seen before keeps its first version, time and
+   * expiry, even after it expired and was pruned.
+   */
   addIfAbsent(alerts: readonly Alert[]): Promise<number>;
   /** Every unexpired alert; expired ones are dropped as they are read. */
   all(nowMs: number): Promise<Alert[]>;
@@ -155,8 +164,10 @@ export interface AlertStore {
 /** For local development and tests only. */
 export class MemoryAlertStore implements AlertStore {
   private alerts = new Map<string, string>();
+  private seen = new Map<string, { eventAt: string; expiresAt: string; until: number }>();
   private generation = -1;
   private savedCursor: string | null = null;
+  constructor(private readonly clock: () => number = Date.now) {}
 
   async rebuildPagasa(generation: number, alerts: readonly Alert[], nowMs: number) {
     if (generation <= this.generation) return false;
@@ -172,7 +183,10 @@ export class MemoryAlertStore implements AlertStore {
   async addIfAbsent(alerts: readonly Alert[]) {
     let added = 0;
     for (const a of alerts) {
-      if (this.alerts.has(a.id)) continue;
+      const seen = this.seen.get(a.id);
+      const fresh = !seen || seen.until <= this.clock();
+      if (fresh) this.seen.set(a.id, { eventAt: a.eventAt, expiresAt: a.expiresAt, until: this.clock() + SEEN_TTL_MS });
+      if (this.alerts.has(a.id) || !fresh) continue;
       this.alerts.set(a.id, JSON.stringify(a));
       added += 1;
     }
@@ -221,6 +235,21 @@ redis.call('HSET', KEYS[1], ARGV[3], ARGV[1])
 return 1
 `;
 
+/** KEYS: alerts hash, then each alert's seen key. ARGV: seen TTL ms, then id, stored form, seen record per alert. */
+const ADD_IF_ABSENT_SCRIPT = `
+local added = 0
+for i = 2, #KEYS do
+  local at = 2 + (i - 2) * 3
+  local stored = redis.call('HEXISTS', KEYS[1], ARGV[at]) == 1
+  local fresh = redis.call('SET', KEYS[i], ARGV[at + 2], 'NX', 'PX', ARGV[1])
+  if fresh and not stored then
+    redis.call('HSET', KEYS[1], ARGV[at], ARGV[at + 1])
+    added = added + 1
+  end
+end
+return added
+`;
+
 /** Stored with its expiry in ms first, so the rebuild script can read it without a JSON parser. */
 function storedForm(a: Alert): string {
   return JSON.stringify({ expiresMs: Date.parse(a.expiresAt), ...a });
@@ -256,9 +285,10 @@ export class UpstashAlertStore implements AlertStore {
   }
 
   async addIfAbsent(alerts: readonly Alert[]) {
-    let added = 0;
-    for (const a of alerts) added += Number(await this.command(["HSETNX", this.key(ALERTS_KEY), a.id, storedForm(a)]));
-    return added;
+    if (alerts.length === 0) return 0;
+    const keys = [this.key(ALERTS_KEY), ...alerts.map((a) => this.key(SEEN_KEY_PREFIX) + a.id)];
+    const args = alerts.flatMap((a) => [a.id, storedForm(a), JSON.stringify({ eventAt: a.eventAt, expiresAt: a.expiresAt })]);
+    return Number(await this.command(["EVAL", ADD_IF_ABSENT_SCRIPT, keys.length, ...keys, SEEN_TTL_MS, ...args]));
   }
 
   async all(nowMs: number) {

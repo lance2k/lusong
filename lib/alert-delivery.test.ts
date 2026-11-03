@@ -7,7 +7,7 @@ import { judgeArea } from "./advisory-geo";
 import { MemoryAdvisoryStore, refreshSnapshot, SNAPSHOT_KEY, type AdvisoryProduct, type AdvisorySnapshot } from "./advisory-snapshot";
 import { DELIVERY_LIMITS, HISTORY_BATCH, runDelivery, type DeliveryDeps } from "./alert-delivery";
 import { corridorFor, simplifyLine, touches } from "./alert-corridor";
-import { alertMessage, MemoryAlertStore, pagasaAlerts, UpstashAlertStore, type Alert, type AlertStore } from "./alerts";
+import { alertMessage, MemoryAlertStore, pagasaAlerts, SEEN_TTL_MS, UpstashAlertStore, type Alert, type AlertStore } from "./alerts";
 import type { Point } from "./answer";
 import type { Channel, SendResult } from "./channel";
 import { MemoryWatchStore, type NewWatcher, type WatchStore, type WatchTrip } from "./watch-store";
@@ -396,6 +396,31 @@ describe.each(alertStores)("the %s", (_name, make) => {
     expect(await store.addIfAbsent([alert("sweep:a", { origin: "sweep" })])).toBe(1);
     expect(await store.addIfAbsent([alert("sweep:a", { origin: "sweep", eventAt: "2026-11-04T09:00:00+08:00", expiresAt: "2026-11-04T21:00:00+08:00" })])).toBe(0);
     expect(await store.all(now)).toEqual([alert("sweep:a", { origin: "sweep" })]);
+  });
+
+  it("an item found again after it expired and was pruned keeps its first lifetime: it stays expired (S4D-6)", async () => {
+    const store = make();
+    expect(await store.addIfAbsent([alert("sweep:b", { origin: "sweep" })])).toBe(1);
+    const afterExpiry = Date.parse("2026-11-04T18:00:00+08:00");
+    expect(await store.all(afterExpiry)).toEqual([]);
+    const later = alert("sweep:b", { origin: "sweep", eventAt: "2026-11-04T17:30:00+08:00", expiresAt: "2026-11-05T05:30:00+08:00" });
+    expect(await store.addIfAbsent([later])).toBe(0);
+    expect(await store.all(afterExpiry)).toEqual([]);
+    expect(await store.isActive("sweep:b", 1, afterExpiry)).toBe(false);
+  });
+});
+
+describe("the seen record is bounded (S4D-6)", () => {
+  it("a week after it was first seen, the same id is new again", async () => {
+    let t = Date.parse(AFTERNOON);
+    const store = new MemoryAlertStore(() => t);
+    expect(await store.addIfAbsent([alert("sweep:c", { origin: "sweep" })])).toBe(1);
+    t += SEEN_TTL_MS - 1;
+    expect(await store.addIfAbsent([alert("sweep:c", { origin: "sweep" })])).toBe(0);
+    await store.all(t);
+    t += 2;
+    const fresh = alert("sweep:c", { origin: "sweep", expiresAt: new Date(t + 3_600_000).toISOString() });
+    expect(await store.addIfAbsent([fresh])).toBe(1);
   });
 });
 
