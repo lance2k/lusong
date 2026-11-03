@@ -475,7 +475,7 @@ export default function Checker() {
       )}
 
       {state.step === "failed" && (
-        <p className="rounded-card border border-wait bg-wait/10 px-5 py-4 font-medium text-ink">
+        <p role="alert" className="rounded-card border border-wait bg-wait/10 px-5 py-4 font-medium text-ink">
           {state.message}
         </p>
       )}

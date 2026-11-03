@@ -49,27 +49,34 @@ export function MapLegend({
           const on = row.available && layers[row.id];
           const inputId = `layer-${row.id}`;
           return (
-            <li key={row.id} className={`flex items-start gap-3 px-4 py-3 ${row.available ? "" : "opacity-70"}`}>
-              <input
-                id={inputId}
-                type="checkbox"
-                role="switch"
-                className="mt-1 h-5 w-5 shrink-0 accent-[var(--brand)]"
-                checked={on}
-                disabled={!row.available}
-                onChange={() => onToggle(row.id)}
-              />
-              <span className="mt-0.5 shrink-0">{row.id === "routes" && row.label !== "Route" ? BOTH_ROUTES_SWATCH : SWATCHES[row.id]}</span>
-              <span className="min-w-0 space-y-0.5">
-                <label htmlFor={inputId} className="block font-semibold">
-                  {row.label}
-                </label>
-                {row.lines.map((line, i) => (
-                  <span key={i} className="block text-small text-ink-2">
-                    {line}
+            <li key={row.id} className={row.available ? "" : "opacity-70"}>
+              {/* The whole row is the switch's label, so the tap target is the row, not a 20 px box. */}
+              <label htmlFor={inputId} className={`flex min-h-11 items-start gap-3 px-4 py-3 ${row.available ? "cursor-pointer" : ""}`}>
+                <input
+                  id={inputId}
+                  type="checkbox"
+                  role="switch"
+                  aria-labelledby={`${inputId}-name`}
+                  aria-describedby={row.lines.length > 0 ? `${inputId}-lines` : undefined}
+                  className="mt-1 h-5 w-5 shrink-0 accent-[var(--brand)]"
+                  checked={on}
+                  disabled={!row.available}
+                  onChange={() => onToggle(row.id)}
+                />
+                <span className="mt-0.5 shrink-0">{row.id === "routes" && row.label !== "Route" ? BOTH_ROUTES_SWATCH : SWATCHES[row.id]}</span>
+                <span className="min-w-0 space-y-0.5">
+                  <span id={`${inputId}-name`} className="block font-semibold">
+                    {row.label}
                   </span>
-                ))}
-              </span>
+                  <span id={`${inputId}-lines`} className="block space-y-0.5">
+                    {row.lines.map((line, i) => (
+                      <span key={i} className="block text-small text-ink-2">
+                        {line}
+                      </span>
+                    ))}
+                  </span>
+                </span>
+              </label>
             </li>
           );
         })}

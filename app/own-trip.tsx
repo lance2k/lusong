@@ -189,8 +189,8 @@ export function OwnTripPanel({ own, onFocusBox, focusSignal }: { own: OwnTrip; o
             <p className="text-ink-2">
               It leaves the phone only inside a check, and Lusong&apos;s server doesn&apos;t keep it unless you switch on the
               watcher below. Place names you type are sent to Lusong&apos;s server and to Photon, komoot&apos;s OpenStreetMap
-              search, to find the place. Words you type in the trip box are sent to Lusong&apos;s server and to Meta&apos;s Model API
-              to read the place names, and those names to Photon. Lusong doesn&apos;t store any of them. To change the trip, search again or tap a new home on the map.
+              search, to find the place. Lusong doesn&apos;t store any of them. What the trip box sends is said beside it. To
+              change the trip, search again or tap a new home on the map.
             </p>
             {!own.kept && (
               <p className="text-warn-ink">This phone wouldn&apos;t store it, so it lasts until you close the page.</p>

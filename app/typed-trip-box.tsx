@@ -9,6 +9,8 @@ import { Button } from "./ui/button";
 export const TYPED_TRIP_LABEL = "Or type your trip";
 export const TYPED_TRIP_EXAMPLE = "Talamban to IT Park, leaving around 7";
 export const USE_THIS_TRIP = "Use this trip";
+/** Why Use this trip is still greyed out (S9). */
+export const PICK_BOTH_LINE = "Pick one place under From and one under To to use this trip.";
 
 export interface ChosenTrip {
   from: Place;
@@ -101,6 +103,7 @@ export function TypedTripView({ state, text, onText, onSend, send, onUse, onFocu
                 Not these
               </Button>
             </div>
+            {!chosen && <p className="text-small text-ink-2">{PICK_BOTH_LINE}</p>}
           </div>
         )}
       </div>

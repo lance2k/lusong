@@ -138,7 +138,7 @@ export function PlaceSearch({ label, chosen, onPick, myLocation, bias, onLocated
           autoComplete="off"
           spellCheck={false}
           maxLength={MAX_QUERY}
-          placeholder={chosen ?? `Search a place in ${TRIP_AREA_NAME}`}
+          placeholder={chosen ?? `Search ${TRIP_AREA_NAME}…`}
           value={shownValue(box, chosen)}
           onFocus={() => {
             send({ type: "focus" });

@@ -1,14 +1,17 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { Role } from "@/lib/answer";
-import { readExifTimeText, withExifTime } from "@/lib/exif";
-import type { ReportView } from "@/lib/report-handler";
+import type { Role } from "../lib/answer";
+import { readExifTimeText, withExifTime } from "../lib/exif";
+import type { ReportView } from "../lib/report-handler";
 import { phoneLocation } from "./phone-location";
 import { photoOutcomeLine } from "./report-outcome";
 
 const MAX_SIDE = 1600;
 const JPEG_QUALITY = 0.85;
+
+/** Said at the commit point: there is no preview step, so the pick itself is the send (S9). */
+export const REPORT_SENDS_LINE = "Taking or choosing a photo sends it at once, with your location.";
 
 type State =
   | { step: "idle" }
@@ -137,6 +140,9 @@ export default function ReportStreet({ shown = true, notify }: { shown?: boolean
       >
         {state.step === "locating" ? "Finding where you are…" : state.step === "reading" ? "Reading the water…" : "Report this street"}
       </button>
+      {(state.step === "idle" || state.step === "done" || state.step === "failed") && (
+        <p className="text-center text-sm text-ink-2">{REPORT_SENDS_LINE}</p>
+      )}
       {state.step === "reading" && (
         <p className="text-center text-ink-2">Finding the water, people and cars… usually about 15 s</p>
       )}

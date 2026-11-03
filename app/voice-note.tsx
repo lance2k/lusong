@@ -187,7 +187,7 @@ export default function VoiceNote({ shown = true, notify }: { shown?: boolean; n
       {state.step === "recording" && <p className="text-center text-ink-2">Recording… it stops by itself at 30 seconds.</p>}
       {state.step === "done" && <Heard report={state.report} duplicate={state.duplicate} />}
       {state.step === "failed" && (
-        <p className="rounded-card border border-wait bg-wait/10 px-5 py-4 font-medium text-ink">
+        <p role="alert" className="rounded-card border border-wait bg-wait/10 px-5 py-4 font-medium text-ink">
           {state.message}
         </p>
       )}
