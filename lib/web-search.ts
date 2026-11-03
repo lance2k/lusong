@@ -271,10 +271,14 @@ function readStored(text: string, area: SearchArea): Stored | null {
   }
 }
 
+/** Why a province's search wasn't started: the check's deadline leaves the search less than the page's check gives it. */
+export const NO_TIME_TO_SEARCH = "too little time in this check to search the web";
+
 /**
  * Decided before admission, since a search changes what the check must reserve. Every step ends by `deadline` (epoch
  * ms) and none starts after it: a step that answers too late is "store unreachable", and a lease or a search
- * reservation that is granted after the deadline is given back in the background.
+ * reservation that is granted after the deadline is given back in the background. With `canSearch` false the stored
+ * result is still read, but no search is planned: no lease is taken and nothing is reserved, so nothing is spent.
  */
 export async function planWebSearch(
   area: SearchArea,
@@ -282,6 +286,7 @@ export async function planWebSearch(
   now: Date,
   searchBudget: Budget,
   deadline = Infinity,
+  canSearch = true,
 ): Promise<WebPlan> {
   if (!store) return { kind: "off", area, why: "no shared store" };
   const unreachable: WebPlan = { kind: "off", area, why: "store unreachable" };
@@ -299,6 +304,7 @@ export async function planWebSearch(
   } catch {
     return unreachable;
   }
+  if (!canSearch) return { kind: "off", area, why: NO_TIME_TO_SEARCH };
   const lease: Lease = { store, key: webSearchLeaseKey(area), token: randomUUID() };
   // Given back on every path; past the deadline it finishes in the background.
   const giveBackInTime = () => beforeDeadline(giveBack(lease), deadline);
@@ -352,8 +358,15 @@ export async function planWebSearch(
 }
 
 /** One plan per province, planned side by side; each holds its own lease and its own search reservation. */
-export function planWebSearches(areas: readonly SearchArea[], store: KvStore | null, now: Date, searchBudget: Budget, deadline = Infinity): Promise<WebPlan[]> {
-  return Promise.all(areas.slice(0, MAX_SEARCH_AREAS).map((area) => planWebSearch(area, store, now, searchBudget, deadline)));
+export function planWebSearches(
+  areas: readonly SearchArea[],
+  store: KvStore | null,
+  now: Date,
+  searchBudget: Budget,
+  deadline = Infinity,
+  canSearch = true,
+): Promise<WebPlan[]> {
+  return Promise.all(areas.slice(0, MAX_SEARCH_AREAS).map((area) => planWebSearch(area, store, now, searchBudget, deadline, canSearch)));
 }
 
 async function giveBack(lease: Lease): Promise<void> {

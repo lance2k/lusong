@@ -10,7 +10,7 @@ import { MemoryReportStore } from "./report-store";
 import { makeValhallaGate, MemorySlotStore, VALHALLA_URL } from "./router";
 import { makeTelegramWebhook, makeTickHandler, makeWatchHandler, sameSecret } from "./watch-handler";
 import { MemoryWatchStore, type WatchStore } from "./watch-store";
-import { runTick, switchOff, TICK_LIMITS, type TickSummary } from "./watch-tick";
+import { runTick, SEND_LEASE_MS, switchOff, TICK_LIMITS, type TickSummary } from "./watch-tick";
 
 const BANILAD = { lat: 10.346, lon: 123.911 };
 const IT_PARK = { lat: 10.3307, lon: 123.9058 };
@@ -257,7 +257,7 @@ describe("POST /api/watch/telegram", () => {
     expect(channel.sent).toEqual([
       {
         chatId: "4242",
-        text: "Linked. Lusong will message you here between 11:00 and 13:00 PHT: once when the window opens, and again whenever the answer changes. To stop, switch the watcher off on Lusong's page; that deletes your trip from Lusong's server.",
+        text: "Linked. Lusong will message you here between 11:00 and 13:00 PHT: once when the window opens, and again whenever the answer changes. Lusong also messages you once for each PAGASA advisory, road closure or disaster-office post it finds that touches or passes near your trip, and for nationwide ones, whatever the window. It tries to send; it can't promise you receive it. To stop, switch the watcher off on Lusong's page; that deletes your trip from Lusong's server.",
       },
     ]);
   });
@@ -347,7 +347,11 @@ describe("POST /api/watch/tick", () => {
     // The route module imports through the "@/" alias, which vitest doesn't resolve, so its limit is read from source.
     const maxDuration = Number(/export const maxDuration = (\d+);/.exec(readFileSync("app/api/watch/tick/route.ts", "utf8"))?.[1]);
     expect(maxDuration).toBe(60);
-    expect(TICK_LIMITS.budgetMs).toBeLessThanOrEqual(maxDuration * 1_000 - 10_000);
+    // 5 s for the response, as the alert sweep and delivery keep under the same 60 s.
+    expect(TICK_LIMITS.budgetMs).toBeLessThanOrEqual(maxDuration * 1_000 - 5_000);
+    // Each check ends with a whole send lease left before the tick's end, so its send fits.
+    expect(TICK_LIMITS.afterCheckMs).toBeGreaterThanOrEqual(SEND_LEASE_MS);
+    expect(TICK_LIMITS.budgetMs - TICK_LIMITS.afterCheckMs).toBeGreaterThanOrEqual(TICK_LIMITS.minCheckMs);
   });
 
   /** Acceptance criterion 4. */

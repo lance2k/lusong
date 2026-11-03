@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type { Trip } from "./trip";
+import { watchWindowFor } from "./typed-trip";
 import { createWatcherStore, switchOnWatcher, watchesTrip, type SavedWatcher, type WatchCall, type WindowInput } from "./watcher";
 
 let store: ReturnType<typeof createWatcherStore> | null = null;
@@ -33,9 +34,14 @@ const button = "min-h-11 rounded-chip border border-line bg-surface px-4 text-sm
 const timeBox = "ml-2 min-h-11 rounded-control border border-line bg-surface px-2 text-ink";
 
 /** The watcher's switch for the rider's own trip: on for a PHT window, linked to Telegram, and off. With no trip set yet, it only says what the watcher does. */
-export function WatcherPanel({ trip }: { trip: Trip | null }) {
+/** The window the time boxes start with: an hour up to a typed trip's leaving time, or 06:00 to 08:00. */
+export function initialHours(leaveAt: string | null): WindowInput {
+  return leaveAt ? watchWindowFor(leaveAt) : { start: "06:00", end: "08:00" };
+}
+
+export function WatcherPanel({ trip, leaveAt = null }: { trip: Trip | null; leaveAt?: string | null }) {
   const watcher = useSyncExternalStore(subscribe, savedWatcher, () => null);
-  const [hours, setHours] = useState<WindowInput>({ start: "06:00", end: "08:00" });
+  const [hours, setHours] = useState<WindowInput>(() => initialHours(leaveAt));
   const [status, setStatus] = useState<Status>("unknown");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -111,7 +117,10 @@ export function WatcherPanel({ trip }: { trip: Trip | null }) {
         <>
           <p className="text-ink-2">
             Lusong checks this trip every 10 minutes in your window and messages you when the window opens and whenever the
-            answer changes. It checks as if you hadn&apos;t tapped &ldquo;raining here&rdquo;.
+            answer changes. It checks as if you hadn&apos;t tapped &ldquo;raining here&rdquo;. Lusong also messages you once
+            for each PAGASA advisory, road closure or disaster-office post it finds that touches or passes near your trip,
+            and for nationwide ones, whatever the window.
+            It tries to send; it can&apos;t promise you receive it.
           </p>
           {trip && (
           <>

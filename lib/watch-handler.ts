@@ -204,7 +204,7 @@ export function makeTelegramWebhook(deps: {
     const { start: from, end: to } = windowForPage(watcher.window);
     await channel.send(
       chat,
-      `Linked. Lusong will message you here between ${from} and ${to} PHT: once when the window opens, and again whenever the answer changes. To stop, switch the watcher off on Lusong's page; that deletes your trip from Lusong's server.`,
+      `Linked. Lusong will message you here between ${from} and ${to} PHT: once when the window opens, and again whenever the answer changes. Lusong also messages you once for each PAGASA advisory, road closure or disaster-office post it finds that touches or passes near your trip, and for nationwide ones, whatever the window. It tries to send; it can't promise you receive it. To stop, switch the watcher off on Lusong's page; that deletes your trip from Lusong's server.`,
     );
     return Response.json({ ok: true });
   };
@@ -228,11 +228,14 @@ export function makeTickHandler(deps: { secret: () => string | undefined; tick: 
 }
 
 /** The tick as deployed: the store and Telegram from the environment, and the real commute check of each trip. */
-export function tickFromEnv(check: (trip: WatchTrip, opts: { deadline: number }) => Promise<ScheduledCheck>) {
+export function tickFromEnv(
+  check: (trip: WatchTrip, opts: { deadline: number }) => Promise<ScheduledCheck>,
+  settleLater?: (work: Promise<unknown>) => void,
+) {
   return async (pageUrl: string): Promise<TickSummary | null> => {
     const store = watchStoreFromEnv();
     const channel = channelFromEnv();
     if (!store || !channel) return null;
-    return runTick({ store, channel, check, now: () => new Date(), pageUrl });
+    return runTick({ store, channel, check, now: () => new Date(), pageUrl, settleLater });
   };
 }

@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { MemoryAlertStore, type Alert, type AlertStore } from "./alerts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FEED_URL } from "./advisory";
 import { createBudget, MemoryBudgetStore, type Budget, type BudgetStore } from "./budget";
@@ -163,6 +164,7 @@ function handlerAt(
   reports: ReportStore | null = new MemoryReportStore(),
   muse: MuseDeps = MUSE_OFF,
   timing?: Partial<CommuteTiming>,
+  alerts: AlertStore | null = null,
 ) {
   const net = network(opts);
   const gate = makeValhallaGate(store);
@@ -174,6 +176,7 @@ function handlerAt(
     reports: () => reports,
     muse,
     timing: timing && { ...COMMUTE_TIMING, ...timing },
+    alertStore: () => alerts,
   });
   return { handler, checkTrip, ...net };
 }
@@ -1357,7 +1360,7 @@ describe("Muse Spark in a real check (#6 with #7)", () => {
   });
 
   describe("a scheduled check of a stored trip runs the same investigation (#10 with #7)", () => {
-    it("reserves what the page's check reserves, reads the stored report through reports_near_route, and gives back the answer's kind alone", async () => {
+    it("reserves what the page's check reserves, reads the stored report through reports_near_route, and gives back the answer's kind and the plain route's line alone", async () => {
       const store = new MemoryReportStore();
       const flooded = storedReport(NO_ADVISORY);
       await seedReport(store, flooded);
@@ -1368,14 +1371,40 @@ describe("Muse Spark in a real check (#6 with #7)", () => {
       const { admits, settles, budget } = watched();
       const { checkTrip } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), budget, store, museOn());
 
-      const result = await checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: Date.now() + 60_000 });
+      // The page's whole deadline and its settle: the web search gets the page check's share of it.
+      const result = await checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: Date.now() + COMMUTE_TIMING.deadlineMs + COMMUTE_TIMING.storeCallMs + 1_000 });
 
-      expect(result).toEqual({ ok: true, kind: "go_another_way" });
+      expect(result).toEqual({ ok: true, kind: "go_another_way", line: expect.any(Array) });
       expect(admits).toEqual([COMMUTE_RESERVE_MICROS + investigationReserveMicros({ kind: "search" })]);
       expect(settles).toEqual([true]);
       const toolOutput = JSON.parse((meta.requests[1].input as { output: string }[])[0].output);
       expect(toolOutput.reports.map((r: { id: string }) => r.id)).toEqual([flooded.id]);
       expect(meta.searchRequests).toHaveLength(1);
+    });
+
+    it("one given less than the page's deadline starts no web search, so none is cut off and paid for: nothing is reserved for one, and the answer still comes (#26)", async () => {
+      const store = new MemoryReportStore();
+      const flooded = storedReport(NO_ADVISORY);
+      await seedReport(store, flooded);
+      const meta = fakeMeta({
+        search: [searchReply(closures)],
+        turns: [callsReply("resp_1", [{ name: "reports_near_route", args: { route: "plain" } }]), textReply("resp_2", pickOf("go_another_way", [flooded.id, "detour"]))],
+      });
+      const { admits, settles, budget } = watched();
+      const kv = new MemoryKvStore();
+      const searchBudget = roomy();
+      const searchAdmit = vi.spyOn(searchBudget, "admit");
+      const { checkTrip } = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), budget, store, museOn(kv, searchBudget));
+
+      // What a watcher tick gives its first trip: the checks' end, 45 s in.
+      const result = await checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: Date.now() + 45_000 });
+
+      expect(result).toEqual({ ok: true, kind: "go_another_way", line: expect.any(Array) });
+      expect(meta.searchRequests).toHaveLength(0);
+      expect(searchAdmit).not.toHaveBeenCalled();
+      expect(await kv.get(webSearchLeaseKey(CEBU_AREA))).toBeNull();
+      expect(admits).toEqual([COMMUTE_RESERVE_MICROS + investigationReserveMicros({ kind: "cached" })]);
+      expect(settles).toEqual([true]);
     });
 
     it("one whose web search and model never answer ends by the caller's deadline, settle included, as the page's check would: out of time for a way around", async () => {
@@ -1835,7 +1864,7 @@ describe("a scheduled check of a stored trip (#10's watcher)", () => {
     const budget = openBudget();
     const admit = vi.spyOn(budget, "admit");
     const { checkTrip } = scheduledAt(NO_ADVISORY, budget);
-    expect(await checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: Date.now() + 20_000 })).toEqual({ ok: true, kind: "go" });
+    expect(await checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: Date.now() + 20_000 })).toEqual({ ok: true, kind: "go", line: expect.any(Array) });
     expect(admit).toHaveBeenCalledTimes(1);
     expect(admit.mock.calls[0][0]).toBeNull();
     expect(admit.mock.calls[0][2]).toBe(COMMUTE_RESERVE_MICROS);
@@ -1849,7 +1878,7 @@ describe("a scheduled check of a stored trip (#10's watcher)", () => {
     const noAddress = () => new Request("http://localhost/api/commute", { method: "POST", body: JSON.stringify({ mode: "real", from: BANILAD, to: IT_PARK }) });
     expect((await check.POST(noAddress())).status).toBe(200);
     expect((await check.POST(noAddress())).status).toBe(429);
-    expect(await check.checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: Date.now() + 20_000 })).toEqual({ ok: true, kind: "go" });
+    expect(await check.checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: Date.now() + 20_000 })).toEqual({ ok: true, kind: "go", line: expect.any(Array) });
   });
 
   it("gives no answer when the daily cap refuses it", async () => {
@@ -2161,8 +2190,9 @@ describe("nationwide trips (S1)", () => {
 describe("advisory areas for the map (S1, for S3a's layer)", () => {
   it("adds advisoryAreas from PAGASA's own record and leaves every other field of the reply as it was", async () => {
     const { handler } = handlerAt(ADVISORY_ACTIVE);
-    const { advisoryAreas, ...rest } = await (await handler(demo("mabolo-cbp", "flooded"))).json();
-    // The whole reply, saved from the merge commit before advisoryAreas existed.
+    const { advisoryAreas, sweepWarnings, ...rest } = await (await handler(demo("mabolo-cbp", "flooded"))).json();
+    // The whole reply, saved from the merge commit before advisoryAreas existed; S4's sweepWarnings are empty on a demo.
+    expect(sweepWarnings).toEqual([]);
     expect(rest).toEqual(JSON.parse(read("test/fixtures/commute/mabolo-flooded-advisory-active.reply-f52f847.json")));
     expect(advisoryAreas).toEqual(JSON.parse(read("test/fixtures/commute/mabolo-flooded-advisory-active.advisory-areas.json")));
     expect(advisoryAreas[0]).toMatchObject({ kind: "General Flood Advisory (Moderate)", headline: "General Flood Advisory", sent: "2026-10-25T17:27:04+08:00" });
@@ -2171,5 +2201,47 @@ describe("advisory areas for the map (S1, for S3a's layer)", () => {
   it("with no live advisory, advisoryAreas is empty", async () => {
     const { handler } = handlerAt(NO_ADVISORY);
     expect((await (await handler(demo("mabolo-cbp", "flooded"))).json()).advisoryAreas).toEqual([]);
+  });
+});
+
+describe("sweep items never change an answer while SWEEP_BLOCKING is false (S4P-10, ledger #4/#10)", () => {
+  /** A sweep item marked "block" at a spot on the plain route, as an opened gate would make it. */
+  function blockingItem(at: Date): Alert {
+    return {
+      id: "sweep:on-route",
+      version: 1,
+      kind: "office_post",
+      scope: { point: { lat: 10.3399, lon: 123.9085 }, radiusM: 500 },
+      sourceUrl: "https://cebucity.gov.ph/advisories/1",
+      sourceOrg: "the Cebu City government",
+      eventAt: new Date(at.getTime() - 3_600_000).toISOString(),
+      expiresAt: new Date(at.getTime() + 3_600_000).toISOString(),
+      severity: "block",
+      origin: "sweep",
+      fields: { place: "Gorordo Avenue, Lahug, Cebu City", posted: new Date(at.getTime() - 3_600_000).toISOString(), words: "closure" },
+    };
+  }
+
+  it("the page's check and the watcher's check answer the same with and without it; the page shows it as a warning", async () => {
+    const without = handlerAt(NO_ADVISORY);
+    const alerts = new MemoryAlertStore();
+    await alerts.addIfAbsent([blockingItem(NO_ADVISORY)]);
+    const withItem = handlerAt(NO_ADVISORY, {}, new MemorySlotStore(), openBudget(), new MemoryReportStore(), MUSE_OFF, undefined, alerts);
+    const plain = await (await without.handler(real())).json();
+    const shown = await (await withItem.handler(real())).json();
+    expect(shown.answer).toEqual(plain.answer);
+    expect(shown.advisory).toEqual(plain.advisory);
+    expect(plain.sweepWarnings).toEqual([]);
+    expect(shown.sweepWarnings).toEqual([
+      {
+        id: "sweep:on-route",
+        text: "The Cebu City government reports a road closure at Gorordo Avenue, Lahug, Cebu City, posted 29 Oct, 11:00 a.m. PHT. Unconfirmed by Lusong.",
+        link: "https://cebucity.gov.ph/advisories/1",
+      },
+    ]);
+    const watched = await withItem.checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: Date.now() + 20_000 });
+    const unwatched = await without.checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: Date.now() + 20_000 });
+    expect(watched).toMatchObject({ ok: true, kind: plain.answer.kind });
+    expect(unwatched).toMatchObject({ ok: true, kind: plain.answer.kind });
   });
 });

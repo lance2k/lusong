@@ -44,8 +44,8 @@ export function CheckView() {
   );
 }
 
-export function WatchView({ trip }: { trip: Trip | null }) {
-  return <WatcherPanel trip={trip} />;
+export function WatchView({ trip, leaveAt }: { trip: Trip | null; leaveAt: string | null }) {
+  return <WatcherPanel trip={trip} leaveAt={leaveAt} />;
 }
 
 export function AboutView() {

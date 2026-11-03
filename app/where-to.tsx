@@ -3,7 +3,9 @@
 import { DEMO_TRIPS, SCENARIOS, scenariosFor, type DemoTripId } from "../lib/samples";
 import { OWN_TRIP, type CommuteInputs } from "./commute-state";
 import { SAMPLES_LINE } from "./credits";
+import { leavingLine } from "../lib/trip-text-words";
 import { OwnTripPanel, type OwnTrip } from "./own-trip";
+import { TypedTripBox, type ChosenTrip } from "./typed-trip-box";
 import { Button } from "./ui/button";
 import { Chip, ChipGroup } from "./ui/chip";
 import { IconRain, IconTick } from "./ui/icons";
@@ -52,7 +54,13 @@ export interface WhereToProps {
   collapsed: boolean;
   onExpand: () => void;
   summary: string | null;
+  /** Fills From and To from a typed trip the rider confirmed; false when it changed nothing. */
+  onUseTypedTrip: (trip: ChosenTrip) => boolean;
+  /** The typed trip's leaving time, while the trip is still the one it came with. */
+  leaveAt: string | null;
 }
+
+export const LEAVE_AT_WATCHER_LINE = "If you switch on the watcher, its window starts an hour before.";
 
 export function WhereTo(p: WhereToProps) {
   const { inputs, own } = p;
@@ -80,7 +88,13 @@ export function WhereTo(p: WhereToProps) {
           />
           {ownTrip && (
             <>
+              <TypedTripBox onUse={p.onUseTypedTrip} onFocusBox={p.onFocusBox} />
               <OwnTripPanel own={own} onFocusBox={p.onFocusBox} focusSignal={p.focusSignal} />
+              {own.draft.step === "set" && p.leaveAt && (
+                <p className="text-[15px]">
+                  {leavingLine(p.leaveAt)}. {LEAVE_AT_WATCHER_LINE}
+                </p>
+              )}
               {own.draft.step === "set" && (
                 <Button look="outline" onClick={p.onOpenWatcher}>
                   Watcher on Telegram

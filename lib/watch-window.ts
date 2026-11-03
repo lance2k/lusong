@@ -35,6 +35,11 @@ export function phtDay(now: Date): string {
   return phtParts(now).day;
 }
 
+/** Epoch ms of the window's opening on `now`'s PHT day. */
+export function windowOpensAt(window: WatchWindow, now: Date): number {
+  return Date.parse(`${phtDay(now)}T00:00:00Z`) - PHT_OFFSET_MS + window.startMin * 60_000;
+}
+
 export function inWindow(window: WatchWindow, now: Date): boolean {
   const { minute } = phtParts(now);
   return minute >= window.startMin && minute < window.endMin;

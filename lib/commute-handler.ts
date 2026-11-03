@@ -12,6 +12,8 @@ import {
 } from "./advisory-snapshot";
 import { placeOnRoute, ROUTE_CORRIDOR_M, type AnswerKind, type Point, type Report } from "./answer";
 import { budgetFromEnv, type Budget } from "./budget";
+import { sweepWarningsAlong } from "./sweep-warnings";
+import { alertStoreFromEnv, type AlertStore } from "./alerts";
 import { clientIp } from "./check-handler";
 import { boxAround, lineForTrip } from "./detour";
 import { ageWords, depthWords, MMDA_CREDIT, passabilityLine, phtTime, voiceDepthWords, voicePassabilityLine } from "./commute-words";
@@ -304,10 +306,13 @@ type CommuteDeps = {
   timing?: CommuteTiming;
   /** The shared store holding PAGASA's snapshot; without one, each handler keeps its own in memory. */
   advisoryStore?: () => AdvisoryStore | null;
+  /** The sweep's items, shown as warnings beside the answer and never deciding it (lib/sweep-warnings.ts). */
+  alertStore?: () => AlertStore | null;
 };
 
 /** What a scheduled check learns: the answer's kind, or the HTTP status a page would have been given instead. */
-export type ScheduledCheck = { ok: true; kind: AnswerKind } | { ok: false; status: number };
+/** `line`: the plain route's line, which the watcher keeps as its alert corridor (lib/alert-corridor.ts). */
+export type ScheduledCheck = { ok: true; kind: AnswerKind; line?: Point[] } | { ok: false; status: number };
 
 /**
  * POST /api/commute. A demo check uses its trip's sample reports and never reads the report store; a real check uses
@@ -378,24 +383,36 @@ export function makeCommuteCheck(deps: CommuteDeps) {
     const realTrip = demo ? null : parseReal(parsed);
     if (realTrip === "too_far") return Response.json({ error: TOO_FAR_MESSAGE, routing: "too_far" }, { status: 400 });
     if (!demo && !realTrip) return fail(400, `Send a demo trip, or a real trip whose start and end are both in ${TRIP_AREA_NAME}.`);
-    return admitted(demo ? { demo } : { real: realTrip! }, clientIp(request), deadline);
+    return admitted(demo ? { demo } : { real: realTrip! }, clientIp(request), deadline, true);
   }
 
   async function checkTrip(trip: { from: Point; to: Point }, opts: { deadline: number }): Promise<ScheduledCheck> {
     const real = parseReal({ mode: "real", from: trip.from, to: trip.to });
     if (!real || real === "too_far") return { ok: false, status: 400 };
     // The caller's deadline bounds the settle too, so the check's own deadline is one store call earlier.
-    const response = await admitted({ real }, null, Math.min(opts.deadline - timing.storeCallMs, Date.now() + timing.deadlineMs));
+    const startedAt = Date.now();
+    const deadline = Math.min(opts.deadline - timing.storeCallMs, startedAt + timing.deadlineMs);
+    // The search's cut-off is taken back from the deadline, so with less than the page's whole deadline a search would
+    // have less time than the page's check gives it, and could be cut off and still paid for (#26): it isn't started.
+    const response = await admitted({ real }, null, deadline, deadline - startedAt >= timing.deadlineMs);
     if (!response.ok) return { ok: false, status: response.status };
-    const kind = ((await response.json()) as { answer?: { kind?: unknown } }).answer?.kind;
-    return typeof kind === "string" && Object.hasOwn(TITLES, kind) ? { ok: true, kind: kind as AnswerKind } : { ok: false, status: 500 };
+    const body = (await response.json()) as { answer?: { kind?: unknown }; route?: { line?: unknown } };
+    const kind = body.answer?.kind;
+    const line = Array.isArray(body.route?.line) ? (body.route.line as Point[]) : undefined;
+    return typeof kind === "string" && Object.hasOwn(TITLES, kind) ? { ok: true, kind: kind as AnswerKind, ...(line ? { line } : {}) } : { ok: false, status: 500 };
   }
 
   /**
    * The check after its request is read, for the page and the watcher alike. `deadline` is epoch ms: every step ends by
-   * it, held in the one CheckRun every step reads; only the settle runs past it, cut off at settleBy.
+   * it, held in the one CheckRun every step reads; only the settle runs past it, cut off at settleBy. With `canSearch`
+   * false, a province's stored search is still used, but no search is planned or reserved for.
    */
-  async function admitted(check: { demo: DemoRequest } | { real: RealRequest }, ip: string | null, deadline: number): Promise<Response> {
+  async function admitted(
+    check: { demo: DemoRequest } | { real: RealRequest },
+    ip: string | null,
+    deadline: number,
+    canSearch: boolean,
+  ): Promise<Response> {
     const settleBy = deadline + timing.storeCallMs;
     const at = now();
     const museDeps = muse();
@@ -403,7 +420,7 @@ export function makeCommuteCheck(deps: CommuteDeps) {
     // Planned from the trip's ends, not its route, so the searches run beside the routing.
     const areas = museDeps.enabled ? searchAreasFor(ends.from, ends.to) : [];
     const plans: WebPlan[] = museDeps.enabled
-      ? await planWebSearches(areas, museDeps.searchStore(), at, museDeps.searchBudget(), deadline)
+      ? await planWebSearches(areas, museDeps.searchStore(), at, museDeps.searchBudget(), deadline, canSearch)
       : [{ kind: "off", area: null, why: "Muse Spark is off" }];
     if (Date.now() >= deadline) {
       // Planning took the whole deadline, so nothing is reserved; a search it planned is given back.
@@ -524,6 +541,9 @@ export function makeCommuteCheck(deps: CommuteDeps) {
     // The search ends early enough to leave a way around and the model's pick their time.
     const searchDeadline = run.deadline - timing.routeWorstMs - timing.modelRoomMs;
     run.searched = true;
+    // A demo shows its sample reports only, so the sweep's real-world items are left out of it.
+    const sweepStore = check.demo ? null : (deps.alertStore ?? alertStoreFromEnv)();
+    const sweepAlerts = sweepStore ? sweepStore.all(at.getTime()).catch(() => []) : Promise.resolve([]);
     const [advisory, routed, webParts] = await Promise.all([
       beforeDeadline(advisoryAt(at, run.deadline), run.deadline),
       check.plain(),
@@ -638,6 +658,7 @@ export function makeCommuteCheck(deps: CommuteDeps) {
       },
       advisory: advisoryForPage(result.advisory, answer.route),
       advisoryAreas: advisoryAreasFor(advisory, judgedLines.map((l) => l.line), at),
+      sweepWarnings: sweepWarningsAlong(await beforeDeadline(sweepAlerts, run.deadline + timing.storeCallMs), [plainLine, ...(shown ? [shown.line] : [])]),
       reports: sent,
       muse: {
         pick: pickForPage(result, { now: at, advisory: result.advisory, rainingHere: check.rainingHere, pickable }),
