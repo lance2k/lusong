@@ -2164,8 +2164,9 @@ describe("nationwide trips (S1)", () => {
 describe("advisory areas for the map (S1, for S3a's layer)", () => {
   it("adds advisoryAreas from PAGASA's own record and leaves every other field of the reply as it was", async () => {
     const { handler } = handlerAt(ADVISORY_ACTIVE);
-    const { advisoryAreas, ...rest } = await (await handler(demo("mabolo-cbp", "flooded"))).json();
-    // The whole reply, saved from the merge commit before advisoryAreas existed.
+    const { advisoryAreas, sweepWarnings, ...rest } = await (await handler(demo("mabolo-cbp", "flooded"))).json();
+    // The whole reply, saved from the merge commit before advisoryAreas existed; S4's sweepWarnings are empty on a demo.
+    expect(sweepWarnings).toEqual([]);
     expect(rest).toEqual(JSON.parse(read("test/fixtures/commute/mabolo-flooded-advisory-active.reply-f52f847.json")));
     expect(advisoryAreas).toEqual(JSON.parse(read("test/fixtures/commute/mabolo-flooded-advisory-active.advisory-areas.json")));
     expect(advisoryAreas[0]).toMatchObject({ kind: "General Flood Advisory (Moderate)", headline: "General Flood Advisory", sent: "2026-10-25T17:27:04+08:00" });

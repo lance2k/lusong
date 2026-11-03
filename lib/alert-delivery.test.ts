@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { CAGAYAN_GFA4, CAGAYAN_GFA4_CANCEL, CAGAYAN_GFA4_REISSUED, ALL_SAVED, feedOf } from "../test/pagasa-fixtures";
 import { watchStores } from "../test/watch-stores";
 import { FEED_URL } from "./advisory";
+import { judgeArea } from "./advisory-geo";
 import { MemoryAdvisoryStore, refreshSnapshot, SNAPSHOT_KEY, type AdvisoryProduct, type AdvisorySnapshot } from "./advisory-snapshot";
 import { DELIVERY_LIMITS, runDelivery, type DeliveryDeps } from "./alert-delivery";
 import { corridorFor, simplifyLine, touches } from "./alert-corridor";
@@ -233,6 +234,46 @@ describe("alert delivery: who gets what (ledger #7)", () => {
     expect(await t.deliver()).toMatchObject({ sent: 0, pagasaHeld: "feed: fetch failed" });
     await publish(t.advisory, snapshotOf([product("p1", CEBU_AREA, SENT_AM, UNTIL_PM)], AFTERNOON, Date.parse(AFTERNOON) + 5));
     expect(await t.deliver()).toMatchObject({ sent: 1, pagasaHeld: null });
+  });
+
+  it("PAGASA alerts are held once a record the snapshot couldn't apply yet comes due (pendingAt), as a check reads it", async () => {
+    const t = setup();
+    await linked(t.watches, "w1", CEBU_TRIP);
+    const pending = { ...snapshotOf([product("p1", CEBU_AREA, SENT_AM, UNTIL_PM)], AFTERNOON), pendingAt: "2026-11-04T14:05:00+08:00" };
+    await publish(t.advisory, pending);
+    t.clock.set("2026-11-04T14:05:00+08:00");
+    expect(await t.deliver()).toMatchObject({ sent: 0, pagasaHeld: expect.stringContaining("came due after the snapshot") });
+    t.clock.set(AFTERNOON);
+    expect(await t.deliver()).toMatchObject({ sent: 1, pagasaHeld: null });
+  });
+});
+
+describe("Metro Manila is one area (S1): a district's alert reaches every Metro Manila trip", () => {
+  // Binondo to Ermita, all inside the City of Manila (the First District); the alerts name the Second District.
+  const MANILA_TRIP: WatchTrip = { from: { lat: 14.5995, lon: 120.9842 }, to: { lat: 14.5826, lon: 120.9787 } };
+  const SECOND_DISTRICT = { desc: "NCR, Second District", polygons: [], geocodes: ["137400000"] };
+
+  it("a PAGASA advisory for the Second District is sent to a watcher whose stored line stays in Manila; not to Cebu", async () => {
+    const t = setup();
+    await linked(t.watches, "manila", MANILA_TRIP);
+    await linked(t.watches, "cebu", CEBU_TRIP);
+    expect(await t.watches.saveRoute("manila", "g1", [MANILA_TRIP.from, MANILA_TRIP.to])).toBe(true);
+    await publish(t.advisory, snapshotOf([product("ncr2", SECOND_DISTRICT, SENT_AM, UNTIL_PM)], AFTERNOON));
+    expect(await t.deliver()).toMatchObject({ sent: 1, pagasaHeld: null });
+    expect(t.channel.attempts.map((a) => a.chatId)).toEqual(["chat-manila"]);
+  });
+
+  it("the district alone would miss the trip; the Metro Manila area is what makes it touch, by geocode, name or sweep codes", () => {
+    const corridor = corridorFor(MANILA_TRIP, [MANILA_TRIP.from, MANILA_TRIP.to]);
+    expect(judgeArea(SECOND_DISTRICT, corridor.kind === "line" ? corridor.line : [])).toBe("outside");
+    expect(touches(alert("ncr2", { scope: { areas: [SECOND_DISTRICT] } }), corridor).touches).toBe(true);
+    expect(touches(alert("ncr4", { scope: { areas: [{ desc: "NCR, Fourth District", polygons: [], geocodes: ["137600000"] }] } }), corridor).touches).toBe(true);
+    expect(touches(alert("by-name", { scope: { areas: [{ desc: "Metro Manila", polygons: [], geocodes: [] }] } }), corridor).touches).toBe(true);
+    expect(touches(alert("sweep", { scope: { codes: ["1307400000"] } }), corridor).touches).toBe(true);
+    expect(touches(alert("sweep-mm", { scope: { codes: ["1300000000"] } }), corridor).touches).toBe(true);
+    const cebu = corridorFor(CEBU_TRIP, [BANILAD, IT_PARK]);
+    expect(touches(alert("ncr2", { scope: { areas: [SECOND_DISTRICT] } }), cebu).touches).toBe(false);
+    expect(touches(alert("sweep", { scope: { codes: ["1307400000"] } }), cebu).touches).toBe(false);
   });
 });
 

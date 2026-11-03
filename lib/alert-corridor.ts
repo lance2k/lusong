@@ -1,6 +1,7 @@
-import { judgeArea, provincesAlong, type CapArea } from "./advisory-geo";
+import { boundOfGeocode, boundOfName, judgeArea, type AreaBound, type CapArea } from "./advisory-geo";
 import type { Alert } from "./alerts";
 import { placeOnRoute, type Point } from "./answer";
+import { provinceIndex } from "./province-index";
 import type { WatchTrip } from "./watch-store";
 
 /**
@@ -28,10 +29,23 @@ export type Corridor =
   | { kind: "line"; line: Point[]; bufferM: number; provinces: () => Set<string> }
   | { kind: "box"; box: Box; sweep: Point[]; provinces: () => Set<string> };
 
+export const METRO_MANILA_CODE = "1300000000";
+
+/** A province code as the province index names it: Metro Manila's four districts are one area (lib/province-index.ts). */
+export function areaCode(code: string): string {
+  return code.startsWith("13") ? METRO_MANILA_CODE : code;
+}
+
 /** Placing every point of a line is the costly part, so it is done once, and only for an alert scoped by province. */
 function provincesOnce(line: readonly Point[]): () => Set<string> {
   let codes: Set<string> | null = null;
-  return () => (codes ??= new Set(provincesAlong(line).map((p) => p.code)));
+  return () => (codes ??= new Set(provinceIndex().provincesAlong(line).map((p) => areaCode(p.code))));
+}
+
+/** True when the area's geocodes or name bound it by a Metro Manila district. */
+function namesMetroManila(area: CapArea): boolean {
+  const bounds = [...area.geocodes.map(boundOfGeocode), boundOfName(area.desc)];
+  return bounds.some((b: AreaBound | null) => b?.kind === "provinces" && b.codes.some((c) => areaCode(c) === METRO_MANILA_CODE));
 }
 
 function grow(box: Box, m: number): Box {
@@ -117,6 +131,8 @@ function areaTouches(area: CapArea, corridor: Corridor): boolean {
   const judged = judgeArea(area, line);
   // An area nothing can place is a warning on every check (S1); lean safe, every rider hears of it.
   if (judged === "covers" || judged === "unbounded") return true;
+  // A rider knows Metro Manila as one place, so a district's alert reaches every Metro Manila trip (lean safe: wider).
+  if (namesMetroManila(area) && corridor.provinces().has(METRO_MANILA_CODE)) return true;
   if (corridor.kind === "line") return area.polygons.some((ring) => ringNear(corridor.line, ring, corridor.bufferM));
   // The box's rows can pass either side of a small polygon, so any polygon whose box overlaps it counts.
   return area.polygons.some((ring) => boxesOverlap(ringBox(ring), corridor.box));
@@ -145,7 +161,7 @@ export function touches(alert: Alert, corridor: Corridor): { touches: boolean; a
     const areas = [...new Set(scope.areas.filter((a) => areaTouches(a, corridor)).map((a) => a.desc))];
     return { touches: areas.length > 0, areas };
   }
-  if ("codes" in scope) return { touches: scope.codes.some((c) => corridor.provinces().has(c)), areas: [] };
+  if ("codes" in scope) return { touches: scope.codes.some((c) => corridor.provinces().has(areaCode(c))), areas: [] };
   if (corridor.kind === "line") return { touches: placeOnRoute(scope.point, corridor.line).offM <= scope.radiusM + corridor.bufferM, areas: [] };
   const box = grow(corridor.box, scope.radiusM);
   const p = scope.point;

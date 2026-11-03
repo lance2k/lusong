@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
-import { allProvinces, boundOfName, provinceOf } from "./advisory-geo";
+import { allProvinces, boundOfName } from "./advisory-geo";
+import { areaCode } from "./alert-corridor";
 import type { Alert } from "./alerts";
 import { distanceM, type Point } from "./answer";
 import type { Place } from "./built-in-places";
+import { provinceIndex } from "./province-index";
 import { robotsAllow, type SafeFetchResult } from "./safe-fetch";
 
 /**
@@ -262,9 +264,10 @@ export async function admitCandidate(c: Candidate, deps: AdmitDeps & { robots: (
 
   const found = await deps.geocode(`${place}, ${c.province}`);
   if (found.status === "unavailable") return { outcome: "retry", why: "the geocoder is busy" };
+  const areas = [...new Set(bound.codes.map(areaCode))];
   const inside = found.places.filter((p) => {
-    const province = provinceOf(p);
-    return province !== null && bound.codes.includes(province.code);
+    const province = provinceIndex().provinceOf(p);
+    return province !== null && areas.includes(areaCode(province.code));
   });
   const spot: Point | null = inside.length > 0 && inside.every((p) => distanceM(p, inside[0]) <= SAME_PLACE_M) ? { lat: inside[0].lat, lon: inside[0].lon } : null;
 
@@ -275,7 +278,7 @@ export async function admitCandidate(c: Candidate, deps: AdmitDeps & { robots: (
     version: 1,
     kind: official ? "office_post" : "closure",
     // Ambiguous, or not inside the province the page names: a warning for the whole province, never a spot.
-    scope: spot ? { point: spot, radiusM: SPOT_RADIUS_M } : { codes: bound.codes },
+    scope: spot ? { point: spot, radiusM: SPOT_RADIUS_M } : { codes: areas },
     sourceUrl: canonical,
     sourceOrg: organisationOf(url.hostname),
     eventAt: new Date(posted).toISOString(),
