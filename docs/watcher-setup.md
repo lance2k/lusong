@@ -103,7 +103,7 @@ also shows:
 Each tick checks up to 20 watchers that are in their window and haven't been checked in the last 9 minutes, and it
 finishes in under 45 s, inside the route's 60 s limit.
 
-### Alert delivery: `lusong-alert-deliver` (not yet created)
+### Alert delivery: `lusong-alert-deliver` (created 2026-11-03 15:52 UTC, 23:52 PHT)
 
 PAGASA advisories that touch a watcher's trip, and nationwide ones, are sent by their own route, never inside the tick
 (plan S4a, disposition S4P-8). The schedule for it is the main session's to create, as the tick's was:
@@ -121,7 +121,7 @@ at the first run that reads a complete, fresh snapshot. Each alert version reach
 written before the send, so a run that dies mid-send never sends it again. Telegram's 429 is tried again after its
 `retry_after` (60 s without one), at most 3 more times.
 
-### The Wonder sweep: `lusong-alert-sweep` (not yet created)
+### The Wonder sweep: `lusong-alert-sweep` (created 2026-11-03 15:52 UTC, 23:52 PHT)
 
 Road closures and disaster-office posts come from one Muse Wonder call with web search, at most 4 a UTC day and at
 least 3 hours apart (plan S4b). Each candidate page is then fetched by Lusong itself (HTTPS, `*.gov.ph` and a fixed
