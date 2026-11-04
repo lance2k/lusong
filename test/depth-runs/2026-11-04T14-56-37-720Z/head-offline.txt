@@ -1,0 +1,47 @@
+f knee  people-in-a-flooded-paddoc d2 half_knee 18-27        -> tyre_geometry 44-71        too_shallow->matched  heads: P1:4.9
+f knee  people-in-a-flooded-paddoc d1 half_knee 18-27        -> tyre_geometry 44-71        too_shallow->matched  heads: P1:4.9
+f knee  statelibqld-1-79551-floodw d1 ankle 5-10             -> ankle 5-10                 too_shallow->too_shallow  heads: 
+f knee  statelibqld-1-79551-floodw d2 tyre_quarter 13-20     -> tyre_quarter 13-20         too_shallow->too_shallow  heads: 
+f knee  people-in-a-flooded-paddoc d1 half_knee 18-27        -> tyre_geometry 57-85        too_shallow->too_deep  heads: P2:4.2
+f knee  people-in-a-flooded-paddoc d2 knee 38-54             -> knee 38-54                 matched->matched  heads: 
+f knee  hc08187-47810475052.jpg    d1 below_knee 30-45       -> tyre_geometry 49-77        matched->matched  heads: P8:4.6
+f knee  hc08187-47810475052.jpg    d2 knee 38-54             -> tyre_geometry 49-77        matched->matched  heads: P8:4.6
+f waist 170901-m-bh832-018-3698910 d1 waist 84-112           -> waist 84-112               matched->matched  heads: 
+f waist 170901-m-bh832-018-3698910 d2 waist 84-112           -> waist 84-112               matched->matched  heads: 
+f knee  statelibqld-1-44419-ferryi d1 knee 38-54             -> tyre_geometry 90-121       matched->too_deep  heads: P12:2.6
+f knee  statelibqld-1-44419-ferryi d2 knee 38-54             -> tyre_geometry 90-121       matched->too_deep  heads: P12:2.6
+f ankle statelibqld-1-254474-child d1 ankle 5-10             -> tyre_geometry 29-55        matched->too_deep  heads: P8:5.6
+f ankle king-tide-flooding-into-gr d1 ankle 5-10             -> tyre_geometry 27-53        matched->too_deep  heads: P2:5.7
+f ankle king-tide-flooding-into-gr d2 ankle 5-10             -> tyre_geometry 27-53        matched->too_deep  heads: P2:5.7
+f ankle statelibqld-1-254474-child d2 ankle 5-10             -> tyre_geometry 29-55        matched->too_deep  heads: P8:5.6
+f thigh texas-national-guard-respo d1 ankle 5-10             -> tyre_geometry 28-54        too_shallow->matched  heads: P1:5.9 P2:5.6
+f knee  statelibqld-1-160791-view- d2 knee 38-54             -> knee 38-54                 matched->matched  heads: 
+f knee  statelibqld-1-160791-view- d1 knee 38-54             -> knee 38-54                 matched->matched  heads: 
+f thigh texas-national-guard-respo d2 below_knee 30-45       -> below_knee 30-45           too_shallow->too_shallow  heads: 
+f waist statelibqld-1-109124-flood d1 ankle 5-10             -> tyre_geometry 27-52        too_shallow->too_shallow  heads: P11:5.7
+f waist statelibqld-1-237389-flood d1 cannot_measure         -> cannot_measure             cannot_measure->cannot_measure  heads: 
+f waist statelibqld-1-237389-flood d2 cannot_measure         -> cannot_measure             cannot_measure->cannot_measure  heads: 
+f waist statelibqld-1-109124-flood d2 ankle 5-10             -> tyre_geometry 27-52        too_shallow->too_shallow  heads: P11:5.7
+f chest statelibqld-1-136194-rescu d2 chest 100-133          -> chest 100-133              matched->matched  heads: 
+f chest statelibqld-1-136194-rescu d1 chest 100-133          -> chest 100-133              matched->matched  heads: 
+f knee  inondations-janvier-1910-u d1 ankle 5-10             -> tyre_geometry 42-69        too_shallow->matched  heads: P1:5
+f knee  knee-deep.jpg              d1 ankle 5-10             -> tyre_geometry 8-32         too_shallow->too_shallow  heads: P1:6.6
+f knee  inondations-janvier-1910-u d2 ankle 5-10             -> tyre_geometry 42-69        too_shallow->matched  heads: P1:5
+f knee  knee-deep.jpg              d2 ankle 5-10             -> tyre_geometry 8-32         too_shallow->too_shallow  heads: P1:6.6
+w knee  full-length-portrait-of-tw d1 half_knee 18-27        -> half_knee 18-27            too_shallow->too_shallow  heads: 
+w knee  man-standing-knee-deep-in- d1 half_knee 18-27        -> tyre_geometry 52-80        too_shallow->matched  heads: P1:4.5
+w knee  full-length-portrait-of-tw d2 half_knee 18-27        -> half_knee 18-27            too_shallow->too_shallow  heads: 
+w knee  man-standing-knee-deep-in- d2 ankle 5-10             -> tyre_geometry 52-80        too_shallow->matched  heads: P1:4.5
+w waist fisherman-geograph-org-uk- d1 cannot_measure         -> cannot_measure             cannot_measure->cannot_measure  heads: 
+w waist fisherman-geograph-org-uk- d2 ankle 5-10             -> ankle 5-10                 too_shallow->too_shallow  heads: 
+w waist dfc-5296-a-lone-attendant- d1 mid_thigh 50-72        -> mid_thigh 50-72            too_shallow->too_shallow  heads: 
+w waist dfc-5296-a-lone-attendant- d2 mid_thigh 50-72        -> mid_thigh 50-72            too_shallow->too_shallow  heads: 
+w waist dsc-8232-two-friends-enjoy d1 cannot_measure         -> cannot_measure             cannot_measure->cannot_measure  heads: 
+w waist dsc-8232-two-friends-enjoy d2 cannot_measure         -> cannot_measure             cannot_measure->cannot_measure  heads: 
+w chest 7th-communication-battalio d1 chest 100-133          -> chest 100-133              matched->matched  heads: 
+w chest 7th-communication-battalio d2 chest 100-133          -> chest 100-133              matched->matched  heads: 
+f thigh 2016-southeastern-texas-fl d2 mid_thigh 50-72        -> mid_thigh 50-72            matched->matched  heads: 
+w thigh half-length-portrait-of-tw d1 mid_thigh 50-72        -> mid_thigh 50-72            matched->matched  heads: 
+f thigh 2016-southeastern-texas-fl d1 mid_thigh 50-72        -> mid_thigh 50-72            matched->matched  heads: 
+w thigh half-length-portrait-of-tw d2 knee 38-54             -> knee 38-54                 matched->matched  heads: 
+{"before":{"too_shallow":20,"matched":21,"cannot_measure":5},"after":{"matched":22,"too_shallow":12,"too_deep":7,"cannot_measure":5}}

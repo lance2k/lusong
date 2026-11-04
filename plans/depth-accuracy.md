@@ -101,3 +101,24 @@ ankle or half_knee.
 person reading the model put at `ankle` or `half_knee` (the failure the tuning split shows), and like the tyre
 estimate is never counted as a reading. Measured on held-out with the same design as tuning (one SAM pass per photo
 including `head`, 2 Muse draws, both arms computed from the same Muse readings), against the ship criteria above.
+
+## Held-out result (run 2026-11-04T14-56-37-720Z, analysed 2026-11-04 15:04 UTC, 23:04 PHT): not shipped
+One SAM pass per held-out photo (4 phrases + `head`), landmark reader × 2 draws, 46 of 46 draws, 0 errors, $0.9071
+metered. Both arms come from the same Muse readings (`test/depth-runs/head-offline.mts`; per-draw rows in
+`head-offline.txt` beside the run).
+
+| Held-out flood scenes (16 photos × 2 draws) | too shallow | matched | too deep | can't measure |
+|---|---|---|---|---|
+| landmark (today's reader) | 13 | 17 | 0 | 2 |
+| landmark + head estimate (frozen candidate) | 7 | 16 | 7 | 2 |
+| unexposed only (12 photos × 2), before → after | 11 → 7 | 11 → 8 | 0 → 7 | 2 → 2 |
+
+Criteria: (a) too shallow fell by 6 (≥ 4): pass. (b) too deep rose by 7 (allowed ≤ 3): fail. (c) matched fell by 1: fail.
+So the candidate does not ship. All 23 held-out photos (flood + wading, 46 draws): too shallow 20 → 12, matched 21 → 22,
+too deep 0 → 7.
+
+What it shows: SAM's head boxes give a weak depth signal on this set. People in ankle-deep water showed 5.6–5.7 head
+boxes above the water, a knee-deep man 6.6 and a waist-deep crowd 5.7, so the count barely separates ankle from waist
+(head boxes include hair and hats, and the 7–8-heads canon is UNVERIFIED for them). Allowed to deepen any person
+(rejected on tuning; shown here only as a fact about the signal, not a candidate), it trades about one too-shallow draw
+for one too-deep draw on held-out (20 → 9 shallow, 0 → 8 deep, 21 → 24 matched, 46 draws).

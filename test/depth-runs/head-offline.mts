@@ -27,7 +27,10 @@ for (const r of run.records) {
   const readings: Reading[] = r.result.objects
     .filter((o: { usable: boolean }) => o.usable)
     .map((o: { label: string; kind: "person" | "car"; landmark: string }) => ({ label: o.label, kind: o.kind, inWater: true, landmark: o.landmark, isChild: false }));
-  const usablePeople = new Set(readings.filter((x) => x.kind === "person").map((x) => x.label));
+  // The frozen candidate: only a person the model read at ankle or half_knee may be deepened by the head estimate.
+  const usablePeople = new Set(
+    readings.filter((x) => x.kind === "person" && (process.env.ANY_PICK === "1" || x.landmark === "ankle" || x.landmark === "half_knee")).map((x) => x.label),
+  );
   const heads = headEstimates(
     objects.filter((o) => o.kind === "person" && usablePeople.has(o.label)).map((o) => ({ label: o.label, box: o.box, mask: placeRaster(o.object.mask) })),
     parseSamText(head.text),

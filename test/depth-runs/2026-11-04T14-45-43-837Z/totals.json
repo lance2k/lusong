@@ -1,0 +1,233 @@
+{
+ "landmark": {
+  "all": {
+   "draws": 33,
+   "outcomes": {
+    "too_shallow": 8,
+    "matched": 11,
+    "too_deep": 5,
+    "cannot_measure": 8,
+    "no_flood": 0,
+    "error": 1
+   },
+   "measured": 24,
+   "meanGapCm": -5.9,
+   "meanAbsGapCm": 13.9,
+   "meanRankError": -0.9
+  },
+  "flood": {
+   "draws": 30,
+   "outcomes": {
+    "too_shallow": 8,
+    "matched": 10,
+    "too_deep": 3,
+    "cannot_measure": 8,
+    "no_flood": 0,
+    "error": 1
+   },
+   "measured": 21,
+   "meanGapCm": -9.6,
+   "meanAbsGapCm": 13,
+   "meanRankError": -1.4
+  },
+  "tuning": {
+   "draws": 33,
+   "outcomes": {
+    "too_shallow": 8,
+    "matched": 11,
+    "too_deep": 5,
+    "cannot_measure": 8,
+    "no_flood": 0,
+    "error": 1
+   },
+   "measured": 24,
+   "meanGapCm": -5.9,
+   "meanAbsGapCm": 13.9,
+   "meanRankError": -0.9
+  },
+  "tuning flood": {
+   "draws": 30,
+   "outcomes": {
+    "too_shallow": 8,
+    "matched": 10,
+    "too_deep": 3,
+    "cannot_measure": 8,
+    "no_flood": 0,
+    "error": 1
+   },
+   "measured": 21,
+   "meanGapCm": -9.6,
+   "meanAbsGapCm": 13,
+   "meanRankError": -1.4
+  },
+  "wading": {
+   "draws": 3,
+   "outcomes": {
+    "too_shallow": 0,
+    "matched": 1,
+    "too_deep": 2,
+    "cannot_measure": 0,
+    "no_flood": 0,
+    "error": 0
+   },
+   "measured": 3,
+   "meanGapCm": 20,
+   "meanAbsGapCm": 20,
+   "meanRankError": 2
+  }
+ },
+ "guided": {
+  "all": {
+   "draws": 32,
+   "outcomes": {
+    "too_shallow": 8,
+    "matched": 10,
+    "too_deep": 3,
+    "cannot_measure": 10,
+    "no_flood": 0,
+    "error": 1
+   },
+   "measured": 21,
+   "meanGapCm": -8,
+   "meanAbsGapCm": 12.1,
+   "meanRankError": -1.1
+  },
+  "flood": {
+   "draws": 30,
+   "outcomes": {
+    "too_shallow": 8,
+    "matched": 9,
+    "too_deep": 2,
+    "cannot_measure": 10,
+    "no_flood": 0,
+    "error": 1
+   },
+   "measured": 19,
+   "meanGapCm": -10.4,
+   "meanAbsGapCm": 11.8,
+   "meanRankError": -1.4
+  },
+  "tuning": {
+   "draws": 32,
+   "outcomes": {
+    "too_shallow": 8,
+    "matched": 10,
+    "too_deep": 3,
+    "cannot_measure": 10,
+    "no_flood": 0,
+    "error": 1
+   },
+   "measured": 21,
+   "meanGapCm": -8,
+   "meanAbsGapCm": 12.1,
+   "meanRankError": -1.1
+  },
+  "tuning flood": {
+   "draws": 30,
+   "outcomes": {
+    "too_shallow": 8,
+    "matched": 9,
+    "too_deep": 2,
+    "cannot_measure": 10,
+    "no_flood": 0,
+    "error": 1
+   },
+   "measured": 19,
+   "meanGapCm": -10.4,
+   "meanAbsGapCm": 11.8,
+   "meanRankError": -1.4
+  },
+  "wading": {
+   "draws": 2,
+   "outcomes": {
+    "too_shallow": 0,
+    "matched": 1,
+    "too_deep": 1,
+    "cannot_measure": 0,
+    "no_flood": 0,
+    "error": 0
+   },
+   "measured": 2,
+   "meanGapCm": 15,
+   "meanAbsGapCm": 15,
+   "meanRankError": 1
+  }
+ },
+ "hidden": {
+  "all": {
+   "draws": 30,
+   "outcomes": {
+    "too_shallow": 9,
+    "matched": 5,
+    "too_deep": 3,
+    "cannot_measure": 9,
+    "no_flood": 0,
+    "error": 4
+   },
+   "measured": 17,
+   "meanGapCm": -14.1,
+   "meanAbsGapCm": 18.4,
+   "meanRankError": -2.1
+  },
+  "flood": {
+   "draws": 29,
+   "outcomes": {
+    "too_shallow": 8,
+    "matched": 5,
+    "too_deep": 3,
+    "cannot_measure": 9,
+    "no_flood": 0,
+    "error": 4
+   },
+   "measured": 16,
+   "meanGapCm": -14.3,
+   "meanAbsGapCm": 18.8,
+   "meanRankError": -2.2
+  },
+  "tuning": {
+   "draws": 30,
+   "outcomes": {
+    "too_shallow": 9,
+    "matched": 5,
+    "too_deep": 3,
+    "cannot_measure": 9,
+    "no_flood": 0,
+    "error": 4
+   },
+   "measured": 17,
+   "meanGapCm": -14.1,
+   "meanAbsGapCm": 18.4,
+   "meanRankError": -2.1
+  },
+  "tuning flood": {
+   "draws": 29,
+   "outcomes": {
+    "too_shallow": 8,
+    "matched": 5,
+    "too_deep": 3,
+    "cannot_measure": 9,
+    "no_flood": 0,
+    "error": 4
+   },
+   "measured": 16,
+   "meanGapCm": -14.3,
+   "meanAbsGapCm": 18.8,
+   "meanRankError": -2.2
+  },
+  "wading": {
+   "draws": 1,
+   "outcomes": {
+    "too_shallow": 1,
+    "matched": 0,
+    "too_deep": 0,
+    "cannot_measure": 0,
+    "no_flood": 0,
+    "error": 0
+   },
+   "measured": 1,
+   "meanGapCm": -11,
+   "meanAbsGapCm": 11,
+   "meanRankError": -2
+  }
+ }
+}

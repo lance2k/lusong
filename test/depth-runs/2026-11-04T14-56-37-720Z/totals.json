@@ -1,0 +1,94 @@
+{
+ "landmark": {
+  "all": {
+   "draws": 46,
+   "outcomes": {
+    "too_shallow": 20,
+    "matched": 21,
+    "too_deep": 0,
+    "cannot_measure": 5,
+    "no_flood": 0,
+    "error": 0
+   },
+   "measured": 41,
+   "meanGapCm": -13.2,
+   "meanAbsGapCm": 13.2,
+   "meanRankError": -1.5
+  },
+  "flood": {
+   "draws": 32,
+   "outcomes": {
+    "too_shallow": 13,
+    "matched": 17,
+    "too_deep": 0,
+    "cannot_measure": 2,
+    "no_flood": 0,
+    "error": 0
+   },
+   "measured": 30,
+   "meanGapCm": -12.8,
+   "meanAbsGapCm": 12.8,
+   "meanRankError": -1.4
+  },
+  "held-out": {
+   "draws": 46,
+   "outcomes": {
+    "too_shallow": 20,
+    "matched": 21,
+    "too_deep": 0,
+    "cannot_measure": 5,
+    "no_flood": 0,
+    "error": 0
+   },
+   "measured": 41,
+   "meanGapCm": -13.2,
+   "meanAbsGapCm": 13.2,
+   "meanRankError": -1.5
+  },
+  "held-out flood": {
+   "draws": 32,
+   "outcomes": {
+    "too_shallow": 13,
+    "matched": 17,
+    "too_deep": 0,
+    "cannot_measure": 2,
+    "no_flood": 0,
+    "error": 0
+   },
+   "measured": 30,
+   "meanGapCm": -12.8,
+   "meanAbsGapCm": 12.8,
+   "meanRankError": -1.4
+  },
+  "held-out flood, unexposed": {
+   "draws": 24,
+   "outcomes": {
+    "too_shallow": 11,
+    "matched": 11,
+    "too_deep": 0,
+    "cannot_measure": 2,
+    "no_flood": 0,
+    "error": 0
+   },
+   "measured": 22,
+   "meanGapCm": -14.9,
+   "meanAbsGapCm": 14.9,
+   "meanRankError": -1.6
+  },
+  "wading": {
+   "draws": 14,
+   "outcomes": {
+    "too_shallow": 7,
+    "matched": 4,
+    "too_deep": 0,
+    "cannot_measure": 3,
+    "no_flood": 0,
+    "error": 0
+   },
+   "measured": 11,
+   "meanGapCm": -14.5,
+   "meanAbsGapCm": 14.5,
+   "meanRankError": -1.8
+  }
+ }
+}
