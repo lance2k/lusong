@@ -30,6 +30,12 @@ export function WebFindings({ web }: { web: PageMuse["web"] }) {
       <h3 className="text-sm font-semibold uppercase tracking-wide text-ink-2">Road closures on the web</h3>
       <p className="text-ink-2">{web.line}</p>
       {web.coverage.note && <p className="font-medium text-warn-ink">{web.coverage.note}</p>}
+      {web.findings.length === 0 && web.coverage.searched.length > 0 && (
+        <p>
+          Lusong kept nothing from the web search for {web.coverage.searched.join(" and ")}. That doesn&apos;t mean the roads are
+          clear.
+        </p>
+      )}
       {web.findings.length > 0 && (
         <ul className="divide-y divide-line rounded-card border border-line bg-surface">
           {web.findings.map((f, i) => (

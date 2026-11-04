@@ -47,6 +47,35 @@ describe("Muse Spark on the commute page", () => {
     expect(renderToStaticMarkup(<WebFindings web={web(FULL)} />)).not.toContain("Not searched");
   });
 
+  it("says a search that ran kept nothing, never that the roads are clear; says nothing of the kind when no search ran or one kept something (S9 F15, duck S9bD-1)", () => {
+    const line = "Searched the web at 29 Oct, 12:00 p.m. PHT";
+    const visible = (html: string) => html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").replace(/&#x27;/g, "'");
+    const empty = visible(renderToStaticMarkup(<WebFindings web={{ line, coverage: { searched: ["Cebu", "Bohol"], missed: [], note: null }, findings: [] }} />));
+    expect(empty).toContain("Lusong kept nothing from the web search for Cebu and Bohol. That doesn't mean the roads are clear.");
+    expect(empty).not.toMatch(/No road closure|found/);
+
+    const note = "The web search covered only part of this route: Cebu. Not searched: Bohol (the search failed).";
+    const partial = visible(renderToStaticMarkup(<WebFindings web={{ line, coverage: { searched: ["Cebu"], missed: ["Bohol"], note }, findings: [] }} />));
+    expect(partial).toContain("Lusong kept nothing from the web search for Cebu. That doesn't mean");
+    expect(partial).toContain(note);
+
+    const skipped = renderToStaticMarkup(
+      <WebFindings web={{ line: "Web search skipped: the daily budget is used up.", coverage: { searched: [], missed: ["Cebu"], note: "The web search didn't cover this route. Not searched: Cebu (the daily budget is used up)." }, findings: [] }} />,
+    );
+    expect(skipped).not.toContain("Lusong kept nothing");
+
+    const found = renderToStaticMarkup(
+      <WebFindings
+        web={{
+          line,
+          coverage: FULL,
+          findings: [{ place: "Colon St", url: "https://example.ph/colon", site: "example.ph", sourceDate: null, description: "Flooded, says an undated page on example.ph.", counted: false, note: "Shown, not counted: it has no date and no place on the map." }],
+        }}
+      />,
+    );
+    expect(found).not.toContain("Lusong kept nothing");
+  });
+
   it("a finding's link reads as its site alone: no path or query of the link is visible text (review 🔴T7-8)", () => {
     const url = "https://example.ph/start-your-trip-now?the-road-is=open";
     const html = renderToStaticMarkup(
