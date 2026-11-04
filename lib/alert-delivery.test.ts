@@ -537,7 +537,7 @@ describe.each(watchStores)("durable claims before a send on the %s (S4P-1, S4P-2
     await linked(t.watches, "w1", CEBU_TRIP);
     expect(await t.watches.markStopping("w1")).toBe(true);
     expect(await t.watches.claimAlert("w1", "g1", "pagasa:p1@1", t.clock.ms(), 1_000)).toEqual({ claimed: false, why: "gone" });
-    expect(await t.watches.markSending("w1", "g1", { kind: "go", day: "2026-11-04" })).toBe(false);
+    expect(await t.watches.markSending("w1", "g1", { kind: "go", day: "2026-11-04" }, "t1")).toBe(false);
     expect(await t.watches.markStopping("nobody")).toBe(false);
   });
 

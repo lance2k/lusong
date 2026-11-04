@@ -75,11 +75,15 @@ export interface WatchStore {
    * answer still marked as sending from an earlier send is first recorded as the last sent, since its delivery is
    * uncertain, so dropping the new one falls back to it rather than to an older answer.
    */
-  markSending(id: string, gen: string, answer: SentAnswer): Promise<boolean>;
+  markSending(id: string, gen: string, answer: SentAnswer, attempt: string): Promise<boolean>;
   /** When the message wasn't sent (refused, or called off before sending): the next check may send it again. */
-  dropSending(id: string, gen: string): Promise<void>;
-  /** Records the answer just sent and clears the one marked as sending, if the generation still matches. */
-  commit(id: string, gen: string, last: SentAnswer): Promise<boolean>;
+  dropSending(id: string, gen: string, attempt: string): Promise<void>;
+  /**
+   * Records the answer just sent and clears the one marked as sending, if the generation still matches and what is
+   * marked is this attempt's. A commit or drop that lands after a newer attempt's mark (a client timeout doesn't prove
+   * the store didn't run it) leaves that mark alone (#45); the newer mark already counted this one as sent.
+   */
+  commit(id: string, gen: string, last: SentAnswer, attempt: string): Promise<boolean>;
   /**
    * `SET NX PX`: the watcher's send lease, held by a tick from its last check that the watcher is on until its send is
    * done, and by a switch-off while it deletes the watcher. A token when taken, null when someone else holds it.
@@ -110,6 +114,16 @@ export interface WatchStore {
 }
 
 type Fields = Record<string, string>;
+
+/** `kind|day|attempt`: the attempt id lets a late commit or drop tell its own mark from a newer one (#45). */
+function sendingField(answer: SentAnswer, attempt: string): string {
+  return `${answer.kind}|${answer.day}|${attempt}`;
+}
+
+/** Null for no mark, and for one stored before marks carried an attempt id, which no commit or drop then matches. */
+function attemptOf(sending: string | undefined): string | null {
+  return sending?.split("|")[2] || null;
+}
 
 function fromFields(id: string, f: Fields): WatchRecord | null {
   try {
@@ -268,7 +282,7 @@ export class MemoryWatchStore implements WatchStore {
     return this.live(id)?.gen === gen;
   }
 
-  async markSending(id: string, gen: string, answer: SentAnswer) {
+  async markSending(id: string, gen: string, answer: SentAnswer, attempt: string) {
     const fields = this.live(id);
     if (!fields || fields.gen !== gen || fields.stopping) return false;
     const uncertain = fromFields(id, fields)?.sending;
@@ -276,18 +290,18 @@ export class MemoryWatchStore implements WatchStore {
       fields.lastKind = uncertain.kind;
       fields.lastDay = uncertain.day;
     }
-    fields.sending = `${answer.kind}|${answer.day}`;
+    fields.sending = sendingField(answer, attempt);
     return true;
   }
 
-  async dropSending(id: string, gen: string) {
+  async dropSending(id: string, gen: string, attempt: string) {
     const fields = this.live(id);
-    if (fields?.gen === gen) delete fields.sending;
+    if (fields?.gen === gen && attemptOf(fields.sending) === attempt) delete fields.sending;
   }
 
-  async commit(id: string, gen: string, last: SentAnswer) {
+  async commit(id: string, gen: string, last: SentAnswer, attempt: string) {
     const fields = this.live(id);
-    if (!fields || fields.gen !== gen) return false;
+    if (!fields || fields.gen !== gen || attemptOf(fields.sending) !== attempt) return false;
     fields.lastKind = last.kind;
     fields.lastDay = last.day;
     delete fields.sending;
@@ -459,20 +473,33 @@ if redis.call('HGET', KEYS[1], 'gen') ~= ARGV[1] then return 0 end
 if redis.call('HEXISTS', KEYS[1], 'stopping') == 1 then return 0 end
 local uncertain = redis.call('HGET', KEYS[1], 'sending')
 if uncertain then
-  local kind, day = string.match(uncertain, '^([^|]+)|(.+)$')
+  local kind, day = string.match(uncertain, '^([^|]+)|([^|]+)')
   if kind then redis.call('HSET', KEYS[1], 'lastKind', kind, 'lastDay', day) end
 end
 redis.call('HSET', KEYS[1], 'sending', ARGV[2])
 return 1
 `;
 
-const DROP_SENDING_SCRIPT = `
-if redis.call('HGET', KEYS[1], 'gen') == ARGV[1] then redis.call('HDEL', KEYS[1], 'sending') end
+/** The mark's attempt id, as attemptOf reads it: its third '|' part. */
+const SENDING_ATTEMPT = `
+local function attempt_of(sending)
+  if not sending then return nil end
+  return string.match(sending, '^[^|]*|[^|]*|([^|]+)')
+end
+`;
+
+/** ARGV: gen, attempt. */
+const DROP_SENDING_SCRIPT = `${SENDING_ATTEMPT}
+if redis.call('HGET', KEYS[1], 'gen') == ARGV[1] and attempt_of(redis.call('HGET', KEYS[1], 'sending')) == ARGV[2] then
+  redis.call('HDEL', KEYS[1], 'sending')
+end
 return 1
 `;
 
-const COMMIT_SCRIPT = `
+/** ARGV: gen, kind, day, attempt. */
+const COMMIT_SCRIPT = `${SENDING_ATTEMPT}
 if redis.call('HGET', KEYS[1], 'gen') ~= ARGV[1] then return 0 end
+if attempt_of(redis.call('HGET', KEYS[1], 'sending')) ~= ARGV[4] then return 0 end
 redis.call('HSET', KEYS[1], 'lastKind', ARGV[2], 'lastDay', ARGV[3])
 redis.call('HDEL', KEYS[1], 'sending')
 return 1
@@ -655,16 +682,16 @@ export class UpstashWatchStore implements WatchStore {
     return (await this.evalScript(CURRENT_SCRIPT, [this.record(id)], [gen])) === 1;
   }
 
-  async markSending(id: string, gen: string, answer: SentAnswer) {
-    return (await this.evalScript(MARK_SENDING_SCRIPT, [this.record(id)], [gen, `${answer.kind}|${answer.day}`])) === 1;
+  async markSending(id: string, gen: string, answer: SentAnswer, attempt: string) {
+    return (await this.evalScript(MARK_SENDING_SCRIPT, [this.record(id)], [gen, sendingField(answer, attempt)])) === 1;
   }
 
-  async dropSending(id: string, gen: string) {
-    await this.evalScript(DROP_SENDING_SCRIPT, [this.record(id)], [gen]);
+  async dropSending(id: string, gen: string, attempt: string) {
+    await this.evalScript(DROP_SENDING_SCRIPT, [this.record(id)], [gen, attempt]);
   }
 
-  async commit(id: string, gen: string, last: SentAnswer) {
-    return (await this.evalScript(COMMIT_SCRIPT, [this.record(id)], [gen, last.kind, last.day])) === 1;
+  async commit(id: string, gen: string, last: SentAnswer, attempt: string) {
+    return (await this.evalScript(COMMIT_SCRIPT, [this.record(id)], [gen, last.kind, last.day, attempt])) === 1;
   }
 
   async takeSendLease(id: string, ttlMs: number) {
