@@ -54,3 +54,25 @@ hidden floor only deepens (lean safe). MUSE_INPUT_TOKEN_BOUND re-checked against
 - Reusing one SAM pass for tuning iterations hides SAM variance during tuning.
 - The split was fixed by a salted hash (commit c59bb3e) after I had seen about 16 rows of the old report's per-photo
   table (the report's first rows, alphabetical); the split rule does not depend on outcomes.
+
+## Amendments after the plan duck (gpt-6-astra; its session started 2026-11-04 14:35 UTC, 22:35 PHT)
+Dispositions of its four 🔴 are in `plans/duck-blockers.md`. In short:
+- Floor table, strictly the lowest landmark the submerged part proves: feet→ankle, shins→below_knee, knees→knee,
+  thighs→hip, hips→hip, waist→waist, chest→chest. `cannot_tell` covers legs hidden by anything but water (another
+  object, the frame edge, murk). The prompt no longer says the bottom of the figure "is" the waterline; it asks the model
+  to tell water from other occlusion. Missing or unknown values are listed as contract problems (reply incomplete).
+- A prompt-only candidate (same schema as today, new guidance text) is tried in tuning beside the hidden-field one.
+- Scoring adds, per draw, the signed gap in cm between the deciding interval and the caption's (0 on overlap), the
+  landmark-rank error, and a paired transition table (old outcome → new outcome, same SAM replies).
+- Held-out exposure: before the split I had seen the 6fa88e6 per-photo rows of 10 held-out photos (170901,
+  texas-…-015, 7th-communication…, dfc-5296…, dsc-8232…, fisherman…, full-length…, half-length…, hc08187…,
+  inondations…). The report gives held-out numbers also for the 13 held-out photos I never saw rows for.
+- Each reader in a paired draw gets its own deadline and its own error record.
+- The harness enforces a dollar cap itself (`LUSONG_DEPTH_MAX_USD`): a draw starts only if settled spend plus every
+  in-flight draw's worst-case reserve stays under the cap; it settles each draw's metered cost when it finishes.
+
+## Ship criteria, frozen before the final run
+On held-out flood scenes, paired (same SAM replies, 2 draws × 16 photos = 32 draws per reader), the candidate ships
+only if all hold: (a) too shallow falls by at least 4 draws; (b) too deep rises by at most half that fall; (c) matched
+does not fall; (d) no reader errors beyond the old reader's. Otherwise the result is reported as not shipped (or
+inconclusive), with what was learned. The candidate and this rule are not changed after the final run starts.
