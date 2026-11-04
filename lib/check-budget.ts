@@ -4,16 +4,16 @@
  * pick. None of those is a Go, since the tested rules pick the answer from what did finish.
  */
 
-/** The web search's model call ends this long after the check's start. Measured 14.8–35.0 s live (2026-11-03). */
+/** The web search's model call ends this long after the check's start. 14.8–35.0 s live (2026-11-03), 30.1 and 23.8 s (2026-11-04). */
 export const SEARCH_STEP_MS = 37_000;
 /**
- * A first model turn isn't started with less than this left: the fastest measured live was 2.6 s (2026-11-03), so a
+ * A first model turn isn't started with less than this left: the fastest measured live was 2.6 s (2026-11-03; 4.1 and 3.6 s on 2026-11-04), so a
  * turn with less would be cut off by the deadline and still paid for (inferred: the call's input is billed).
  */
 export const FIRST_TURN_FASTEST_MS = 2_600;
 /**
- * A later turn reads the tool results: 13.8–18.0 s live (3 draws, 2026-11-03), then 12.9 and 18.9 s (1 draw,
- * 2026-11-04). Not started with less than the fastest.
+ * A later turn reads the tool results: 13.8–18.0 s live (3 draws, 2026-11-03), then 12.9, 18.9, 13.9 and 20.1 s
+ * (2 draws, 2026-11-04). Not started with less than the fastest.
  */
 export const LATER_TURN_FASTEST_MS = 12_800;
 
