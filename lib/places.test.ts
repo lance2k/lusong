@@ -311,22 +311,45 @@ describe("parts of one place (#57)", () => {
     expect(names(reply.places)).toEqual(["Burnham Park", "Ganza Restaurant", "Solibao Restaurant", "Pine Trees of the World Park"]);
   });
 
-  it("a part the rider types for is kept: 'Burnham Park Lake', 'SM City Baguio sky t'", () => {
+  it("a part the rider types for is kept, whatever else the query says (duck 🟡2)", () => {
     const burnham = placesFromPhoton(BURNHAM_REPLY, PHILIPPINES);
-    expect(names(withoutParts(burnham, "Burnham Park Lake"))).toContain("Burnham Park Lake");
-    expect(names(withoutParts(burnham, "Burnham Park Lake"))).not.toContain("Burnham Park Skating Rink");
+    for (const q of ["Burnham Park Lake", "Burnham Park Lake Baguio Philippines"]) {
+      expect(names(withoutParts(burnham, q)), q).toContain("Burnham Park Lake");
+      expect(names(withoutParts(burnham, q)), q).not.toContain("Burnham Park Skating Rink");
+    }
     const sm = placesFromPhoton(SM_BAGUIO_REPLY, PHILIPPINES);
-    expect(names(withoutParts(sm, "SM City Baguio sky t"))).toEqual(["SM City Baguio", "SM City Baguio Sky Terrace"]);
+    expect(names(withoutParts(sm, "SM City Baguio sky"))).toEqual(["SM City Baguio", "SM City Baguio Sky Terrace"]);
+    expect(names(withoutParts(sm, "SM City Baguio Sky Terrace Session Road"))).toContain("SM City Baguio Sky Terrace");
   });
 
-  it("a place whose name only starts with another's is kept when it is more than 1 km away", () => {
-    const mk = (name: string, lat: number, lon: number) => ({ id: name, name, area: "", lat, lon, source: "osm" as const });
-    const hall = mk("City Hall", 16.4137, 120.5915);
-    const near = mk("City Hall Annex", 16.4139, 120.5917);
-    const far = mk("City Hall Annex", 16.43, 120.5915);
+  const mk = (name: string, lat: number, lon: number, key = "amenity", value = "parking") => ({
+    id: `${name}@${lat}`,
+    name,
+    area: "",
+    lat,
+    lon,
+    source: "osm" as const,
+    feature: { key, type: "house", value },
+  });
+
+  it("a part kind whose name starts with another's is kept when it is more than 1 km away", () => {
+    const hall = mk("City Hall", 16.4137, 120.5915, "amenity", "townhall");
+    const near = mk("City Hall Annex Parking", 16.4139, 120.5917);
+    const far = mk("City Hall Annex Parking", 16.43, 120.5915);
     expect(names(withoutParts([hall, near], "City Hall"))).toEqual(["City Hall"]);
-    expect(names(withoutParts([hall, far], "City Hall"))).toEqual(["City Hall", "City Hall Annex"]);
+    expect(names(withoutParts([hall, far], "City Hall"))).toEqual(["City Hall", "City Hall Annex Parking"]);
     expect(names(withoutParts([mk("City Hallway", 16.4137, 120.5915), hall], "City Hall"))).toEqual(["City Hallway", "City Hall"]);
+  });
+
+  it("a place of its own beside a same-named one is never left out: a mall beside its suburb, a second branch (duck 🟡3)", () => {
+    const banilad = mk("Banilad", 10.3433, 123.9135, "place", "suburb");
+    const centre = mk("Banilad Town Centre", 10.3418, 123.9126, "shop", "mall");
+    expect(names(withoutParts([banilad, centre], "Banilad"))).toEqual(["Banilad", "Banilad Town Centre"]);
+    const branch = mk("Jollibee", 16.4119, 120.5975, "amenity", "fast_food");
+    const other = mk("Jollibee Session Road", 16.4129, 120.5985, "amenity", "fast_food");
+    expect(names(withoutParts([branch, other], "Jollibee"))).toEqual(["Jollibee", "Jollibee Session Road"]);
+    const unknown = { ...mk("Banilad Gate", 10.3434, 123.9136), feature: undefined };
+    expect(names(withoutParts([banilad, unknown], "Banilad"))).toEqual(["Banilad", "Banilad Gate"]);
   });
 
   it("a Photon part of a built-in place is folded into the built-in", async () => {
@@ -334,7 +357,11 @@ describe("parts of one place (#57)", () => {
       fetch: async () =>
         Response.json({
           features: [
-            { type: "Feature", geometry: { type: "Point", coordinates: [120.5916, 16.4139] }, properties: { name: "Baguio City Hall Parking", countrycode: "PH", city: "Baguio", osm_type: "N", osm_id: 1 } },
+            {
+              type: "Feature",
+              geometry: { type: "Point", coordinates: [120.5916, 16.4139] },
+              properties: { name: "Baguio City Hall Parking", countrycode: "PH", city: "Baguio", osm_type: "N", osm_id: 1, osm_key: "amenity", osm_value: "parking", type: "house" },
+            },
             { type: "Feature", geometry: { type: "Point", coordinates: [120.6, 16.41] }, properties: { name: "Baguio Cathedral", countrycode: "PH", city: "Baguio", osm_type: "N", osm_id: 2 } },
           ],
         }),

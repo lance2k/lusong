@@ -57,3 +57,16 @@ describe("the sweep's posts in the evidence (S4b)", () => {
     expect(render(reply)).not.toContain("Posts near your way");
   });
 });
+
+describe("where the route meets the road (#41)", () => {
+  const reply = JSON.parse(readFileSync("test/fixtures/commute/mabolo-flooded-advisory-active.reply-f52f847.json", "utf8")) as CommuteResult;
+  const render = (r: CommuteResult) =>
+    renderToStaticMarkup(<Evidence result={r} onShowReport={() => {}} onReport={() => {}} />).replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/\s+/g, " ");
+
+  it("says the answer is for the route from the road when the route starts away from the pick, and nothing otherwise", () => {
+    expect(render({ ...reply, route: { ...reply.route, roadGap: { fromM: 115, toM: null } } })).toContain(
+      "This route starts on the road 115 m from your start; the answer is for the route from there.",
+    );
+    expect(render(reply)).not.toContain("on the road");
+  });
+});

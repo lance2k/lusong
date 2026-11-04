@@ -92,6 +92,36 @@ export function detourAvoids(line: readonly Point[], blockedSpots: readonly Poin
 export const ROUTE_END_TOLERANCE_M = 150;
 
 /**
+ * Up to this gap a route is taken to start and end where the rider picked, as every route was before #41. Past it the
+ * way from the pick to the road is not known (a wall, a gate elsewhere), so the page says where the route starts or
+ * ends and that the answer is for the route from there.
+ */
+export const ROUTE_END_UNSAID_M = 50;
+
+/** How far, in whole metres, the route starts and ends from the trip's two points; null for a gap not past ROUTE_END_UNSAID_M. */
+export interface RoadGap {
+  fromM: number | null;
+  toM: number | null;
+}
+
+export function roadGap(line: readonly Point[], trip: { from: Point; to: Point }): RoadGap | null {
+  if (line.length === 0) return null;
+  const said = (m: number) => (m > ROUTE_END_UNSAID_M ? Math.round(m) : null);
+  const gap = { fromM: said(distanceM(line[0], trip.from)), toM: said(distanceM(line[line.length - 1], trip.to)) };
+  return gap.fromM === null && gap.toM === null ? null : gap;
+}
+
+/** The page's sentence for a route that starts or ends on a road away from the rider's points, from the numbers only. */
+export function roadGapWords(gap: RoadGap | null | undefined): string | null {
+  if (!gap || (gap.fromM === null && gap.toM === null)) return null;
+  if (gap.fromM !== null && gap.toM !== null) {
+    return `This route starts on the road ${gap.fromM} m from your start and ends on the road ${gap.toM} m from your end; the answer is for the route between them.`;
+  }
+  if (gap.fromM !== null) return `This route starts on the road ${gap.fromM} m from your start; the answer is for the route from there.`;
+  return `This route ends on the road ${gap.toM} m from your end; the answer is for the route up to there.`;
+}
+
+/**
  * The line a route is judged on: the trip's start, the route, the trip's end, so a gap at either end is checked like
  * the rest of the route. Null when either end of the route is too far from the trip's to stand for the whole trip.
  */

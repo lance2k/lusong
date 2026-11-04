@@ -3,6 +3,7 @@ import { MusePick, WebFindings } from "./commute-muse";
 import { ADVISORY_INCOMPLETE_LINE, ROUTE_CREDIT } from "./credits";
 import { ReportEvidence } from "./report-evidence";
 import { detourWords } from "../lib/commute-words";
+import { roadGapWords } from "../lib/detour";
 
 function Product({ product }: { product: PageProduct }) {
   return (
@@ -117,6 +118,7 @@ export function Evidence({
             {route.lengthKm.toFixed(2)} km, about {route.timeMin} min by motorbike
             {route.streets.length > 0 && <>, via {route.streets.join(", ")}</>}.
           </p>
+          {roadGapWords(route.roadGap) && <p className="text-small text-ink-2">{roadGapWords(route.roadGap)}</p>}
         </div>
         {detour && (
           <div>
@@ -125,6 +127,7 @@ export function Evidence({
               {detour.lengthKm.toFixed(2)} km, about {detour.timeMin} min by motorbike
               {detour.streets.length > 0 && <>, via {detour.streets.join(", ")}</>}.
             </p>
+            {roadGapWords(detour.roadGap) && <p className="text-small text-ink-2">{roadGapWords(detour.roadGap)}</p>}
             <p className="font-semibold">{detourWords(detour)}.</p>
             {detour.proposedBy === "muse_spark" && (
               <p className="text-small text-ink-2">Muse Spark suggested this way; Lusong&apos;s rules judged it on the reports along it.</p>

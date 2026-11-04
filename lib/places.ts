@@ -81,7 +81,9 @@ export function placesFromPhoton(body: unknown, bound: Bound): Place[] {
       lat,
       lon,
       source: "osm",
-      ...(text(props.osm_key) && text(props.type) ? { feature: { key: text(props.osm_key)!, type: text(props.type)! } } : {}),
+      ...(text(props.osm_key) && text(props.type)
+        ? { feature: { key: text(props.osm_key)!, type: text(props.type)!, ...(text(props.osm_value) ? { value: text(props.osm_value)! } : {}) } }
+        : {}),
     });
   }
   return out;
@@ -281,14 +283,40 @@ export class PlaceCache {
 const PART_OF_PLACE_M = 1_000;
 
 /**
- * The list without the parts of a place that is in it: "SM City Baguio Balcony" and "… Taxi Loading/Unloading Area"
- * within 1 km of "SM City Baguio" are left out, so the rider picks the place itself (#57). A part stays when the
- * query names it: a query word beyond the parent's name starts one of the part's own words, and every such query
- * word starts one of its words or its area's.
+ * OSM kinds that are a piece of a bigger place rather than somewhere to go: a mall's service road, viewpoint, taxi
+ * bay and information board, a park's lake, pitch and bus stop. A shop, a mall, a restaurant, a suburb or any kind
+ * not listed is a place of its own and is never left out ("Banilad Town Centre" beside "Banilad", a second branch).
+ */
+const PART_KINDS: Record<string, true | readonly string[]> = {
+  highway: true,
+  information: true,
+  entrance: true,
+  barrier: true,
+  natural: true,
+  water: true,
+  waterway: true,
+  man_made: true,
+  landuse: ["recreation_ground", "grass"],
+  leisure: ["pitch", "track", "playground", "garden", "fountain", "picnic_table"],
+  tourism: ["viewpoint", "attraction", "information", "artwork", "picnic_site"],
+  amenity: ["taxi", "parking", "parking_entrance", "parking_space", "motorcycle_parking", "bicycle_parking", "loading_dock", "toilets", "atm", "bench", "drinking_water", "fountain", "shelter", "waste_basket", "telephone", "clock"],
+};
+
+function isPartKind(feature: Place["feature"]): boolean {
+  const kinds = feature?.value ? PART_KINDS[feature.key] : undefined;
+  return kinds === true || (Array.isArray(kinds) && kinds.includes(feature!.value!));
+}
+
+/**
+ * The list without the parts of a place that is in it: "SM City Baguio Balcony" (a viewpoint) and "… Taxi
+ * Loading/Unloading Area" within 1 km of "SM City Baguio" are left out, so the rider picks the place itself (#57).
+ * Only a part kind is left out (PART_KINDS), and a part stays when a query word beyond the parent's name starts one
+ * of the part's own words ("Burnham Park Lake").
  */
 export function withoutParts(places: Place[], query: string): Place[] {
   const asked = words(query);
   return places.filter((child) => {
+    if (!isPartKind(child.feature)) return true;
     const childWords = words(child.name);
     return !places.some((parent) => {
       if (parent === child) return false;
@@ -298,9 +326,7 @@ export function withoutParts(places: Place[], query: string): Place[] {
       if (distanceM(parent, child) > PART_OF_PLACE_M) return false;
       const own = childWords.slice(parentWords.length);
       const beyond = asked.filter((q) => !parentWords.some((w) => w.startsWith(q)));
-      const areaWords = words(child.area);
-      const named = beyond.some((q) => own.some((w) => w.startsWith(q))) && beyond.every((q) => [...own, ...areaWords].some((w) => w.startsWith(q)));
-      return !named;
+      return !beyond.some((q) => own.some((w) => w.startsWith(q)));
     });
   });
 }

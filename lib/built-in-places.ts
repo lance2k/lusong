@@ -8,8 +8,9 @@ export interface Place {
   lat: number;
   lon: number;
   source: "built-in" | "osm";
-  /** Photon's osm_key and type ("highway", "street"), so a caller can tell a road from a city's centroid. */
-  feature?: { key: string; type: string };
+  /** Photon's osm_key, type ("highway", "street") and osm_value ("service"), so a caller can tell a road from a
+   *  city's centroid, and a mall from its taxi bay. */
+  feature?: { key: string; type: string; value?: string };
 }
 
 /** ok: Photon answered. busy: the shared queue was full or Photon throttled. down: Photon or the queue's store

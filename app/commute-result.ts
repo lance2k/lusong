@@ -1,4 +1,5 @@
 import type { AnswerKind, Point, RouteState } from "../lib/answer";
+import type { RoadGap } from "../lib/detour";
 import type { DemoTripId } from "../lib/samples";
 import type { PageMuse } from "./commute-muse";
 import type { AdvisoryArea } from "./map-layers";
@@ -30,7 +31,8 @@ export interface CommuteResult {
   trip: { id: DemoTripId | null; label: string };
   rainingHere: boolean;
   answer: { kind: AnswerKind; title: string; reason: string; thin: string | null };
-  route: { lengthKm: number; timeMin: number; streets: string[]; line: Point[] };
+  /** roadGap: how far the route starts or ends from the trip's points, when past 50 m (#41). Optional so an older reply renders. */
+  route: { lengthKm: number; timeMin: number; streets: string[]; line: Point[]; roadGap?: RoadGap };
   detour: {
     state: RouteState;
     proposedBy: "rules" | "muse_spark";
@@ -40,6 +42,7 @@ export interface CommuteResult {
     extraMin: number;
     streets: string[];
     line: Point[];
+    roadGap?: RoadGap;
   } | null;
   advisory: PageAdvisory;
   /** The PAGASA areas covering any checked way; optional so an older reply still renders. */

@@ -659,6 +659,20 @@ describe("a route must reach the trip's own start and end (🔴1)", () => {
     }
   });
 
+  it("a plain route ending 117 m from IT Park is answered for the route up to the road, and the reply says so (#41, duck 🔴1)", async () => {
+    const { handler } = handlerAt(NO_ADVISORY, { plainReply: derivedReply(SAVED_BANILAD_PLAIN, (l) => cutEnd(l, 400)) });
+    const res = await handler(demo("banilad-itpark", "none"));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.route.roadGap).toEqual({ fromM: null, toM: 117 });
+  });
+
+  it("a route at its pins carries no road gap, so the page says nothing more", async () => {
+    const { handler } = handlerAt(NO_ADVISORY);
+    const body = await (await handler(demo("banilad-itpark", "none"))).json();
+    expect(body.route.roadGap).toBeUndefined();
+  });
+
   it("a plain route ending 37 m from IT Park is used, and the gap to IT Park is judged with it: the flooded spot there blocks it", async () => {
     const { handler } = handlerAt(NO_ADVISORY, { plainReply: DERIVED_PLAIN_ENDING_37_M_FROM_IT_PARK });
     const body = await (await handler(demo("banilad-itpark", "no_way_around"))).json();

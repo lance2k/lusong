@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { decodePolyline6 } from "./router";
 import { distanceM, placeOnRoute, ROUTE_CORRIDOR_M } from "./answer";
-import { boxAround, detourAvoids, EXCLUDE_BOX_M, lineEntersArea, lineForTrip, ROUTE_END_TOLERANCE_M } from "./detour";
+import { boxAround, detourAvoids, EXCLUDE_BOX_M, lineEntersArea, lineForTrip, roadGap, roadGapWords, ROUTE_END_TOLERANCE_M } from "./detour";
 
 const EXCLUDED_REQUEST = JSON.parse(readFileSync("test/fixtures/valhalla/banilad-itpark-excluded.request.json", "utf8"));
 /** The spot the 2026-10-30 01:16 PHT probe excluded: the Banilad → IT Park route's midpoint, on Governor M. Cuenco Avenue. */
@@ -110,5 +110,29 @@ describe("whether a route reaches the trip's ends (#41)", () => {
     expect(placeOnRoute(inTheGap, PLAIN_LINE).offM).toBeGreaterThan(ROUTE_CORRIDOR_M);
     expect(placeOnRoute(inTheGap, line).offM).toBeLessThan(1);
     expect(detourAvoids(line, [inTheGap])).toBe(false);
+  });
+});
+
+describe("where the route meets the road, said to the rider (#41, duck 🔴1)", () => {
+  const start = PLAIN_LINE[0];
+  const end = PLAIN_LINE[PLAIN_LINE.length - 1];
+  const westOf = (p: { lat: number; lon: number }, m: number) => ({ lat: p.lat, lon: p.lon - m / (111_320 * Math.cos((p.lat * Math.PI) / 180)) });
+
+  it("a gap up to 50 m is taken as the rider's point, as before #41, and nothing is said", () => {
+    expect(roadGap(PLAIN_LINE, { from: westOf(start, 49), to: end })).toBeNull();
+    expect(roadGapWords(null)).toBeNull();
+  });
+
+  it("past 50 m the gap is measured at each end and the page says the answer is for the route from the road", () => {
+    const fromOnly = roadGap(PLAIN_LINE, { from: westOf(start, 120), to: end });
+    expect(fromOnly).toEqual({ fromM: 120, toM: null });
+    expect(roadGapWords(fromOnly)).toBe("This route starts on the road 120 m from your start; the answer is for the route from there.");
+    const toOnly = roadGap(PLAIN_LINE, { from: start, to: westOf(end, 80) });
+    expect(roadGapWords(toOnly)).toBe("This route ends on the road 80 m from your end; the answer is for the route up to there.");
+    const both = roadGap(PLAIN_LINE, { from: westOf(start, 114.8), to: westOf(end, 67.7) });
+    expect(both).toEqual({ fromM: 115, toM: 68 });
+    expect(roadGapWords(both)).toBe(
+      "This route starts on the road 115 m from your start and ends on the road 68 m from your end; the answer is for the route between them.",
+    );
   });
 });
