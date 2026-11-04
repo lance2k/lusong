@@ -1,6 +1,18 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { buildPrompt, normalizeReadings, toGrid, type LabelledObject, type RawReadings } from "./readings";
-import { decideVerdict } from "./verdict";
+import {
+  buildPrompt,
+  HIDDEN_FLOOR,
+  HIDDEN_PARTS,
+  HIDDEN_READINGS_SCHEMA,
+  normalizeReadings,
+  READINGS_SCHEMA,
+  toGrid,
+  withHiddenFloor,
+  type LabelledObject,
+  type RawReadings,
+} from "./readings";
+import { decideVerdict, PERSON_LANDMARKS } from "./verdict";
 
 const box = { left: 0, top: 0, right: 10, bottom: 10 };
 const objects: LabelledObject[] = [
@@ -119,5 +131,122 @@ describe("prompt", () => {
     expect(toGrid({ left: 128, top: 96, right: 640, bottom: 480 }, image)).toEqual([100, 100, 500, 500]);
     const prompt = buildPrompt([{ label: "C1", kind: "car", box: { left: 0, top: 480, right: 1280, bottom: 960 } }], image);
     expect(prompt).toContain("C1 car [0, 500, 1000, 1000]");
+  });
+});
+
+describe("readers", () => {
+  const image = { width: 1280, height: 960 };
+  const pair: LabelledObject[] = [
+    { label: "P1", kind: "person", box: { left: 100, top: 50, right: 300, bottom: 700 } },
+    { label: "C1", kind: "car", box: { left: 400, top: 300, right: 1200, bottom: 800 } },
+  ];
+
+  it("the landmark reader's prompt is byte for byte the one measured on 2026-10-29", () => {
+    expect(buildPrompt(pair, image)).toBe(readFileSync("test/fixtures/muse/landmark-prompt-2026-10-29.txt", "utf8"));
+    expect(buildPrompt(pair, image, "landmark")).toBe(buildPrompt(pair, image));
+  });
+
+  it("the guided reader adds the hidden-legs guidance and no new field; the hidden reader adds both", () => {
+    const guided = buildPrompt(pair, image, "guided");
+    const hidden = buildPrompt(pair, image, "hidden");
+    expect(guided).toContain("the lowest part of a person you can see is often not their feet");
+    expect(guided).not.toContain("hidden_under_water");
+    expect(hidden).toContain("the lowest part of a person you can see is often not their feet");
+    expect(hidden).toContain("hidden_under_water");
+  });
+
+  it("only the hidden reader's schema requires hidden_under_water, with exactly the fixed parts", () => {
+    const item = HIDDEN_READINGS_SCHEMA.properties.readings.items;
+    expect(item.required).toContain("hidden_under_water");
+    expect(item.properties.hidden_under_water.enum).toEqual(HIDDEN_PARTS);
+    expect(READINGS_SCHEMA.properties.readings.items.required).not.toContain("hidden_under_water");
+  });
+});
+
+describe("hidden floor", () => {
+  const RANK = (l: string) => PERSON_LANDMARKS.indexOf(l as (typeof PERSON_LANDMARKS)[number]);
+
+  it("hidden floor: each submerged part raises the pick to exactly the landmark it proves, never past it", () => {
+    expect(HIDDEN_FLOOR).toEqual({
+      feet: "ankle",
+      shins: "below_knee",
+      knees: "knee",
+      thighs: "hip",
+      hips: "hip",
+      waist: "waist",
+      chest: "chest",
+    });
+    for (const picked of PERSON_LANDMARKS) {
+      for (const hidden of HIDDEN_PARTS) {
+        const result = withHiddenFloor(picked, hidden);
+        if (hidden === "none" || hidden === "cannot_tell") {
+          expect(result).toBe(picked);
+          continue;
+        }
+        const floor = HIDDEN_FLOOR[hidden];
+        expect(RANK(result)).toBe(Math.max(RANK(picked), RANK(floor)));
+      }
+    }
+  });
+
+  function hiddenRaw(...rows: [string, string, string, Partial<{ in_water: boolean; is_child: boolean }>?][]) {
+    return {
+      is_flooded_street: true,
+      caveats: "",
+      readings: rows.map(([label, waterline, hidden, extra]) => ({
+        label,
+        waterline,
+        hidden_under_water: hidden,
+        in_water: extra?.in_water ?? true,
+        is_child: extra?.is_child ?? false,
+        note: "",
+      })),
+    };
+  }
+  const people: LabelledObject[] = [
+    { label: "P1", kind: "person", box },
+    { label: "P2", kind: "person", box },
+    { label: "C1", kind: "car", box },
+  ];
+
+  it("raises an ankle pick on a person whose knees are under the water, and keeps the pick in the detail", () => {
+    const { readings, details, problems } = normalizeReadings(
+      hiddenRaw(["P1", "ankle", "knees"], ["P2", "waist", "shins"], ["C1", "tyre_half", "cannot_tell"]),
+      people,
+      "hidden",
+    );
+    expect(problems).toEqual([]);
+    expect(readings.map((r) => r.landmark)).toEqual(["knee", "waist", "tyre_half"]);
+    expect(details.P1).toEqual({ picked: "ankle", hidden: "knees" });
+  });
+
+  it("never makes a not_visible, dry, child or vehicle reading count, and never changes a vehicle's pick", () => {
+    const { readings } = normalizeReadings(
+      hiddenRaw(["P1", "not_visible", "thighs"], ["P2", "ankle", "waist", { is_child: true }], ["C1", "tyre_quarter", "knees"]),
+      people,
+      "hidden",
+    );
+    expect(readings.map((r) => r.landmark)).toEqual(["not_visible", "ankle", "tyre_quarter"]);
+    const dry = normalizeReadings(hiddenRaw(["P1", "ankle", "waist", { in_water: false }], ["P2", "ankle", "none"], ["C1", "tyre_half", "none"]), people, "hidden");
+    expect(dry.readings[0]).toMatchObject({ landmark: "ankle", inWater: false });
+    const v = decideVerdict({ readings: dry.readings, readingsComplete: true, waterFound: true, modelSaysFlooded: true });
+    expect(v.kind === "measured" && v.decidedBy.landmark).toBe("tyre_half");
+  });
+
+  it("a missing or unknown hidden_under_water is a contract problem, and the pick stands", () => {
+    const reply = hiddenRaw(["P1", "ankle", "ribs"], ["P2", "ankle", "none"], ["C1", "tyre_half", "none"]);
+    delete (reply.readings[1] as Partial<(typeof reply.readings)[number]>).hidden_under_water;
+    const { readings, problems } = normalizeReadings(reply, people, "hidden");
+    expect(problems).toEqual(["P1: unknown hidden_under_water ribs", "P2: unknown hidden_under_water undefined"]);
+    expect(readings.map((r) => r.landmark)).toEqual(["ankle", "ankle", "tyre_half"]);
+  });
+
+  it("the landmark and guided readers ignore a hidden_under_water field", () => {
+    for (const reader of ["landmark", "guided"] as const) {
+      const { readings, details, problems } = normalizeReadings(hiddenRaw(["P1", "ankle", "chest"], ["P2", "ankle", "chest"], ["C1", "tyre_half", "none"]), people, reader);
+      expect(problems).toEqual([]);
+      expect(readings.map((r) => r.landmark)).toEqual(["ankle", "ankle", "tyre_half"]);
+      expect(details.P1.hidden).toBeNull();
+    }
   });
 });

@@ -1,7 +1,19 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Verdict } from "../lib/verdict";
-import { depthManifestProblems, depthReport, judgeDepthDraw, type DepthPhoto } from "./depth-report";
+import {
+  depthManifestProblems,
+  depthReport,
+  gapCm,
+  groupsOf,
+  groupTallies,
+  judgeDepthDraw,
+  rankError,
+  SpendCap,
+  transitions,
+  type DepthPhoto,
+  type DepthSplit,
+} from "./depth-report";
 
 const photo = (file: string, captionDepth: DepthPhoto["captionDepth"], scene: DepthPhoto["scene"] = "flood"): DepthPhoto => ({
   file,
@@ -134,5 +146,97 @@ describe("depthReport", () => {
     expect(report.byDepth.knee).toEqual({ draws: 2, too_shallow: 0, matched: 0, too_deep: 0, cannot_measure: 1, no_flood: 1, error: 0 });
     expect(report.byDepth.chest).toEqual({ draws: 2, too_shallow: 0, matched: 2, too_deep: 0, cannot_measure: 0, no_flood: 0, error: 0 });
     expect(report.markdown).toContain("can't measure (too crowded)");
+  });
+});
+
+describe("measures beside overlap (plan duck P2)", () => {
+  const atLandmark = (landmark: "ankle" | "knee" | "hip" | "chest" | "tyre_half", low: number, high: number): Verdict => ({
+    kind: "measured",
+    rangeCm: { low, high },
+    passability: "NPATV",
+    confidence: "medium",
+    readingsComplete: true,
+    decidedBy: { label: "P1", landmark, interval: { low, high } },
+    readingsUsed: ["P1"],
+  });
+
+  it("gap and rank error: a chest reading on a waist caption scores a match but a positive rank error", () => {
+    const waist = photo("w.jpg", "waist");
+    const chest = atLandmark("chest", 100, 133);
+    expect(judgeDepthDraw(waist, chest)).toBe("matched");
+    expect(gapCm(waist, chest)).toBe(0);
+    expect(rankError(waist, chest)).toBe(1);
+  });
+
+  it("gap is negative by the cm between intervals when too shallow, positive when too deep, null when not measured", () => {
+    const knee = photo("k.jpg", "knee");
+    expect(gapCm(knee, atLandmark("ankle", 5, 10))).toBe(10 - 38);
+    expect(rankError(knee, atLandmark("ankle", 5, 10))).toBe(-3);
+    expect(gapCm(knee, atLandmark("chest", 100, 133))).toBe(100 - 54);
+    expect(gapCm(knee, { kind: "cannot_measure" })).toBeNull();
+    expect(rankError(knee, atLandmark("tyre_half", 27, 39))).toBeNull();
+  });
+
+  it("paired transitions count each photo and draw once, old outcome to new", () => {
+    const photos = [photo("a.jpg", "knee"), photo("b.jpg", "knee")];
+    const before = [
+      { file: "a.jpg", draw: 1, verdict: atLandmark("ankle", 5, 10) },
+      { file: "a.jpg", draw: 2, verdict: atLandmark("knee", 38, 54) },
+      { file: "b.jpg", draw: 1, error: "boom" },
+    ];
+    const after = [
+      { file: "a.jpg", draw: 1, verdict: atLandmark("knee", 38, 54) },
+      { file: "a.jpg", draw: 2, verdict: atLandmark("chest", 100, 133) },
+      { file: "b.jpg", draw: 1, verdict: atLandmark("knee", 38, 54) },
+    ];
+    expect(transitions(photos, before, after)).toEqual({
+      "too_shallow → matched": 1,
+      "matched → too_deep": 1,
+      "error → matched": 1,
+    });
+  });
+});
+
+describe("split groups (plan duck P3)", () => {
+  const split: DepthSplit = {
+    split: { "h1.jpg": "heldout", "h2.jpg": "heldout", "t1.jpg": "tuning", "w1.jpg": "heldout" },
+    exposedHeldout: ["h2.jpg"],
+  };
+
+  it("split tallies: exposed held-out photos are counted apart", () => {
+    const photos = [photo("h1.jpg", "knee"), photo("h2.jpg", "knee"), photo("t1.jpg", "knee"), photo("w1.jpg", "knee", "wading")];
+    expect(groupsOf(photos[0], split)).toEqual(["all", "flood", "held-out", "held-out flood", "held-out flood, unexposed"]);
+    expect(groupsOf(photos[1], split)).toEqual(["all", "flood", "held-out", "held-out flood"]);
+    expect(groupsOf(photos[2], split)).toEqual(["all", "flood", "tuning", "tuning flood"]);
+    expect(groupsOf(photos[3], split)).toEqual(["all", "wading", "held-out"]);
+    const draws = photos.map((p) => ({ file: p.file, draw: 1, verdict: deciding(5, 10, "shallow") }));
+    const t = groupTallies(photos, draws, split);
+    expect(t.get("held-out flood")?.outcomes.too_shallow).toBe(2);
+    expect(t.get("held-out flood, unexposed")?.draws).toBe(1);
+    expect(t.get("tuning flood")?.draws).toBe(1);
+    expect(t.get("all")).toMatchObject({ draws: 4, measured: 4, meanGapCm: -28, meanAbsGapCm: 28 });
+  });
+
+  it("a photo missing from the split is an error, not silently uncounted", () => {
+    expect(() => groupsOf(photo("x.jpg", "knee"), split)).toThrow("not in the split");
+  });
+
+  it("the committed split covers every labelled photo, and its exposed list is held-out only", () => {
+    const labels = JSON.parse(readFileSync("test/fixtures/depth-set/labels.json", "utf8")) as DepthPhoto[];
+    const committed = JSON.parse(readFileSync("test/fixtures/depth-set/split.json", "utf8")) as DepthSplit;
+    expect(Object.keys(committed.split).sort()).toEqual(labels.map((p) => p.file).sort());
+    expect(committed.exposedHeldout.every((f) => committed.split[f] === "heldout")).toBe(true);
+  });
+});
+
+describe("SpendCap (plan duck P4)", () => {
+  it("spend cap: a draw whose reserve would cross the cap does not start", () => {
+    const cap = new SpendCap(100);
+    expect(cap.tryReserve(60)).toBe(true);
+    expect(cap.tryReserve(50)).toBe(false);
+    cap.settle(60, 10);
+    expect(cap.spentMicros).toBe(10);
+    expect(cap.tryReserve(90)).toBe(true);
+    expect(cap.tryReserve(1)).toBe(false);
   });
 });

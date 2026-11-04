@@ -1,4 +1,4 @@
-import { LANDMARK_CM, type Interval, type Landmark, type Verdict } from "../lib/verdict";
+import { LANDMARK_CM, PERSON_LANDMARKS, type Interval, type Landmark, type Verdict } from "../lib/verdict";
 import type { AcceptancePhoto, Depth } from "./acceptance-gate";
 
 /** A photo in test/fixtures/depth-set/: an acceptance-style label whose caption always states a depth. */
@@ -9,7 +9,17 @@ export interface DepthPhoto extends AcceptancePhoto {
   reviewedByLance: boolean;
 }
 
-export type DepthDraw = { file: string; draw: number; verdict: Verdict } | { file: string; draw: number; error: string };
+export type DepthDraw = ({ file: string; draw: number; verdict: Verdict } | { file: string; draw: number; error: string }) & {
+  /** Which reader produced it, when a run compares readers. */
+  reader?: string;
+};
+
+/** test/fixtures/depth-set/split.json */
+export interface DepthSplit {
+  split: Record<string, "tuning" | "heldout">;
+  /** Held-out photos whose earlier per-photo outcomes were read before the split was fixed. */
+  exposedHeldout: string[];
+}
 
 export type Outcome = "too_shallow" | "matched" | "too_deep" | "cannot_measure" | "no_flood" | "error";
 
@@ -55,6 +65,8 @@ export function judgeDepthDraw(photo: DepthPhoto, verdict: Verdict): Exclude<Out
 }
 
 type Tally = { draws: number } & Record<Outcome, number>;
+
+const emptyOutcomes = (): Record<Outcome, number> => ({ too_shallow: 0, matched: 0, too_deep: 0, cannot_measure: 0, no_flood: 0, error: 0 });
 
 const emptyTally = (): Tally => ({ draws: 0, too_shallow: 0, matched: 0, too_deep: 0, cannot_measure: 0, no_flood: 0, error: 0 });
 
@@ -110,4 +122,136 @@ export function depthReport(photos: readonly DepthPhoto[], draws: readonly Depth
     ...rows.map((r) => `| ${r.file} | ${r.draw} | ${r.captionDepth} (${r.captionCm.low}–${r.captionCm.high} cm) | ${r.lusong} | ${OUTCOME_WORDS[r.outcome]} |`),
   ].join("\n");
   return { rows, totals, byDepth: Object.fromEntries(byDepth), markdown };
+}
+
+/**
+ * How far the deciding interval sits from the caption's, in cm: negative when too shallow, positive when too deep, 0
+ * when they overlap. Overlap alone rewards wide deep landmarks (chest overlaps a waist caption), so the report shows
+ * this beside it.
+ */
+export function gapCm(photo: DepthPhoto, verdict: Verdict): number | null {
+  if (verdict.kind !== "measured") return null;
+  const caption = captionCm(photo.captionDepth);
+  const read = verdict.decidedBy.interval;
+  if (read.high < caption.low) return read.high - caption.low;
+  if (read.low > caption.high) return read.low - caption.high;
+  return 0;
+}
+
+/** Steps along the person landmarks from the caption's to the deciding one; null when a vehicle reading decided. */
+export function rankError(photo: DepthPhoto, verdict: Verdict): number | null {
+  if (verdict.kind !== "measured") return null;
+  const read = PERSON_LANDMARKS.indexOf(verdict.decidedBy.landmark as (typeof PERSON_LANDMARKS)[number]);
+  if (read < 0) return null;
+  return read - PERSON_LANDMARKS.indexOf(CAPTION_LANDMARK[photo.captionDepth] as (typeof PERSON_LANDMARKS)[number]);
+}
+
+export type Group = "all" | "flood" | "wading" | "tuning flood" | "held-out flood" | "held-out flood, unexposed" | "held-out" | "tuning";
+
+/** The groups a photo is counted in. "unexposed" leaves out held-out photos whose old outcomes were read before the split. */
+export function groupsOf(photo: DepthPhoto, split: DepthSplit): Group[] {
+  const side = split.split[photo.file];
+  if (!side) throw new Error(`${photo.file} is not in the split`);
+  const groups: Group[] = ["all", photo.scene, side === "heldout" ? "held-out" : "tuning"];
+  if (photo.scene === "flood") {
+    groups.push(side === "heldout" ? "held-out flood" : "tuning flood");
+    if (side === "heldout" && !split.exposedHeldout.includes(photo.file)) groups.push("held-out flood, unexposed");
+  }
+  return groups;
+}
+
+export interface GroupTally {
+  draws: number;
+  outcomes: Record<Outcome, number>;
+  /** Over measured draws: the mean signed gap and the mean absolute gap in cm, and how many were measured. */
+  measured: number;
+  meanGapCm: number | null;
+  meanAbsGapCm: number | null;
+  /** Mean signed landmark-rank error over draws a person reading decided. */
+  meanRankError: number | null;
+}
+
+export function outcomeOf(photo: DepthPhoto, d: DepthDraw): Outcome {
+  return "error" in d ? "error" : judgeDepthDraw(photo, d.verdict);
+}
+
+export function groupTallies(photos: readonly DepthPhoto[], draws: readonly DepthDraw[], split: DepthSplit): Map<Group, GroupTally> {
+  const byFile = new Map(photos.map((p) => [p.file, p]));
+  const acc = new Map<Group, { draws: number; outcomes: Record<Outcome, number>; gaps: number[]; ranks: number[] }>();
+  for (const d of draws) {
+    const photo = byFile.get(d.file);
+    if (!photo) throw new Error(`${d.file} is not in the depth set`);
+    const outcome = outcomeOf(photo, d);
+    const gap = "error" in d ? null : gapCm(photo, d.verdict);
+    const rank = "error" in d ? null : rankError(photo, d.verdict);
+    for (const g of groupsOf(photo, split)) {
+      const a = acc.get(g) ?? { draws: 0, outcomes: emptyOutcomes(), gaps: [], ranks: [] };
+      acc.set(g, a);
+      a.draws++;
+      a.outcomes[outcome]++;
+      if (gap !== null) a.gaps.push(gap);
+      if (rank !== null) a.ranks.push(rank);
+    }
+  }
+  const mean = (xs: number[]) => (xs.length ? Math.round((xs.reduce((x, y) => x + y, 0) / xs.length) * 10) / 10 : null);
+  return new Map(
+    [...acc].map(([g, a]) => [
+      g,
+      {
+        draws: a.draws,
+        outcomes: a.outcomes,
+        measured: a.gaps.length,
+        meanGapCm: mean(a.gaps),
+        meanAbsGapCm: mean(a.gaps.map(Math.abs)),
+        meanRankError: mean(a.ranks),
+      },
+    ]),
+  );
+}
+
+/** Old outcome → new outcome for the same photo and draw (the same SAM replies when the run compared readers). */
+export function transitions(
+  photos: readonly DepthPhoto[],
+  before: readonly DepthDraw[],
+  after: readonly DepthDraw[],
+  keep: (photo: DepthPhoto) => boolean = () => true,
+): Record<string, number> {
+  const byFile = new Map(photos.map((p) => [p.file, p]));
+  const afterByKey = new Map(after.map((d) => [`${d.file}#${d.draw}`, d]));
+  const counts: Record<string, number> = {};
+  for (const b of before) {
+    const photo = byFile.get(b.file);
+    const a = afterByKey.get(`${b.file}#${b.draw}`);
+    if (!photo || !a || !keep(photo)) continue;
+    const key = `${outcomeOf(photo, b)} → ${outcomeOf(photo, a)}`;
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
+  return counts;
+}
+
+/**
+ * The harness's own spending gate: a draw starts only when what has been spent plus the worst case of every draw in
+ * flight, its own included, stays within the cap. Settling replaces a draw's reserve with its metered cost.
+ */
+export class SpendCap {
+  private spent = 0;
+  private reserved = 0;
+
+  constructor(readonly capMicros: number) {}
+
+  tryReserve(micros: number): boolean {
+    if (this.spent + this.reserved + micros > this.capMicros) return false;
+    this.reserved += micros;
+    return true;
+  }
+
+  /** `actualMicros` is the metered cost; when the meter is incomplete the caller passes the reserve instead. */
+  settle(reservedMicros: number, actualMicros: number): void {
+    this.reserved -= reservedMicros;
+    this.spent += actualMicros;
+  }
+
+  get spentMicros(): number {
+    return this.spent;
+  }
 }

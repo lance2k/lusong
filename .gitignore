@@ -15,3 +15,6 @@ next-env.d.ts
 
 # The incremental log of a depth run; results.json holds the same records.
 test/depth-runs/*/records.jsonl
+# SAM replies saved by depth runs: several MB a run, kept on the laptop for re-reading, not in git.
+test/depth-runs/*/sam/
+test/depth-runs/sam-cache/

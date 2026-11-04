@@ -1,5 +1,5 @@
 {
- "rule": "Within each (scene, captionDepth) stratum, files sorted by sha256(\"lusong-depth-split-2026-11-04\" + file); strata in sorted order; files alternate held-out, tuning, held-out\u2026 with the alternation carried across strata. Fixed from labels.json alone, before per-photo outcomes were read for this work.",
+ "rule": "Within each (scene, captionDepth) stratum, files sorted by sha256(\"lusong-depth-split-2026-11-04\" + file); strata in sorted order; files alternate held-out, tuning, held-out\u2026 with the alternation carried across strata. Fixed from labels.json alone; the rule never reads an outcome. Before it was fixed, the 6fa88e6 run's per-photo rows had been read for the 17 photos listed first in that report (alphabetical), 10 of them now held-out: those are listed in exposedHeldout, and the report counts the held-out photos without them apart.",
  "split": {
   "170901-m-bh832-018-36989109351.jpg": "heldout",
   "2016-southeastern-texas-floods-160421-z-zz999-002.jpg": "tuning",
@@ -46,5 +46,17 @@
   "water-survival-training-a-tool-to-stay-afloat-130411-a-wo769.jpg": "tuning",
   "west-street-january-20-1909-colfax-washington-15657627199.jpg": "tuning",
   "where-culture-meets-the-current.jpg": "tuning"
- }
+ },
+ "exposedHeldout": [
+  "170901-m-bh832-018-36989109351.jpg",
+  "2016-southeastern-texas-floods-160421-z-zz999-015.jpg",
+  "7th-communication-battalion-marines-conduct-jungle-endurance.jpg",
+  "dfc-5296-a-lone-attendant-stands-waist-deep-in-calm-waters-b.jpg",
+  "dsc-8232-two-friends-enjoying-a-sunny-day-at-the-beach-one-s.jpg",
+  "fisherman-geograph-org-uk-597307.jpg",
+  "full-length-portrait-of-two-men-holding-snapper-in-knee-deep.jpg",
+  "half-length-portrait-of-two-men-wading-through-thigh-deep-wa.jpg",
+  "hc08187-47810475052.jpg",
+  "inondations-janvier-1910-un-intr-pide-photographe-homme-avec.jpg"
+ ]
 }
