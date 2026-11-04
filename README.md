@@ -71,17 +71,18 @@ until you switch it on, and never part of a verdict.
   page says it couldn't pick the evidence, and the rules' answer stands.
 - **Voice notes:** someone at the water can record up to 30 seconds in Bisaya, Tagalog or English, recorded in the
   browser as 16 kHz WAV. For Tagalog and English, Meta's Voice Transcribe turns it into words, and Muse Spark 1.3
-  turns the words into a fixed-choice claim (a place, a depth, passable or not). Voice Transcribe doesn't list Cebuano,
-  so a Bisaya note goes to Muse Spark 1.2 as audio, and one call returns the words and the claim. Tested live on one
-  10 s Bisaya clip: it heard the place, knee-deep and not passable, and 10 s of silence was refused. Tagalog and
-  English were tested live on 2026-11-05 (PHT) with synthetic speech, not real voices: four 5–7 s notes made with
-  Gemini TTS, each sent twice through the page's voice handler (`test/live-tagalog-english-voice.test.ts`), 8 draws.
-  Every draw went to Voice Transcribe, then Muse Spark 1.3. Both English notes and the knee-deep Tagalog note gave the
-  right street, depth and passable on both draws (6 of 8). The other Tagalog note said "gutter-deep" and "Taft
-  Avenue" and was transcribed as "Gatortip" and "Tuft Avenue" on both draws, so its depth came back as not said and
-  its place as "Tuft Avenue"; passable was right. One English draw wrote "Philcoa" in Chinese characters, and the
-  reporter's screen shows the place as heard. The 8 draws took 12–33 s and cost $0.06 in all. Neither the audio
-  nor the words are kept or shown, and a voice note can warn but never clear.
+  turns the words into a fixed-choice claim (a place, a depth, passable or not). Voice Transcribe doesn't list
+  Cebuano, so a Bisaya note goes to Muse Spark 1.2 as audio, and one call returns the words and the claim. Tested live
+  on one 10 s Bisaya clip: it heard the place, knee-deep and not passable, and 10 s of silence was refused. Tagalog
+  and English were tested live on 2026-11-05 (PHT) with synthetic speech, not real voices: four 4.6–6.8 s notes made
+  with Gemini TTS, each sent twice through the page's voice handler (`test/live-tagalog-english-voice.test.ts`), 8
+  draws. Every draw went to Voice Transcribe, then Muse Spark 1.3. Both English notes and the knee-deep Tagalog note
+  gave the right street, depth and passable on both draws (6 of 8). The other Tagalog note said "gutter-deep" and
+  "Taft Avenue" and was transcribed as "Gatortip" (then "Gatirtip") and "Tuft Avenue" on both draws, so its depth came
+  back as not said and its place as "Tuft Avenue"; passable was right. One English draw wrote "Philcoa" in Chinese
+  characters, and the reporter's screen shows the place as heard. The 8 draws took 12–33 s each; their metered usage
+  prices at about $0.06 in all (what Meta bills for Voice Transcribe is unverified). Neither the audio nor the words
+  are kept or shown, and a voice note can warn but never clear.
 - **Reported photos stay hidden.** A report shows its pin and its reading, never the photo. The code to show a photo
   only after SAM 3.1 has found and pixelated every person and licence plate in it is written but switched off:
   `PLATE_DETECTION_TRUSTED` is `false` in `lib/photo-publish.ts`, and production has no blob store to keep a photo

@@ -14,6 +14,7 @@ import { makeVoiceReportHandler, VOICE_RESERVE_MICROS } from "../lib/voice-repor
  */
 const OUT = process.env.LUSONG_LIVE_OUT ?? "live-tagalog-english-voice.json";
 const DRAWS = Number(process.env.LUSONG_LIVE_DRAWS ?? 2);
+if (!Number.isInteger(DRAWS) || DRAWS < 1) throw new Error("LUSONG_LIVE_DRAWS must be a whole number of at least 1");
 
 const NOTES = [
   {
@@ -171,7 +172,15 @@ it.skipIf(process.env.LUSONG_LIVE !== "1")(
         writeFileSync(OUT, JSON.stringify({ reserveMicros: VOICE_RESERVE_MICROS, results }, null, 2));
       }
     }
+    // The run itself must have worked; whether each claim matched is the measurement, read from LUSONG_LIVE_OUT.
     expect(results).toHaveLength(NOTES.length * DRAWS);
+    for (const r of results) {
+      expect(r.status).toBe(200);
+      expect((r.body as { duplicate: boolean; stored: unknown }).duplicate).toBe(false);
+      expect((r.body as { stored: unknown }).stored).toBe(true);
+      expect(r.route).toEqual(["/v1/asr/transcribe muse-voice-transcribe-1.0", "/v1/chat/completions muse-spark-1.3"]);
+      expect(r.metered).not.toBeNull();
+    }
   },
   600_000,
 );
