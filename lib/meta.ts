@@ -83,8 +83,9 @@ const READERS: Record<Operation, (usage: Usage, body: unknown) => Reading> = {
   },
   /**
    * Billed per whole second of audio, rounded down; `audioDurationMs` is the reply's "Total audio duration processed"
-   * (dev.meta.ai/docs/api-reference/voice/schemas, read 2026-10-30). UNVERIFIED: no live call has shown that field or
-   * that it is what is billed, so the count is never complete and a settle keeps the whole reservation.
+   * (dev.meta.ai/docs/api-reference/voice/schemas, read 2026-10-30). Live replies carry it (8 calls, 2026-11-05 PHT,
+   * test/live-tagalog-english-voice.test.ts). UNVERIFIED: that it is what is billed, so the count is never complete and
+   * a settle keeps the whole reservation.
    */
   "voice-transcribe"(_usage, body) {
     const ms = countOf((body as { audioDurationMs?: unknown } | null)?.audioDurationMs);
@@ -294,9 +295,9 @@ export async function sparkResponse(
 
 /**
  * Muse Voice Transcribe on one complete clip, as the buffered JSON reply (dev.meta.ai/docs/api-reference/voice/transcribe
- * and /voice/schemas, read 2026-10-30): a `request` part of settings as JSON and an `audio` part holding the WAV. From
- * the docs only; no live call has been made. UNVERIFIED: the reply's `transcript` field and the endpoint's behaviour on
- * a 16 kHz clip, beyond the docs' word that 16 kHz is accepted and resampled.
+ * and /voice/schemas, read 2026-10-30): a `request` part of settings as JSON and an `audio` part holding the WAV.
+ * Called live 8 times on 16 kHz clips of 5–7 s (2026-11-05 PHT, test/live-tagalog-english-voice.test.ts): each reply
+ * was 200 with `transcript`, `audioDurationMs`, `sessionId` and `turns`, in 2.0–3.4 s.
  */
 export async function transcribe(
   wav: Uint8Array<ArrayBuffer>,

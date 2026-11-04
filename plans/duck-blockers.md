@@ -73,3 +73,22 @@ behaviour-identical, that required-call failures and unsure labels fail the bar,
 - 🟡 A required call that was never recorded was missing from `failedCalls`, and strict-reader reasons were dropped.
   Fixed (`failures` keeps each prompt's reason). Test: "names a required call that was never recorded, and keeps each
   failure's reason". Both draws re-scored offline after the fix: unchanged.
+
+# Duck blockers: docs/voice-live-tl-en (Tagalog and English voice notes tested live)
+
+Critic: `rubber-duck-gpt`, model `gpt-6-astra` via Codex CLI (session rollout-2026-11-05T03-20-01-01a1a801), diff round
+on c01fe61, 2026-11-04 19:20 UTC (2026-11-05 03:20 PHT). One round: a docs change and a live test skipped in CI.
+
+### 🔴 T1. The README gave the metered estimate as what the 8 draws cost
+Invariant: nothing unmeasured goes in a doc. The harness prices the metered usage (`costMicros`); what Meta bills for
+Voice Transcribe is unverified (`lib/meta.ts`, the voice-transcribe reader), so "cost $0.06 in all" over-claimed.
+Disposition: the README now says the metered usage prices at about $0.06 and that what Meta bills for Voice Transcribe
+is unverified.
+Closed by: `test/readme-voice-claims.test.ts` "the README gives the Tagalog and English voice cost as metered usage, not
+as what Meta billed" (fails on c01fe61, passes after).
+
+### 🟡 dispositions
+- "Gatortip … on both draws" while draw 2 said "Gatirtip": the README names both spellings.
+- The live test asserted only the number of draws: it now refuses a draw count under 1 and asserts, for every draw, 200,
+  not a duplicate, stored, the route Voice Transcribe then Muse Spark 1.3, and one settlement. All 8 recorded draws meet
+  these (checked offline against the run's JSON; the test was not re-run live).
