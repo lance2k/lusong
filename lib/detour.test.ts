@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { decodePolyline6 } from "./router";
-import { boxAround, detourAvoids, EXCLUDE_BOX_M, lineEntersArea } from "./detour";
+import { distanceM, placeOnRoute, ROUTE_CORRIDOR_M } from "./answer";
+import { boxAround, detourAvoids, EXCLUDE_BOX_M, lineEntersArea, lineForTrip, ROUTE_END_TOLERANCE_M } from "./detour";
 
 const EXCLUDED_REQUEST = JSON.parse(readFileSync("test/fixtures/valhalla/banilad-itpark-excluded.request.json", "utf8"));
 /** The spot the 2026-10-30 01:16 PHT probe excluded: the Banilad → IT Park route's midpoint, on Governor M. Cuenco Avenue. */
@@ -72,5 +73,42 @@ describe("whether a returned route is a way around the blocked spots", () => {
     const beside = { lat: EXCLUDED_LINE[70].lat + 25 / 111_320, lon: EXCLUDED_LINE[70].lon };
     expect(lineEntersArea(EXCLUDED_LINE, boxAround(beside, 20))).toBe(false);
     expect(detourAvoids(EXCLUDED_LINE, [beside], 20)).toBe(false);
+  });
+});
+
+describe("whether a route reaches the trip's ends (#41)", () => {
+  const start = PLAIN_LINE[0];
+  const end = PLAIN_LINE[PLAIN_LINE.length - 1];
+  /** A pick `m` metres due west of the route's start, as from inside a big lot. */
+  const westOf = (p: { lat: number; lon: number }, m: number) => ({ lat: p.lat, lon: p.lon - m / (111_320 * Math.cos((p.lat * Math.PI) / 180)) });
+
+  it.each([
+    ["Jaro plaza", 51],
+    ["Burnham Park", 56.5],
+    ["SM City Baguio", 67.7],
+    ["SM City Iloilo", 79.1],
+    ["Ayala Center Cebu", 114.8],
+  ])("a start in a big lot that Valhalla snapped %s's measured %s m away is used", (_place, m) => {
+    const from = westOf(start, m);
+    expect(distanceM(from, start)).toBeCloseTo(m, 0);
+    expect(lineForTrip(PLAIN_LINE, { from, to: end })).not.toBeNull();
+    expect(lineForTrip(PLAIN_LINE, { from: start, to: westOf(end, m) })).not.toBeNull();
+  });
+
+  it("a route whose start or end is more than 150 m from the trip's is refused", () => {
+    expect(ROUTE_END_TOLERANCE_M).toBe(150);
+    expect(lineForTrip(PLAIN_LINE, { from: westOf(start, 151), to: end })).toBeNull();
+    expect(lineForTrip(PLAIN_LINE, { from: start, to: westOf(end, 151) })).toBeNull();
+    expect(lineForTrip(PLAIN_LINE, { from: westOf(start, 300), to: westOf(end, 300) })).toBeNull();
+  });
+
+  it("the gap from the pick to the road is judged with the route: a blocked spot in it is on the line", () => {
+    const from = westOf(start, 114.8);
+    const line = lineForTrip(PLAIN_LINE, { from, to: end })!;
+    expect(line[0]).toEqual(from);
+    const inTheGap = westOf(start, 60);
+    expect(placeOnRoute(inTheGap, PLAIN_LINE).offM).toBeGreaterThan(ROUTE_CORRIDOR_M);
+    expect(placeOnRoute(inTheGap, line).offM).toBeLessThan(1);
+    expect(detourAvoids(line, [inTheGap])).toBe(false);
   });
 });

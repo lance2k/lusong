@@ -84,9 +84,12 @@ export function detourAvoids(line: readonly Point[], blockedSpots: readonly Poin
 
 /**
  * How far a route's first and last points may lie from the trip's start and end. Valhalla snaps each end to the
- * nearest road: 26.7 m at Banilad was the largest gap in the saved routes.
+ * nearest road: 26.7 m at Banilad was the largest gap in the saved routes, but a pick inside a big lot snaps further.
+ * Measured on /locate (motorcycle, 1 draw each, 2026-11-03/04): Jaro plaza 51 m, Burnham Park 56.5 m, SM City Baguio
+ * 67.7 m, SM Mall of Asia 68.7 m, SM City Iloilo 79.1 m, Ayala Center Cebu 114.8 m (#41). 150 m takes those and still
+ * refuses an end that is somewhere else, and the gap itself is judged as part of the line (lineForTrip).
  */
-export const ROUTE_END_TOLERANCE_M = 50;
+export const ROUTE_END_TOLERANCE_M = 150;
 
 /**
  * The line a route is judged on: the trip's start, the route, the trip's end, so a gap at either end is checked like

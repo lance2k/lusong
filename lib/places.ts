@@ -1,12 +1,17 @@
 import { USER_AGENT } from "./advisory";
 import { MAX_ACK_MS, slotStoreFromEnv, type SlotStore } from "./router";
-import { builtInMatches, fold, MAX_PLACES, placeQuery, type Place, type PlacesReply } from "./built-in-places";
+import { distanceM } from "./answer";
+import { builtInMatches, fold, MAX_PLACES, placeQuery, words, type Place, type PlacesReply } from "./built-in-places";
 import { inBound, TRIP_BOUND, type Bound } from "./trip-bound";
 
 export * from "./built-in-places";
 
 export const PHOTON_URL = "https://photon.komoot.io/api/";
-const PHOTON_TIMEOUT_MS = 4_000;
+/**
+ * Photon took 2.8–3.2 s from the laptop (5 draws, 2026-11-03), so 4 s turned a slow minute into "down" (#42). One
+ * request a keystroke pause, never retried; with the queue's 3 s wait it still ends inside the route's 15 s.
+ */
+export const PHOTON_TIMEOUT_MS = 6_000;
 
 export interface Bias {
   lat: number;
@@ -272,9 +277,37 @@ export class PlaceCache {
   }
 }
 
-function merge(builtIns: Place[], found: Place[]): Place[] {
+/** A part's name is its parent's, word for word, with more after it, and it lies this close to the parent. */
+const PART_OF_PLACE_M = 1_000;
+
+/**
+ * The list without the parts of a place that is in it: "SM City Baguio Balcony" and "… Taxi Loading/Unloading Area"
+ * within 1 km of "SM City Baguio" are left out, so the rider picks the place itself (#57). A part stays when the
+ * query names it: a query word beyond the parent's name starts one of the part's own words, and every such query
+ * word starts one of its words or its area's.
+ */
+export function withoutParts(places: Place[], query: string): Place[] {
+  const asked = words(query);
+  return places.filter((child) => {
+    const childWords = words(child.name);
+    return !places.some((parent) => {
+      if (parent === child) return false;
+      const parentWords = words(parent.name);
+      if (parentWords.length === 0 || childWords.length <= parentWords.length) return false;
+      if (!parentWords.every((w, i) => childWords[i] === w)) return false;
+      if (distanceM(parent, child) > PART_OF_PLACE_M) return false;
+      const own = childWords.slice(parentWords.length);
+      const beyond = asked.filter((q) => !parentWords.some((w) => w.startsWith(q)));
+      const areaWords = words(child.area);
+      const named = beyond.some((q) => own.some((w) => w.startsWith(q))) && beyond.every((q) => [...own, ...areaWords].some((w) => w.startsWith(q)));
+      return !named;
+    });
+  });
+}
+
+function merge(builtIns: Place[], found: Place[], query: string): Place[] {
   const names = new Set(builtIns.map((p) => fold(p.name)));
-  return [...builtIns, ...found.filter((p) => !names.has(fold(p.name)))].slice(0, MAX_PLACES);
+  return withoutParts([...builtIns, ...found.filter((p) => !names.has(fold(p.name)))], query).slice(0, MAX_PLACES);
 }
 
 export interface PlacesDeps {
@@ -290,7 +323,7 @@ export async function searchPlaces(rawQuery: unknown, bias: Bias | null, deps: P
   const builtIns = builtInMatches(q, deps.bound);
   const key = `${deps.bound.id}|${bias ? `${bias.lat},${bias.lon}` : "-"}|${fold(q)}`;
   const cached = deps.cache.get(key);
-  if (cached) return { status: "ok", places: merge(builtIns, cached) };
+  if (cached) return { status: "ok", places: merge(builtIns, cached, q) };
   const gate = await deps.gate.acquire();
   if (gate !== "ok") return { status: gate === "busy" ? "busy" : "down", places: builtIns };
   let res: Response;
@@ -307,7 +340,7 @@ export async function searchPlaces(rawQuery: unknown, bias: Bias | null, deps: P
   if (body === null) return { status: "down", places: builtIns };
   const found = placesFromPhoton(body, deps.bound);
   deps.cache.set(key, found);
-  return { status: "ok", places: merge(builtIns, found) };
+  return { status: "ok", places: merge(builtIns, found, q) };
 }
 
 const sharedCache = new PlaceCache();

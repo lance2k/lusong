@@ -81,7 +81,8 @@ export function fold(s: string): string {
   return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 }
 
-function words(s: string): string[] {
+/** The words of a name, folded: letters and digits only. */
+export function words(s: string): string[] {
   return fold(s).split(/[^a-z0-9]+/).filter(Boolean);
 }
 
