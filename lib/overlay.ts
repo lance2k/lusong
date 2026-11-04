@@ -54,6 +54,20 @@ export function waterlineY(object: PlacedRaster, box: Box, water: readonly Place
   return touches ? y : null;
 }
 
+/**
+ * The flat cut across the bottom of a mask, for a tyre whose lower part is under water: the bottom edge's width (the
+ * chord) and the share of its columns that have water within the same tolerance as `waterlineY`. Null for an empty mask.
+ */
+export function waterCut(object: PlacedRaster, box: Box, water: readonly PlacedRaster[]): { y: number; chordPx: number; wetShare: number } | null {
+  const y = lowestRowY(object);
+  if (y === null) return null;
+  const tolerance = Math.max(3, 0.03 * (box.bottom - box.top));
+  const xs = bottomEdgeXs(object, y, tolerance);
+  if (xs.length === 0) return null;
+  const wet = xs.filter((x) => water.some((w) => hasPixelIn(w, x - tolerance, x + tolerance, y - tolerance, y + tolerance))).length;
+  return { y, chordPx: xs.length * object.scaleX, wetShare: wet / xs.length };
+}
+
 export interface PlacedPath {
   d: string;
   /** SVG transform that moves the raster-space path onto the source image. */
