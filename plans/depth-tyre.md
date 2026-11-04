@@ -18,7 +18,7 @@ criteria and candidate in a commit before any held-out run; same criteria as the
 Report the held-out headline before/after with draws, and how many held-out flood photos have a usable tyre at all.
 Ship behind a constant that's on only if it passes; otherwise no PR, push the branch, report.
 
-## What already exists (on main, in production since #2x)
+## What already exists (on main since 01443fa, slice 3b; in the production build b46bd2f)
 `lib/tyre.ts` already does tyre-cap geometry, and `lib/check.ts` already feeds it into `decideVerdict` as
 `tyreEstimates` (deepen-only, never counted as a reading). So today's held-out baseline (13 too shallow, 17 matched,
 0 too deep, 16 flood photos × 2 draws) already includes it. Today's version:
