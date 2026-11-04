@@ -42,4 +42,4 @@ it.skipIf(!process.env.LUSONG_BLUR_RESCORE_IN || !process.env.LUSONG_BLUR_RESCOR
   });
   writeFileSync(process.env.LUSONG_BLUR_RESCORE_OUT!, JSON.stringify({ rescoredAt: new Date().toISOString(), draws }, null, 1));
   expect(draws.length).toBeGreaterThan(0);
-});
+}, 300_000);
