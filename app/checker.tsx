@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { RefusalReason } from "@/lib/budget";
-import type { PageObject, PageResult } from "@/lib/check";
-import { cropBox, type ViewBox } from "@/lib/crop";
-import { gaugeRowsFor, type Interval, type Landmark, type Verdict } from "@/lib/verdict";
+import type { RefusalReason } from "../lib/budget";
+import type { PageObject, PageResult } from "../lib/check";
+import { cropBox, type ViewBox } from "../lib/crop";
+import { gaugeRowsFor, type Interval, type Landmark, type Verdict } from "../lib/verdict";
 
 const MAX_SIDE = 1600;
 const JPEG_QUALITY = 0.85;
@@ -40,13 +40,19 @@ type LoadedSample = { sample: Sample; result: PageResult };
 
 const REFUSAL_REASONS: readonly RefusalReason[] = ["budget", "ip", "unavailable"];
 
-type State =
+export type State =
   | { step: "idle" }
   | { step: "preparing" }
+  | { step: "previewing"; previewUrl: string; blob: Blob }
   | { step: "measuring"; previewUrl: string; startedAt: number }
   | { step: "done"; previewUrl: string; result: PageResult }
   | { step: "refused"; message: string; samples: LoadedSample[] | null; shown: number }
   | { step: "failed"; previewUrl: string | null; message: string };
+
+/** A shrunk pick only shows the photo; the paid check is its own tap (#48). One landing during a check is dropped. */
+export function checkerAfterPick(state: State, previewUrl: string, blob: Blob): State {
+  return state.step === "measuring" ? state : { step: "previewing", previewUrl, blob };
+}
 
 async function loadSamples(): Promise<LoadedSample[]> {
   const samples = (await (await fetch("/samples/index.json")).json()) as Sample[];
@@ -360,14 +366,87 @@ function Elapsed({ since }: { since: number }) {
   return <>{Math.max(0, Math.round((now - since) / 1000))}</>;
 }
 
+const primary =
+  "min-h-14 w-full rounded-control bg-brand px-5 text-lg font-semibold text-on-brand shadow-sm transition hover:brightness-110 disabled:opacity-60";
+const secondary = "min-h-14 w-full rounded-control border border-line bg-surface px-5 text-lg font-semibold text-ink disabled:opacity-60";
+
+function takeLabel(step: State["step"]): string {
+  if (step === "idle") return "Choose or take a photo";
+  if (step === "preparing") return "Opening the photo…";
+  if (step === "previewing") return "Retake";
+  if (step === "measuring") return "Measuring…";
+  return "Check another photo";
+}
+
+/** What the checker shows for a state. `onTake` opens the camera or the photo picker; `onCheck` checks the previewed photo. */
+export function CheckerBody({
+  state,
+  onTake,
+  onCheck,
+  onShow,
+}: {
+  state: State;
+  onTake: () => void;
+  onCheck: () => void;
+  onShow: (index: number) => void;
+}) {
+  const busy = state.step === "measuring";
+  return (
+    <>
+      {state.step === "previewing" && (
+        <>
+          {/* eslint-disable-next-line @next/next/no-img-element -- a local blob URL, nothing to optimise */}
+          <img src={state.previewUrl} alt="Your photo, not checked yet" className="block max-h-[35dvh] w-full rounded-card object-contain" />
+          <button type="button" onClick={onCheck} className={primary}>
+            Check this photo
+          </button>
+        </>
+      )}
+      {/* The same button before and after a pick, and never disabled while a photo opens, so focus coming back from the
+          picker stays on it; a newer pick replaces one still opening. */}
+      <button type="button" disabled={busy} onClick={onTake} className={state.step === "previewing" ? secondary : primary}>
+        {takeLabel(state.step)}
+      </button>
+
+      {state.step === "measuring" && (
+        <div className="space-y-3">
+          {/* eslint-disable-next-line @next/next/no-img-element -- a local blob URL, nothing to optimise */}
+          <img src={state.previewUrl} alt="Your photo, being measured" className="block w-full animate-pulse rounded-card motion-reduce:animate-none" />
+          <p className="text-center text-ink-2">
+            Finding the water, people and cars… <Elapsed since={state.startedAt} /> s (usually about 15)
+          </p>
+        </div>
+      )}
+
+      {state.step === "done" && (
+        <ResultView
+          result={state.result}
+          imageUrl={state.previewUrl}
+          photoLabel="Your photo with the water and the measured people and cars marked"
+        />
+      )}
+
+      {state.step === "refused" && <Refused state={state} onShow={onShow} />}
+
+      {state.step === "failed" && (
+        <p role="alert" className="rounded-card border border-wait bg-wait/10 px-5 py-4 font-medium text-ink">
+          {state.message}
+        </p>
+      )}
+    </>
+  );
+}
+
 export default function Checker() {
   const [state, setState] = useState<State>({ step: "idle" });
   const input = useRef<HTMLInputElement>(null);
-  /** Set synchronously, before the async resize, so a second pick can't start a second paid check. */
+  /** Set synchronously, so a second tap on Check this photo can't start a second paid check. */
   const inFlight = useRef(false);
   const shownUrl = useRef<string | null>(null);
   /** Set on unmount so a resize still running then neither creates a URL nor starts a paid check. */
   const disposed = useRef(false);
+  /** Only the newest pick may land: one still resizing when the rider picks again is dropped. */
+  const latestPick = useRef(0);
   /** Samples load after the paid-check lock is released, so a late load must not land on a newer check. */
   const latestCheck = useRef(0);
 
@@ -386,21 +465,29 @@ export default function Checker() {
     return shownUrl.current;
   }
 
-  async function check(file: File) {
+  async function pick(file: File) {
+    if (inFlight.current) return;
+    const thisPick = ++latestPick.current;
+    setState({ step: "preparing" });
+    let blob: Blob;
+    try {
+      blob = await shrinkToJpeg(file);
+    } catch {
+      if (latestPick.current === thisPick && !inFlight.current) {
+        setState({ step: "failed", previewUrl: null, message: "This browser couldn't open that photo. Try a JPEG or PNG." });
+      }
+      return;
+    }
+    if (disposed.current || latestPick.current !== thisPick || inFlight.current) return;
+    const previewUrl = showPreview(blob);
+    setState((s) => checkerAfterPick(s, previewUrl, blob));
+  }
+
+  async function check(previewUrl: string, blob: Blob) {
     if (inFlight.current) return;
     inFlight.current = true;
     const thisCheck = ++latestCheck.current;
-    setState({ step: "preparing" });
     try {
-      let blob: Blob;
-      try {
-        blob = await shrinkToJpeg(file);
-      } catch {
-        setState({ step: "failed", previewUrl: null, message: "This browser couldn't open that photo. Try a JPEG or PNG." });
-        return;
-      }
-      if (disposed.current) return;
-      const previewUrl = showPreview(blob);
       setState({ step: "measuring", previewUrl, startedAt: Date.now() });
       const form = new FormData();
       form.append("photo", blob, "photo.jpg");
@@ -429,9 +516,19 @@ export default function Checker() {
     }
   }
 
-  const busy = state.step === "preparing" || state.step === "measuring";
+  // The preview can open below the fold: its Check button is brought into view, the photo above it.
+  const root = useRef<HTMLDivElement>(null);
+  const previewing = state.step === "previewing";
+  useEffect(() => {
+    const img = previewing ? root.current?.querySelector("img") : null;
+    if (!img) return;
+    // After the photo decodes: before, it has no height, and its load would push the button back out of view.
+    const show = () => root.current?.querySelector("img ~ button")?.scrollIntoView({ block: "end", behavior: "smooth" });
+    img.decode().then(show, show);
+  }, [previewing]);
+
   return (
-    <div className="space-y-5">
+    <div ref={root} className="space-y-5">
       <input
         ref={input}
         type="file"
@@ -440,45 +537,17 @@ export default function Checker() {
         onChange={(e) => {
           const file = e.target.files?.[0];
           e.target.value = "";
-          if (file) void check(file);
+          if (file) void pick(file);
         }}
       />
-      <button
-        type="button"
-        disabled={busy}
-        onClick={() => input.current?.click()}
-        className="min-h-14 w-full rounded-control bg-brand px-5 text-lg font-semibold text-on-brand shadow-sm transition hover:brightness-110 disabled:opacity-60"
-      >
-        {state.step === "idle" ? "Choose or take a photo" : busy ? "Measuring…" : "Check another photo"}
-      </button>
-
-      {state.step === "measuring" && (
-        <div className="space-y-3">
-          {/* eslint-disable-next-line @next/next/no-img-element -- a local blob URL, nothing to optimise */}
-          <img src={state.previewUrl} alt="Your photo, being measured" className="block w-full animate-pulse rounded-card motion-reduce:animate-none" />
-          <p className="text-center text-ink-2">
-            Finding the water, people and cars… <Elapsed since={state.startedAt} /> s (usually about 15)
-          </p>
-        </div>
-      )}
-
-      {state.step === "done" && (
-        <ResultView
-          result={state.result}
-          imageUrl={state.previewUrl}
-          photoLabel="Your photo with the water and the measured people and cars marked"
-        />
-      )}
-
-      {state.step === "refused" && (
-        <Refused state={state} onShow={(shown) => setState((s) => (s.step === "refused" ? { ...s, shown } : s))} />
-      )}
-
-      {state.step === "failed" && (
-        <p role="alert" className="rounded-card border border-wait bg-wait/10 px-5 py-4 font-medium text-ink">
-          {state.message}
-        </p>
-      )}
+      <CheckerBody
+        state={state}
+        onTake={() => input.current?.click()}
+        onCheck={() => {
+          if (state.step === "previewing") void check(state.previewUrl, state.blob);
+        }}
+        onShow={(shown) => setState((s) => (s.step === "refused" ? { ...s, shown } : s))}
+      />
     </div>
   );
 }

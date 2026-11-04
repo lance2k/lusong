@@ -39,6 +39,17 @@ export function initialHours(leaveAt: string | null): WindowInput {
   return leaveAt ? watchWindowFor(leaveAt) : { start: "06:00", end: "08:00" };
 }
 
+const HHMM = /^\d{2}:\d{2}$/;
+const WINDOW_LINE_ID = "watch-window-24h";
+
+/**
+ * The time boxes follow the browser's locale, so en-US shows 6:30 AM while the trip line says 07:30; this line says
+ * the boxes' window the trip line's way (#52). Nothing while a box is empty or half typed.
+ */
+export function windowLine(w: WindowInput): string | null {
+  return HHMM.test(w.start) && HHMM.test(w.end) ? `Window: ${w.start} to ${w.end} PHT, on the 24-hour clock.` : null;
+}
+
 export function WatcherPanel({ trip, leaveAt = null }: { trip: Trip | null; leaveAt?: string | null }) {
   const watcher = useSyncExternalStore(subscribe, savedWatcher, () => null);
   const [hours, setHours] = useState<WindowInput>(() => initialHours(leaveAt));
@@ -131,6 +142,7 @@ export function WatcherPanel({ trip, leaveAt = null }: { trip: Trip | null; leav
                 type="time"
                 step={600}
                 value={hours.start}
+                aria-describedby={WINDOW_LINE_ID}
                 onChange={(e) => setHours({ ...hours, start: e.target.value })}
                 className={timeBox}
               />
@@ -141,11 +153,15 @@ export function WatcherPanel({ trip, leaveAt = null }: { trip: Trip | null; leav
                 type="time"
                 step={600}
                 value={hours.end}
+                aria-describedby={WINDOW_LINE_ID}
                 onChange={(e) => setHours({ ...hours, end: e.target.value })}
                 className={timeBox}
               />
             </label>
           </div>
+          <p id={WINDOW_LINE_ID} className="text-sm text-ink-2">
+            {windowLine(hours)}
+          </p>
           <button type="button" disabled={busy} onClick={switchOn} className={button}>
             Switch the watcher on
           </button>

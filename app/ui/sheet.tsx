@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, useRef, useState, type ReactNode } from "react";
+import { forwardRef, useEffect, useRef, useState, type ReactNode } from "react";
 import { IconBack, IconClose } from "./icons";
 
 export type Detent = "peek" | "half" | "full";
@@ -22,6 +22,27 @@ function nearest(px: number, vh: number): Detent {
   return ORDER.reduce((best, d) => (Math.abs(detentPx(d, vh) - px) < Math.abs(detentPx(best, vh) - px) ? d : best), "peek");
 }
 
+/** Inputs whose native picker may be open on Escape; the page can't tell, so Escape there is left to the browser. */
+const PICKER_INPUTS = new Set(["date", "time", "datetime-local", "month", "week", "color", "file"]);
+
+interface EscapeKey {
+  key: string;
+  defaultPrevented: boolean;
+  isComposing?: boolean;
+  target: unknown;
+}
+
+/** Whether a key press should close the open view, as Back does: Escape, unless an open list or picker owns it. */
+export function escapeClosesView(e: EscapeKey): boolean {
+  if (e.key !== "Escape" || e.defaultPrevented || e.isComposing) return false;
+  const target = e.target as { tagName?: unknown; type?: unknown; closest?: (selector: string) => unknown } | null;
+  if (!target || typeof target.tagName !== "string") return true;
+  const tag = target.tagName.toLowerCase();
+  if (tag === "select") return false;
+  if (tag === "input" && PICKER_INPUTS.has(String(target.type ?? "").toLowerCase())) return false;
+  return !target.closest?.('[role="combobox"][aria-expanded="true"]');
+}
+
 const HEIGHT: Record<Detent, string> = {
   peek: "var(--peek)",
   half: "50dvh",
@@ -31,22 +52,45 @@ const HEIGHT: Record<Detent, string> = {
 /**
  * A nonmodal bottom sheet over the live map with three heights. The grabber is a button: a tap cycles the heights,
  * ↑ and ↓ move one, and a drag follows the pointer and settles on the nearest. From 1024 px wide it is a side panel.
+ * With `onEscape`, Escape in the sheet, or with nothing focused, runs it (a view passes its Back action).
  */
 export function Sheet({
   detent,
   onDetent,
   labelledBy,
+  onEscape,
   children,
 }: {
   detent: Detent;
   onDetent: (d: Detent) => void;
   labelledBy: string;
+  onEscape?: () => void;
   children: ReactNode;
 }) {
   const [dragPx, setDragPx] = useState<number | null>(null);
   const drag = useRef<{ y: number; h: number; moved: boolean } | null>(null);
   const self = useRef<HTMLElement>(null);
   const justDragged = useRef(false);
+
+  // On the document, not the sheet, so Escape still works when focus was lost to the page (a tapped button that went
+  // away); from anywhere else on the page (the map, its buttons) it is left alone.
+  const escape = useRef(onEscape);
+  useEffect(() => {
+    escape.current = onEscape;
+  });
+  const hasEscape = Boolean(onEscape);
+  useEffect(() => {
+    if (!hasEscape) return;
+    function onKey(e: KeyboardEvent) {
+      const target = e.target;
+      const fromSheet = target instanceof Node && (self.current?.contains(target) || target === document.body || target === document.documentElement);
+      if (!fromSheet || !escapeClosesView(e)) return;
+      e.preventDefault();
+      escape.current?.();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [hasEscape]);
 
   function step(by: 1 | -1) {
     const i = ORDER.indexOf(detent) + by;
