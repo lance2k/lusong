@@ -1,3 +1,14 @@
+# Duck blockers: tyre-cap geometry (feat/depth-tyre)
+
+Critic: `rubber-duck-gpt`, model `gpt-6-astra` via Codex CLI (session rollout-2026-11-05T01-05-29-01a1a785), plan round,
+2026-11-04 17:05 UTC (2026-11-05 01:05 PHT).
+
+| # | 🔴 | Invariant | Disposition | Closing test |
+|---|---|---|---|---|
+| T1 | The held-out photos already decided the head candidate; reusing them is not an untouched holdout | The headline must come from data not tuned on | Reported as exploratory; the report labels a second-use split | `test/depth-tyre-arms.test.ts` "labels a held-out replay on a split already used as exploratory" |
+| T2 | Replay loads the shared SAM cache, so it can pair new Muse readings with other masks | Both arms come from the masks the run used | Replay reads the run's own SAM replies when saved, and refuses a record whose v1 arm does not reproduce the recorded verdict | `test/depth-tyre-arms.test.ts` "refuses a record whose v1 replay differs from the verdict the run recorded" |
+| T3 | Replay drops error records and never checks the 32 expected draws | The frozen sample size and "no errors beyond v1's" | Every split photo × draw expected exactly once; missing or duplicate aborts; errors count in both arms | `test/depth-tyre-arms.test.ts` "refuses a run missing a photo-draw or holding one twice" and "counts an error record as an error in both arms" |
+
 # Duck blockers: feat/vehicle-blur
 
 Critic: `rubber-duck-gpt`, model `gpt-6-astra` via Codex CLI (session rollout-2026-11-05T00-14-03-01a1a756), plan round,

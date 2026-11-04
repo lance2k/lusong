@@ -88,3 +88,23 @@ Tested code computes everything; no model numbers; deepen-only; page text unchan
 - Cut-edge-on-water at ≥ 50 % of columns: too strict for a tyre whose cut edge is partly behind a leg or a wave?
 - The dry-sibling squash test: right threshold? Most photos have no dry sibling.
 - A floating or lying tyre outside any vehicle box: reads as submerged, "deeper" — bounded by the too-deep criterion only.
+
+## Amendments after the plan duck (gpt-6-astra, session rollout-2026-11-05T01-05-29-01a1a785, 2026-11-04 17:05 UTC, 2026-11-05 01:05 PHT)
+Three 🔴, dispositions in `plans/duck-blockers.md`:
+- 🔴 T1, held-out reuse: no untouched labelled set exists before the deadline. The held-out result is reported as
+  **exploratory**: the split's held-out photos already decided the head candidate, so a pass here is a weaker claim than
+  a first-use held-out pass and the report says so; a fail is still a fail. Independent validation remains incomplete.
+- 🔴 T2, replay provenance: the replay reads each record's SAM replies from the run's own `sam/<file>.d<draw>.json` when
+  the run saved them, else from the shared cache, and it refuses a record whose v1 arm does not reproduce the verdict
+  recorded in the run (same passability, same deciding interval). That proves the replay used the masks the run used.
+- 🔴 T3, accounting: the replay expects every photo of the split × every draw exactly once; a missing or duplicated
+  pair aborts; an error record counts as an error in both arms.
+- 🟡 Diameter: a lower assumed low bound does not stop over-deepening (the verdict reads the high bound, 70 cm). Unboxed
+  tyres keep 45–70 cm because the vehicle is unknown, and that is stated as an assumption, not as a safety property.
+  Sizes are arithmetic on the ISO size code (rim inches × 2.54 + 2 × section width × aspect ratio).
+- 🟡 Top occlusion (wheel arch) reads deeper, as today's v1 already does; v2 does not fix it. A floating tyre is not
+  guarded beyond the cut-on-water and flat-cut checks.
+- 🟡 Decision rule for the fresh run, frozen now: if the offline held-out replay passes and a fresh live held-out run is
+  made, the fresh run must pass the same criteria too; an incomplete fresh run is inconclusive and nothing ships.
+- Simplification: for a cap under half (h < W/2) the chord is measured from the mask's bottom-edge columns (never wider
+  than the box), so a ragged bottom reads a narrower chord, a smaller circle and a shallower depth.
