@@ -170,6 +170,20 @@ interface ValhallaTrip {
 
 const onEarth = (p: Point) => Math.abs(p.lat) <= 90 && Math.abs(p.lon) <= 180;
 
+/** A road's number as OSM gives it ("54", "N54", "AH26", "C-5"), which Valhalla lists among a road's names. */
+const ROAD_NUMBER = /^[A-Z]{0,3}-?\d+[A-Z]?$/i;
+
+/**
+ * A maneuver's road as the route line says it: its first name that isn't a number ("EDSA" over "1" and "AH26"), or
+ * "road 54" when it has only a number, never the bare "54" (#58).
+ */
+function streetName(names: readonly string[]): string | null {
+  const trimmed = names.map((n) => n.trim()).filter(Boolean);
+  const named = trimmed.find((n) => !ROAD_NUMBER.test(n));
+  if (named) return named;
+  return trimmed.length > 0 ? `road ${trimmed[0]}` : null;
+}
+
 /** Anything not shaped like a Valhalla trip is null, never a thrown error or a half-read route. */
 function readTrip(body: ValhallaTrip): (Route & { hasFerry: boolean }) | null {
   const leg = body.trip?.legs?.[0];
@@ -188,7 +202,8 @@ function readTrip(body: ValhallaTrip): (Route & { hasFerry: boolean }) | null {
   for (const m of maneuvers) {
     const names: unknown = (m as { street_names?: unknown })?.street_names ?? [];
     if (!Array.isArray(names) || !names.every((n) => typeof n === "string")) return null;
-    if (names.length > 0 && !streets.includes(names[0])) streets.push(names[0]);
+    const street = streetName(names);
+    if (street && !streets.includes(street)) streets.push(street);
   }
   const hasFerry = summary.has_ferry === true || (Array.isArray(body.trip?.legs) ? body.trip.legs : []).some((l) => l?.summary?.has_ferry === true);
   return { line, lengthKm: summary.length, timeMin: summary.time / 60, streets, hasFerry };

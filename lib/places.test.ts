@@ -12,13 +12,19 @@ import {
   placeQuery,
   placesFromPhoton,
   roundBias,
+  PHOTON_TIMEOUT_MS,
+  PHOTON_WAIT_MS,
   searchPlaces,
+  withoutParts,
   type PhotonGate,
 } from "./places";
 import { MemorySlotStore } from "./router";
 import { inBound, TRIP_BOUND, type Bound } from "./trip-bound";
 
 const IT_PARK_REPLY = JSON.parse(readFileSync("test/fixtures/photon/it-park-cebu.json", "utf8"));
+/** Photon's replies for two S9-walk names, saved 2026-11-04 with the request photonUrl sends (limit 8, the Philippines). */
+const SM_BAGUIO_REPLY = JSON.parse(readFileSync("test/fixtures/photon/sm-city-baguio.json", "utf8"));
+const BURNHAM_REPLY = JSON.parse(readFileSync("test/fixtures/photon/burnham-park-baguio.json", "utf8"));
 const PHILIPPINES: Bound = { id: "ph-test", south: 4.5, north: 21.2, west: 116.9, east: 126.7 };
 /** The Metro Cebu box the trip bound was before S1: these tests check that a bound narrower than the country holds. */
 const CEBU: Bound = { id: "metro-cebu", south: 10.2, north: 10.47, west: 123.74, east: 124.07 };
@@ -251,6 +257,119 @@ describe("searching", () => {
     });
     expect(broken).toEqual({ status: "down", places: [expect.objectContaining({ id: "built-in:talisay-city-hall" })] });
     expect(cache.size).toBe(0);
+  });
+});
+
+describe("a slow Photon (#42)", () => {
+  /** Photon answering after `ms`, or failing as fetch does when the request's signal aborts first. */
+  const photonAfter = (ms: number) =>
+    vi.fn(
+      (_url: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((resolve, reject) => {
+          const timer = setTimeout(() => resolve(new Response(JSON.stringify(IT_PARK_REPLY), { status: 200 })), ms);
+          init?.signal?.addEventListener("abort", () => {
+            clearTimeout(timer);
+            reject(new DOMException("The operation was aborted.", "TimeoutError"));
+          });
+        }),
+    );
+
+  it("an answer after 4.5 s is used, not shown as place search down", async () => {
+    const reply = await searchPlaces("IT Park", null, { fetch: photonAfter(4_500), gate: OPEN, cache: new PlaceCache(), bound: CEBU });
+    expect(reply.status).toBe("ok");
+    expect(reply.places.some((p) => p.source === "osm")).toBe(true);
+  }, 10_000);
+
+  it("Photon gets 6 s, and the queue's wait plus that stays well inside the route's 15 s", () => {
+    expect(PHOTON_TIMEOUT_MS).toBe(6_000);
+    const maxDuration = Number(/export const maxDuration = (\d+);/.exec(readFileSync("app/api/places/route.ts", "utf8"))![1]);
+    expect(PHOTON_WAIT_MS + PHOTON_TIMEOUT_MS).toBeLessThanOrEqual(maxDuration * 1_000 - 5_000);
+  });
+});
+
+describe("parts of one place (#57)", () => {
+  const names = (places: { name: string }[]) => places.map((p) => p.name);
+
+  it("SM City Baguio is offered once, without its balcony, deliveries, terminals and taxi bay", async () => {
+    const reply = await searchPlaces("SM City Baguio", null, {
+      fetch: async () => Response.json(SM_BAGUIO_REPLY),
+      gate: OPEN,
+      cache: new PlaceCache(),
+      bound: PHILIPPINES,
+    });
+    expect(reply.status).toBe("ok");
+    expect(names(reply.places)).toEqual(["SM City Baguio"]);
+  });
+
+  it("Burnham Park is offered without its lake, fields and rink; places nearby with names of their own stay", async () => {
+    const reply = await searchPlaces("Burnham Park Baguio", null, {
+      fetch: async () => Response.json(BURNHAM_REPLY),
+      gate: OPEN,
+      cache: new PlaceCache(),
+      bound: PHILIPPINES,
+    });
+    expect(names(reply.places)).toEqual(["Burnham Park", "Ganza Restaurant", "Solibao Restaurant", "Pine Trees of the World Park"]);
+  });
+
+  it("a part the rider types for is kept, whatever else the query says (duck 🟡2)", () => {
+    const burnham = placesFromPhoton(BURNHAM_REPLY, PHILIPPINES);
+    for (const q of ["Burnham Park Lake", "Burnham Park Lake Baguio Philippines"]) {
+      expect(names(withoutParts(burnham, q)), q).toContain("Burnham Park Lake");
+      expect(names(withoutParts(burnham, q)), q).not.toContain("Burnham Park Skating Rink");
+    }
+    const sm = placesFromPhoton(SM_BAGUIO_REPLY, PHILIPPINES);
+    expect(names(withoutParts(sm, "SM City Baguio sky"))).toEqual(["SM City Baguio", "SM City Baguio Sky Terrace"]);
+    expect(names(withoutParts(sm, "SM City Baguio Sky Terrace Session Road"))).toContain("SM City Baguio Sky Terrace");
+  });
+
+  const mk = (name: string, lat: number, lon: number, key = "amenity", value = "parking") => ({
+    id: `${name}@${lat}`,
+    name,
+    area: "",
+    lat,
+    lon,
+    source: "osm" as const,
+    feature: { key, type: "house", value },
+  });
+
+  it("a part kind whose name starts with another's is kept when it is more than 1 km away", () => {
+    const hall = mk("City Hall", 16.4137, 120.5915, "amenity", "townhall");
+    const near = mk("City Hall Annex Parking", 16.4139, 120.5917);
+    const far = mk("City Hall Annex Parking", 16.43, 120.5915);
+    expect(names(withoutParts([hall, near], "City Hall"))).toEqual(["City Hall"]);
+    expect(names(withoutParts([hall, far], "City Hall"))).toEqual(["City Hall", "City Hall Annex Parking"]);
+    expect(names(withoutParts([mk("City Hallway", 16.4137, 120.5915), hall], "City Hall"))).toEqual(["City Hallway", "City Hall"]);
+  });
+
+  it("a place of its own beside a same-named one is never left out: a mall beside its suburb, a second branch (duck 🟡3)", () => {
+    const banilad = mk("Banilad", 10.3433, 123.9135, "place", "suburb");
+    const centre = mk("Banilad Town Centre", 10.3418, 123.9126, "shop", "mall");
+    expect(names(withoutParts([banilad, centre], "Banilad"))).toEqual(["Banilad", "Banilad Town Centre"]);
+    const branch = mk("Jollibee", 16.4119, 120.5975, "amenity", "fast_food");
+    const other = mk("Jollibee Session Road", 16.4129, 120.5985, "amenity", "fast_food");
+    expect(names(withoutParts([branch, other], "Jollibee"))).toEqual(["Jollibee", "Jollibee Session Road"]);
+    const unknown = { ...mk("Banilad Gate", 10.3434, 123.9136), feature: undefined };
+    expect(names(withoutParts([banilad, unknown], "Banilad"))).toEqual(["Banilad", "Banilad Gate"]);
+  });
+
+  it("a Photon part of a built-in place is folded into the built-in", async () => {
+    const reply = await searchPlaces("Baguio City Hall", null, {
+      fetch: async () =>
+        Response.json({
+          features: [
+            {
+              type: "Feature",
+              geometry: { type: "Point", coordinates: [120.5916, 16.4139] },
+              properties: { name: "Baguio City Hall Parking", countrycode: "PH", city: "Baguio", osm_type: "N", osm_id: 1, osm_key: "amenity", osm_value: "parking", type: "house" },
+            },
+            { type: "Feature", geometry: { type: "Point", coordinates: [120.6, 16.41] }, properties: { name: "Baguio Cathedral", countrycode: "PH", city: "Baguio", osm_type: "N", osm_id: 2 } },
+          ],
+        }),
+      gate: OPEN,
+      cache: new PlaceCache(),
+      bound: PHILIPPINES,
+    });
+    expect(names(reply.places)).toEqual(["Baguio City Hall", "Baguio Cathedral"]);
   });
 });
 

@@ -36,8 +36,10 @@ Pick a trip and tap Check. There are three ways to pick one:
 
 - **From and To boxes, like Google Maps.** Type a place and pick one of up to 8 candidates. The place search is
   Photon (OpenStreetMap data), limited to the Philippines, with Lusong's built-in places first. A phone location, if
-  you share it, is rounded to about 10 km before it is used. Photon is given 4 seconds; when it is slower, the box
-  says place search can't be reached and offers the built-in places and the map.
+  you share it, is rounded to about 10 km before it is used. Photon is given 6 seconds; when it is slower, the box
+  says place search can't be reached and offers the built-in places and the map. Parts of a place in the list (a
+  mall's service road, viewpoint or taxi bay, a park's lake or pitch) within 1 km of it are left out unless you type
+  one of their own words; a shop, a mall, a restaurant or a suburb is never left out.
 - **The whole trip in plain words.** Type 3 to 160 characters ("Talamban to IT Park, leaving around 7"). Muse Spark
   1.3 reads two place strings, each kept only if its words appear in order in what you typed, and reads the leaving
   time if you gave one. The place search names the candidates, and you confirm the places and the time.
@@ -449,14 +451,21 @@ against 6 on the previous run. The tyre estimate appeared on 4 of the 30 draws a
   between its ends (on different islands) gets no answer: Valhalla is asked for no ferries, and a route that still
   takes one is refused.
 - The web search covers at most two provinces a check. When the route enters one it didn't search, the page says so.
-- A route's ends must lie within 50 m of the trip's two points. Valhalla snaps each point to the nearest road, and a
-  start in a big lot (a mall, a plaza) can snap further. On production a Jaro plaza start snapped 51 m away (1 draw)
-  and the check was refused with 503. This will refuse more places nationwide than it did for Cebu's built-in
-  places; no count of how many. Follow-up: #41.
-- Place search gives Photon 4 seconds. On 2026-11-03 production answered `down` for two Iloilo names at about 22:47
-  PHT and `ok` for six names at 23:32 PHT, 2.2 to 3.8 s each (1 draw each). A slow Photon minute therefore shows as
-  `down`; this is inferred from timings, and Photon's own latency at 22:47 was not measured. The top candidate is not
-  always the place meant ("Banilad Town Centre" came back with "Banilad Town Homes" first, 1 draw). Follow-up: #42.
+- A route's ends must lie within 150 m of the trip's two points. Valhalla snaps each point to the nearest road, and a
+  start in a big lot snaps further: Jaro plaza 51 m, SM City Baguio 67.7 m, SM City Iloilo 79.1 m, Ayala Center Cebu
+  114.8 m (Valhalla `/locate`, 1 draw each). Before #41 the limit was 50 m, and the Jaro trip was refused with 503 on
+  production. Past 50 m Lusong doesn't know the way from your point to the road (a wall, a gate elsewhere), so the
+  whole disc around your point out to the road, plus the 30 m corridor, is judged as part of every route, plain or
+  the other way: a report, a web closure, an advisory or a sweep post anywhere in it counts as on the route, on the
+  page and for a watched trip. The page says how far from your point the route meets the road and how wide that disc
+  is. Up to 50 m the straight gap is judged, as before. A route whose end is further than 150 m from the pick is
+  still refused.
+- Place search gives Photon 6 seconds (4 until #42). On 2026-11-03 production answered `down` for two Iloilo names at
+  about 22:47 PHT and `ok` for six names at 23:32 PHT, 2.2 to 3.8 s each (1 draw each), so a slow Photon minute could
+  show as `down`; this is inferred from timings, and Photon's own latency at 22:47 was not measured. The top candidate
+  is not always the place meant ("Banilad Town Centre" came back with "Banilad Town Homes" first, 1 draw).
+- A road with only a number in OpenStreetMap is named "road 54" in the route line, and a road with a name and a
+  number is named by its name ("EDSA", not "1") (#58).
 - A Luzon check (Quezon City Hall to Ortigas Center) took 57.4 s on production and a Mindanao one 40.1 s (1 draw each),
   against the commute page's 80 s deadline. #26 gave each watched trip its own deadline inside the watcher tick's 55 s;
   the page's 80 s split is unchanged (#44).

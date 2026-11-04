@@ -8,8 +8,9 @@ export interface Place {
   lat: number;
   lon: number;
   source: "built-in" | "osm";
-  /** Photon's osm_key and type ("highway", "street"), so a caller can tell a road from a city's centroid. */
-  feature?: { key: string; type: string };
+  /** Photon's osm_key, type ("highway", "street") and osm_value ("service"), so a caller can tell a road from a
+   *  city's centroid, and a mall from its taxi bay. */
+  feature?: { key: string; type: string; value?: string };
 }
 
 /** ok: Photon answered. busy: the shared queue was full or Photon throttled. down: Photon or the queue's store
@@ -81,7 +82,8 @@ export function fold(s: string): string {
   return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 }
 
-function words(s: string): string[] {
+/** The words of a name, folded: letters and digits only. */
+export function words(s: string): string[] {
   return fold(s).split(/[^a-z0-9]+/).filter(Boolean);
 }
 

@@ -15,7 +15,7 @@ import { budgetFromEnv, type Budget } from "./budget";
 import { sweepWarningsAlong } from "./sweep-warnings";
 import { alertStoreFromEnv, type AlertStore } from "./alerts";
 import { clientIp } from "./check-handler";
-import { boxAround, lineForTrip } from "./detour";
+import { boxAround, lineForTrip, roadGap, type RoadGap } from "./detour";
 import { ageWords, depthWords, MMDA_CREDIT, passabilityLine, phtTime, voiceDepthWords, voicePassabilityLine } from "./commute-words";
 import { evidenceSentences } from "./evidence-words";
 import {
@@ -203,6 +203,12 @@ function pickForPage(
   const reports = result.reports.filter((r) => pickable.has(r.id));
   const sentences = evidenceSentences(result.pick.evidence, { ...rest, reports, web: result.web.findings, routes: result.answer.routes });
   return sentences ? { shown: true, label, sentences, note: null } : hidden;
+}
+
+/** The route's road gap for the page, as a field only when it has one, so a reply for a route at its pins is unchanged. */
+function withRoadGap(line: readonly Point[], trip: { from: Point; to: Point }): { roadGap?: RoadGap } {
+  const gap = roadGap(line, trip);
+  return gap ? { roadGap: gap } : {};
 }
 
 function fail(status: number, error: string): Response {
@@ -647,7 +653,13 @@ export function makeCommuteCheck(deps: CommuteDeps) {
         reason: answer.reason,
         thin: answer.thinEvidence ? thinNote(answer.answer, used.length, used.length > 0 && used.every((r) => r.reading.source === "voice")) : null,
       },
-      route: { lengthKm: route.lengthKm, timeMin: Math.round(route.timeMin), streets: route.streets, line: route.line },
+      route: {
+        lengthKm: route.lengthKm,
+        timeMin: Math.round(route.timeMin),
+        streets: route.streets,
+        line: route.line,
+        ...withRoadGap(route.line, trip),
+      },
       detour: detour && {
         routeId: shown!.id,
         state: answer.routes.find((r) => r.routeId === shown!.id)!.state,
@@ -659,6 +671,7 @@ export function makeCommuteCheck(deps: CommuteDeps) {
         extraMin: Math.round(detour.timeMin) - Math.round(route.timeMin),
         streets: detour.streets,
         line: detour.line,
+        ...withRoadGap(detour.line, trip),
       },
       advisory: advisoryForPage(result.advisory, answer.route),
       advisoryAreas: advisoryAreasFor(advisory, judgedLines.map((l) => l.line), at),

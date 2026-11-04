@@ -57,6 +57,34 @@ describe("the plain motorbike route from Valhalla", () => {
     expect(result.route.streets).toContain("Governor M. Cuenco Avenue");
   });
 
+  it("names each road by its name, not its number: the saved Cubao → Makati route says EDSA, not 1 (#58)", async () => {
+    const { fetch } = valhalla([() => new Response(readFileSync("test/fixtures/valhalla/cubao-makati-plain.json", "utf8"))]);
+    const result = await fetchRoute({ from: { lat: 14.6229, lon: 121.0533 }, to: { lat: 14.5547, lon: 121.0244 } }, { fetch, gate: gateOn(new MemorySlotStore()) });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.route.streets).toContain("EDSA");
+    expect(result.route.streets).toContain("Aurora Boulevard");
+    expect(result.route.streets).not.toContain("1");
+    expect(result.route.streets).not.toContain("AH26");
+    expect(result.route.streets).not.toContain("59");
+  });
+
+  it("a road with only a number is said as 'road 54', never the bare number, and once (#58)", async () => {
+    const maneuvers = [
+      { street_names: ["City Hall Drive"] },
+      { street_names: ["Shuntog Street"] },
+      { street_names: ["54"] },
+      { street_names: ["54"] },
+      { street_names: ["N54", "AH26"] },
+      { street_names: ["840", "Magsaysay Avenue"] },
+      { street_names: ["EDSA"] },
+      { street_names: ["C-5"] },
+    ];
+    const { fetch } = valhalla([() => withLeg((leg) => ({ ...leg, maneuvers }))]);
+    const result = await fetchRoute({ from: BANILAD, to: IT_PARK }, { fetch, gate: gateOn(new MemorySlotStore()) });
+    expect(result.ok && result.route.streets).toEqual(["City Hall Drive", "Shuntog Street", "road 54", "road N54", "Magsaysay Avenue", "EDSA", "road C-5"]);
+  });
+
   it("asks for costing motorcycle with a named User-Agent and client id", async () => {
     const { fetch, starts } = valhalla([ok()]);
     await fetchRoute({ from: BANILAD, to: IT_PARK }, { fetch, gate: gateOn(new MemorySlotStore()) });
