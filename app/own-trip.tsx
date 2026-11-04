@@ -161,33 +161,44 @@ function hasTo(draft: TripDraft): boolean {
 
 /**
  * The box focus moves to after a pick: To, when From was picked and To is still empty, so the phone keyboard lands
- * where the next input goes (#50). The picked box itself stays ready for typing again (`place-box.ts`).
+ * where the next input goes (#50). The picked box itself stays ready for typing again (`place-box.ts`). A pick that
+ * lands late, as "Use my location" does, never pulls focus from wherever the rider went meanwhile (`focusMovedAway`).
  */
-export function boxAfterPick(end: "from" | "to", before: TripDraft): "to" | null {
-  return end === "from" && !hasTo(before) ? "to" : null;
+export function boxAfterPick(end: "from" | "to", before: TripDraft, focusMovedAway = false): "to" | null {
+  return end === "from" && !hasTo(before) && !focusMovedAway ? "to" : null;
 }
 
 export function OwnTripPanel({ own, onFocusBox, focusSignal }: { own: OwnTrip; onFocusBox?: () => void; focusSignal?: number }) {
   const { draft, labels } = own;
   const hasFrom = draft.step === "set" || draft.step === "work";
   const [focusTo, setFocusTo] = useState(0);
+  const fromArea = useRef<HTMLDivElement>(null);
+  // A late pick runs a callback made when it started; it reads the trip as it is now.
+  const latestDraft = useRef(draft);
+  useEffect(() => {
+    latestDraft.current = draft;
+  });
   const savedLabel = "Saved on this phone";
   return (
     <div className="space-y-3 text-[15px]">
       <div className="space-y-3">
-        <PlaceSearch
-          label="From (home)"
-          chosen={labels.from ?? (hasFrom ? savedLabel : null)}
-          onPick={(p) => {
-            const next = boxAfterPick("from", draft);
-            if (own.pick("from", p) && next === "to") setFocusTo((n) => n + 1);
-          }}
-          myLocation
-          bias={own.bias}
-          onLocated={own.setBias}
-          onFocusBox={onFocusBox}
-          focusSignal={focusSignal}
-        />
+        <div ref={fromArea}>
+          <PlaceSearch
+            label="From (home)"
+            chosen={labels.from ?? (hasFrom ? savedLabel : null)}
+            onPick={(p) => {
+              const at = document.activeElement;
+              const movedAway = Boolean(at && at !== document.body && !fromArea.current?.contains(at));
+              const next = boxAfterPick("from", latestDraft.current, movedAway);
+              if (own.pick("from", p) && next === "to") setFocusTo((n) => n + 1);
+            }}
+            myLocation
+            bias={own.bias}
+            onLocated={own.setBias}
+            onFocusBox={onFocusBox}
+            focusSignal={focusSignal}
+          />
+        </div>
         <PlaceSearch
           label="To (work)"
           chosen={labels.to ?? (hasTo(draft) ? savedLabel : null)}

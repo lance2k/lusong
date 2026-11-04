@@ -14,6 +14,11 @@ describe("where focus goes after a From or To pick (#50)", () => {
     expect(boxAfterPick("from", { step: "set", trip: { home: HOME, work: WORK } })).toBeNull();
   });
 
+  it("never pulls focus from where the rider went while a slow pick (Use my location) was pending", () => {
+    expect(boxAfterPick("from", { step: "home" }, true)).toBeNull();
+    expect(boxAfterPick("from", { step: "home" }, false)).toBe("to");
+  });
+
   it("a To pick never moves focus", () => {
     expect(boxAfterPick("to", { step: "home" })).toBeNull();
     expect(boxAfterPick("to", { step: "work", home: HOME })).toBeNull();
