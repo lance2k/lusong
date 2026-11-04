@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
-import { BlurError, blurMasked } from "./blur";
+import { BlurError, blurCoverage, blurMasked } from "./blur";
 import { readExifTimeText } from "./exif";
 import type { Box, PlacedRaster } from "./sam";
 
@@ -118,5 +118,42 @@ describe("blurMasked", () => {
 
   it("throws BlurError on bytes that are not a photo", async () => {
     await expect(blurMasked(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]), [])).rejects.toBeInstanceOf(BlurError);
+  });
+});
+
+describe("blurCoverage", () => {
+  it("grows a mask by 10 % of its longer side, at least 6 px, and clips at the photo's edge", () => {
+    // 100 × 20 at (100, 50): margin 10 px, so x 90–209 and y 40–79 are covered.
+    const covered = blurCoverage(400, 200, [rectangle({ left: 100, top: 50, right: 200, bottom: 70 })]);
+    const at = (x: number, y: number) => covered[y * 400 + x];
+    expect([at(90, 40), at(209, 79), at(150, 60)]).toEqual([1, 1, 1]);
+    expect([at(89, 60), at(210, 60), at(150, 39), at(150, 80)]).toEqual([0, 0, 0, 0]);
+    // 10 × 10 at the corner: the 6 px floor applies, and nothing wraps past the edge.
+    const corner = blurCoverage(400, 200, [rectangle({ left: 0, top: 0, right: 10, bottom: 10 })]);
+    expect([corner[15], corner[16], corner[15 * 400], corner[399]]).toEqual([1, 0, 1, 0]);
+  });
+
+  it("is exactly what blurMasked pixelates: no 16 px JPEG block outside it changes beyond decoding's chroma bleed, and what it covers is flattened", async () => {
+    const half = rectangle(waders);
+    for (let row = 0; row < half.height; row++) half.raster.fill(0, row * half.width + half.width / 2, (row + 1) * half.width);
+    const { data, info } = await sharp(photo).toColourspace("srgb").removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    const plain = await grey(await sharp(data, { raw: { width: info.width, height: info.height, channels: info.channels } }).jpeg({ quality: 85 }).toBuffer());
+    const blurred = await grey(await blurMasked(photo, [half]));
+    const covered = blurCoverage(info.width, info.height, [half]);
+    let untouchedBlocks = 0;
+    for (let by = 0; by < info.height; by += 16) {
+      for (let bx = 0; bx < info.width; bx += 16) {
+        const block: Box = { left: bx, top: by, right: Math.min(bx + 16, info.width), bottom: Math.min(by + 16, info.height) };
+        let any = false;
+        for (let y = block.top; y < block.bottom && !any; y++) for (let x = block.left; x < block.right; x++) if (covered[y * info.width + x]) any = true;
+        if (any) continue;
+        untouchedBlocks++;
+        // Decoding upsamples chroma across block edges, so a block beside a flattened one can move by a fraction of a level.
+        expect(meanAbsDiff(plain, blurred, block), JSON.stringify(block)).toBeLessThan(0.5);
+      }
+    }
+    expect(untouchedBlocks).toBeGreaterThan(4000);
+    const leftHalf: Box = { left: waders.left, top: waders.top, right: 240, bottom: waders.bottom };
+    expect(detail(blurred, leftHalf)).toBeLessThan(0.25 * detail(plain, leftHalf));
   });
 });
