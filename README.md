@@ -79,8 +79,57 @@ until you switch it on, and never part of a verdict.
 - **Reported photos stay hidden.** A report shows its pin and its reading, never the photo. The code to show a photo
   only after SAM 3.1 has found and pixelated every person and licence plate in it is written but switched off:
   `PLATE_DETECTION_TRUSTED` is `false` in `lib/photo-publish.ts`, and production has no blob store to keep a photo
-  in. SAM found all 9 plates labelled on the 5 test photos that show plates, on both of 2 runs. That is too few
-  photos to show strangers' pictures on.
+  in. It stays off: on 2026-11-04 (2 draws, 144 SAM calls each, $0.36 a draw) the blur missed part of a plate or a
+  face on 31 of 43 labelled photos, and the bar is every labelled plate and face fully covered on every photo. The
+  set is 48 photos (`test/fixtures/sam/blur-labels.json`): 40 openly licensed Commons street scenes (jeepneys,
+  tricycles, motorbikes, floods, crowds; credits in `test/fixtures/blur-set/ATTRIBUTION.txt`), 7 earlier test photos
+  and 1 negative. The labels are a Claude model's, not a person's. A box counts only when every one of its pixels lies
+  under the masks as `lib/blur.ts` grows them (`test/probe-sam-blur.test.ts`). Both draws gave the same result, and counting
+  sure labels only, 31 of the 43 photos were fully covered:
+  - Faces: the `person` masks covered all 129 sure faces. They missed 49 of 145 unsure ones: tiny, dark or turned
+    away, and some of those stay visible after the blur. A separate `face` prompt closed none of the 49, so it is not
+    used.
+  - Plates: the `license plate` masks fully covered 46 of 60 sure plates. Four got no mask: two small, distant plates
+    that can be partly read when zoomed, one far away and one seen edge-on. The other 10 were 87–99.9 % covered; the
+    rendered blurs of those looked unreadable (checked by eye on draw 1), but a box not fully covered fails the bar. Of 27 unsure plates, 6
+    were covered.
+  - The 5 photos with no plate or face got no plate or face mask (two got a person mask, on a body with no face in
+    view).
+
+  This replaces the earlier "all 9 plates on 5 photos", which counted a plate as found when half of a loose box was
+  masked.
+
+  Blurring whole vehicles as well does not meet the bar either (2026-11-04, 2 draws of `car`, `motorcycle`, `vehicle`
+  and `jeepney` on the same 48 photos, paired by file name with the plate and person replies above, which kept no image hashes; $1.08 in SAM calls;
+  `test/probe-sam-vehicle-blur.test.ts`, scored by `test/whole-blur.ts`, results in
+  `test/blur-runs/vehicle-compare-2-draws.json`). A plate counts as covered under its plate mask or a vehicle mask, a
+  face under its person mask or a vehicle mask (a passenger in a jeepney), never a plate under a person mask. These are
+  labelled plates and faces only: nothing checks that a whole vehicle or person was found.
+
+  | Blurred | Photos fully covered, both draws (sure labels only) | Sure plates | All faces | Extra SAM images a report |
+  |---|---|---|---|---|
+  | plates + people (today) | 12 (31) | 46 / 60 | 225 / 274 | 0 |
+  | + `car` | 17 (34) | 50 / 60 | 229 / 274 | 0: the photo check already asks for `car` |
+  | + `motorcycle` | 17 (35) | 51 / 60 | 227 / 274 | 1 |
+  | + `car` + `motorcycle` + `jeepney` | 25 (42) | 58 / 60 | 232 / 274 | 2 |
+  | + `vehicle` | 31 (42) | 60 / 60 and 59 / 60 | 237 / 274 | 1 |
+
+  `vehicle` alone covered as many labelled plates and faces as all four phrases together; adding the others to it
+  covered no more. It closed 13
+  of the 14 sure plates the plate masks had missed in both draws, and the 14th in one draw (a motorcycle's improvised
+  plate, 94 % covered in the other). The 37 faces still missed are all unsure ones, 21 of them in two crowded river
+  scenes, so the bar stays out of reach for any vehicle phrase.
+
+  What the blur takes from the evidence (draw 1, the 48 photos; `flood water` asked once per photo): the median photo
+  keeps 96 % of its pixels unblurred today and 75 % with `vehicle`. On the 14 photos where SAM found water over at
+  least 1 % of the frame, the median share of that water left unblurred goes from 98.6 % to 94.5 %, but on the 13 of
+  them with any water within 2 % of the photo's longer side of a detected person or vehicle, the median share of that
+  water left unblurred goes from 49 % to 13.5 %. That is the
+  water touching what Lusong reads depth from, not the waterline itself, which no mask marks. Today's blur
+  already pixelates the people SAM finds, so some of the waterline on them can go; blurring vehicles adds the same
+  risk on cars' wheels and doors. Looked at by eye on draw 1 for the 4 flood photos with the most water near
+  people and vehicles: in the Shah Alam car park the row of parked cars becomes a few large blocks; in the other 3
+  `vehicle` changed little, because people were already blurred.
 - **A watcher** re-runs the check every 10 minutes during a window you pick (6–8 a.m., say) and sends a Telegram
   message when the window opens and whenever the answer changes. Switching it off deletes the trip and its history.
   It is deployed on Telegram through `@lusong_cebu_bot`, and one message has gone out on production (2026-10-31, from
