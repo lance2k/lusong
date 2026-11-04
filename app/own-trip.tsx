@@ -42,7 +42,8 @@ export interface OwnTrip {
   labels: { from: string | null; to: string | null };
   bias: { lat: number; lon: number } | null;
   setBias: (at: { lat: number; lon: number }) => void;
-  pick: (end: "from" | "to", place: Place) => void;
+  /** False when the place was outside the trip bound, so nothing changed. */
+  pick: (end: "from" | "to", place: Place) => boolean;
   /** Fills From and To together, as two picks would: a typed trip once the rider taps Use this trip. */
   pickBoth: (from: Place, to: Place) => boolean;
   /** False when the phone wouldn't store the trip, so it lasts only while the page is open. */
@@ -117,11 +118,12 @@ export function useOwnTrip(changed: () => void, events: OwnTripEvents = {}): Own
     else setNamed((l) => ({ ...l, to: tapped }));
   }
 
-  function pick(end: "from" | "to", place: Place) {
-    if (!apply(pickTrip(draft, end, place))) return;
+  function pick(end: "from" | "to", place: Place): boolean {
+    if (!apply(pickTrip(draft, end, place))) return false;
     setTouched(true);
     const name = place.area ? `${place.name}, ${place.area}` : place.name;
     setNamed((l) => ({ ...l, [end]: { name, at: { lat: place.lat, lon: place.lon } } }));
+    return true;
   }
 
   function pickBoth(from: Place, to: Place): boolean {
@@ -153,10 +155,22 @@ export function useOwnTrip(changed: () => void, events: OwnTripEvents = {}): Own
   return { draft, outside, kept, clearFailed, labels, bias, setBias, pick, pickBoth, tap, clear, touched };
 }
 
+function hasTo(draft: TripDraft): boolean {
+  return draft.step === "set" || (draft.step === "home" && Boolean(draft.work));
+}
+
+/**
+ * The box focus moves to after a pick: To, when From was picked and To is still empty, so the phone keyboard lands
+ * where the next input goes (#50). The picked box itself stays ready for typing again (`place-box.ts`).
+ */
+export function boxAfterPick(end: "from" | "to", before: TripDraft): "to" | null {
+  return end === "from" && !hasTo(before) ? "to" : null;
+}
+
 export function OwnTripPanel({ own, onFocusBox, focusSignal }: { own: OwnTrip; onFocusBox?: () => void; focusSignal?: number }) {
   const { draft, labels } = own;
   const hasFrom = draft.step === "set" || draft.step === "work";
-  const hasTo = draft.step === "set" || (draft.step === "home" && Boolean(draft.work));
+  const [focusTo, setFocusTo] = useState(0);
   const savedLabel = "Saved on this phone";
   return (
     <div className="space-y-3 text-[15px]">
@@ -164,7 +178,10 @@ export function OwnTripPanel({ own, onFocusBox, focusSignal }: { own: OwnTrip; o
         <PlaceSearch
           label="From (home)"
           chosen={labels.from ?? (hasFrom ? savedLabel : null)}
-          onPick={(p) => own.pick("from", p)}
+          onPick={(p) => {
+            const next = boxAfterPick("from", draft);
+            if (own.pick("from", p) && next === "to") setFocusTo((n) => n + 1);
+          }}
           myLocation
           bias={own.bias}
           onLocated={own.setBias}
@@ -173,10 +190,11 @@ export function OwnTripPanel({ own, onFocusBox, focusSignal }: { own: OwnTrip; o
         />
         <PlaceSearch
           label="To (work)"
-          chosen={labels.to ?? (hasTo ? savedLabel : null)}
+          chosen={labels.to ?? (hasTo(draft) ? savedLabel : null)}
           onPick={(p) => own.pick("to", p)}
           bias={own.bias}
           onFocusBox={onFocusBox}
+          focusSignal={focusTo}
         />
       </div>
       <div className="space-y-2" aria-live="polite">

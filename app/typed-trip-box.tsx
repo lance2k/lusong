@@ -7,6 +7,7 @@ import { candidateLine, chosenTrip, initialTypedTrip, tripTextReplyOf, typedTrip
 import { Button } from "./ui/button";
 
 export const TYPED_TRIP_LABEL = "Or type your trip";
+/** Shown as a line under the box, not as its placeholder: at 390 px the box is about 255 px wide and the sentence 271 px (#53). */
 export const TYPED_TRIP_EXAMPLE = "Talamban to IT Park, leaving around 7";
 export const USE_THIS_TRIP = "Use this trip";
 /** Why Use this trip is still greyed out (S9). */
@@ -70,7 +71,7 @@ export function TypedTripView({ state, text, onText, onSend, send, onUse, onFocu
             type="text"
             autoComplete="off"
             maxLength={TRIP_TEXT_MAX}
-            placeholder={TYPED_TRIP_EXAMPLE}
+            aria-describedby={`${id}-example`}
             value={text}
             onFocus={onFocusBox}
             onChange={(e) => onText(e.target.value)}
@@ -81,6 +82,9 @@ export function TypedTripView({ state, text, onText, onSend, send, onUse, onFocu
           </Button>
         </div>
       </form>
+      <p id={`${id}-example`} className="text-small text-ink-2">
+        Like “{TYPED_TRIP_EXAMPLE}”.
+      </p>
       <p className="text-small text-ink-2">{TRIP_TEXT_PRIVACY}</p>
       <div aria-live="polite" className="space-y-3">
         {reading && <p className="text-sm text-ink-2">Reading your trip…</p>}
