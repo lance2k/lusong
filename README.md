@@ -472,9 +472,7 @@ against 6 on the previous run. The tyre estimate appeared on 4 of the 30 draws a
   to measure it on, and a search on 2026-11-03 found none (about 650 Wikimedia Commons videos scanned, plus the
   Internet Archive and two web searches). Not tried: DVIDS, YouTube CC BY. Follow-up: #46.
 - Unfixed follow-ups from this release: alert delivery's read of the alert store can race a PAGASA rebuild (#40); a late store write
-  could overwrite a newer attempt (#45); the bot's old description was not saved before it was replaced (#47);
-  the page does not yet open on the rider's own saved trip (#43), move focus after "Use this trip" (#49) or after From
-  (#50), or fit the typed-trip placeholder at 390 px (#53).
+  could overwrite a newer attempt (#45); the bot's old description was not saved before it was replaced (#47).
 
 - It measures only where a person or car stands in the water. The deepest part of the street may be
   elsewhere, which is why it never says "passable to all vehicles".

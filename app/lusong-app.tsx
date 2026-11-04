@@ -5,6 +5,7 @@ import { useEffect, useReducer, useRef, useState, useSyncExternalStore } from "r
 import { DEMO_TRIPS } from "../lib/samples";
 import { AnswerCard } from "./answer-card";
 import { CheckProgress } from "./check-progress";
+import { CheckRegion } from "./check-region";
 import { commuteReducer, initialCommuteState, OWN_TRIP, type CommuteInputs, type CommuteState } from "./commute-state";
 import type { CommuteResult } from "./commute-result";
 import { CREDITS_LINE, RAIN_CREDIT_LINE } from "./credits";
@@ -63,6 +64,7 @@ function subscribeMedia(listener: () => void) {
   mq.addEventListener("change", listener);
   return () => mq.removeEventListener("change", listener);
 }
+const subscribeNothing = () => () => {};
 function subscribeResize(listener: () => void) {
   window.addEventListener("resize", listener);
   return () => window.removeEventListener("resize", listener);
@@ -82,6 +84,8 @@ function Shell() {
   const [typedLeave, setTypedLeave] = useState<TypedLeave | null>(null);
   const leaveAt = leaveAtFor(typedLeave, savedTrip);
 
+  // False on the server and while hydrating; true once the phone's storage, and so its saved trip, can be read.
+  const running = useSyncExternalStore(subscribeNothing, () => true, () => false);
   const sheetView = useSyncExternalStore(subscribeLocation, () => viewFromSearch(window.location.search), () => null);
   const desktop = useSyncExternalStore(subscribeMedia, () => window.matchMedia(DESKTOP).matches, () => false);
   const vh = useSyncExternalStore(subscribeResize, () => window.innerHeight, () => 844);
@@ -92,6 +96,7 @@ function Shell() {
   const [focusSignal, setFocusSignal] = useState(0);
   const body = useRef<HTMLDivElement>(null);
   const viewHeading = useRef<HTMLHeadingElement>(null);
+  const checkRegion = useRef<HTMLDivElement>(null);
   const opener = useRef<HTMLElement | null>(null);
   const shownView = useRef<SheetView | null>(null);
   const latestTicket = useRef(state.ticket);
@@ -99,13 +104,13 @@ function Shell() {
     latestTicket.current = state.ticket;
   });
 
-  // A trip saved on an earlier visit is chosen once it is read, so the next check is one tap.
-  const restored = useRef(false);
-  useEffect(() => {
-    if (!savedTrip || restored.current) return;
-    restored.current = true;
+  // A trip saved on an earlier visit is chosen once it is read, so the next check is one tap. It is chosen during the
+  // render that first reads it, not in an effect after, so the demo is never painted in between (#43).
+  const [restored, setRestored] = useState(false);
+  if (savedTrip && !restored) {
+    setRestored(true);
     dispatch({ type: "change", inputs: { trip: OWN_TRIP } });
-  }, [savedTrip]);
+  }
 
   // A view's heading takes focus when it opens; closing it returns focus to whatever opened it.
   const commuteScroll = useRef(0);
@@ -165,6 +170,8 @@ function Shell() {
     const inputs = state.inputs;
     dispatch({ type: "start", at: Date.now() });
     setEditing(false);
+    // The panel collapses and unmounts the button that started the check; focus goes to the progress and answer (#55).
+    checkRegion.current?.focus({ preventScroll: true });
     body.current?.scrollTo({ top: 0 });
     if (detent === "peek") setDetent("half");
     try {
@@ -278,7 +285,8 @@ function Shell() {
               onOpenWatcher={() => openView("watch")}
               collapsed={collapsed}
               onExpand={() => setEditing(true)}
-              summary={view.step === "idle" ? null : inputWords(view.for)}
+              summary={view.step === "idle" ? null : inputWords(view.for, own.labels)}
+              tripKnown={running}
               leaveAt={leaveAt}
               onUseTypedTrip={({ from, to, leaveAt: at }) => {
                 if (!own.pickBoth(from, to)) return false;
@@ -287,11 +295,13 @@ function Shell() {
                 return true;
               }}
             />
-            {view.step === "checking" && <CheckProgress since={view.startedAt} />}
-            <div aria-live="polite" className="space-y-4">
-              {view.step === "failed" && <ErrorNote onRetry={check}>{view.message}</ErrorNote>}
-              {view.step === "done" && <AnswerCard result={view.result} />}
-            </div>
+            <CheckRegion ref={checkRegion}>
+              {view.step === "checking" && <CheckProgress since={view.startedAt} />}
+              <div aria-live="polite" className="space-y-4">
+                {view.step === "failed" && <ErrorNote onRetry={check}>{view.message}</ErrorNote>}
+                {view.step === "done" && <AnswerCard result={view.result} />}
+              </div>
+            </CheckRegion>
             {view.step === "done" && (
               <Evidence
                 result={view.result}
