@@ -37,6 +37,7 @@ import {
   type RouteResult,
   type ValhallaGate,
 } from "./router";
+import { checkBudget, STEP_SIZES, type CheckBudget } from "./check-budget";
 import { beforeDeadline, readBody } from "./deadline";
 import { inServerTripBound } from "./province-index";
 import { TRIP_AREA_NAME } from "./trip-bound";
@@ -85,9 +86,21 @@ export interface CommuteTiming {
   modelRoomMs: number;
   /** An inline refresh of PAGASA's snapshot ends this long after it starts; ADVISORY_TIME_MS unless a test shortens it. */
   advisoryMs?: number;
+  /**
+   * Each step's share (#44): the search's from the check's start, and the least left for a model turn to be started.
+   * Without them (tests' shortened timings), the search gets what the deadline leaves past a way around and the pick,
+   * and every turn is started.
+   */
+  steps?: { searchMs: number; firstTurnMs: number; laterTurnMs: number };
 }
 export const MODEL_ROOM_MS = 15_000;
-export const COMMUTE_TIMING: CommuteTiming = { deadlineMs: COMMUTE_DEADLINE_MS, routeWorstMs: ROUTE_WORST_MS, storeCallMs: 5_000, modelRoomMs: MODEL_ROOM_MS };
+export const COMMUTE_TIMING: CommuteTiming = {
+  deadlineMs: COMMUTE_DEADLINE_MS,
+  routeWorstMs: ROUTE_WORST_MS,
+  storeCallMs: 5_000,
+  modelRoomMs: MODEL_ROOM_MS,
+  steps: STEP_SIZES,
+};
 
 export interface MuseDeps {
   /** False runs the rules alone: no web search, no pick, nothing reserved for Muse Spark. */
@@ -378,7 +391,8 @@ export function makeCommuteCheck(deps: CommuteDeps) {
 
   async function POST(request: Request): Promise<Response> {
     // Epoch ms, from the first byte. Every step below ends by it; only the settle runs past it, cut off at settleBy.
-    const deadline = Date.now() + timing.deadlineMs;
+    const startedAt = Date.now();
+    const deadline = startedAt + timing.deadlineMs;
 
     const body = await readBody(request, { maxBytes: MAX_BODY_BYTES, deadline });
     if (body === "too_large") return fail(413, "That check is too large.");
@@ -393,7 +407,7 @@ export function makeCommuteCheck(deps: CommuteDeps) {
     const realTrip = demo ? null : parseReal(parsed);
     if (realTrip === "too_far") return Response.json({ error: TOO_FAR_MESSAGE, routing: "too_far" }, { status: 400 });
     if (!demo && !realTrip) return fail(400, `Send a demo trip, or a real trip whose start and end are both in ${TRIP_AREA_NAME}.`);
-    return admitted(demo ? { demo } : { real: realTrip! }, clientIp(request), deadline, true);
+    return admitted(demo ? { demo } : { real: realTrip! }, clientIp(request), { startedAt, deadline }, true);
   }
 
   async function checkTrip(trip: { from: Point; to: Point }, opts: { deadline: number }): Promise<ScheduledCheck> {
@@ -404,7 +418,7 @@ export function makeCommuteCheck(deps: CommuteDeps) {
     const deadline = Math.min(opts.deadline - timing.storeCallMs, startedAt + timing.deadlineMs);
     // The search's cut-off is taken back from the deadline, so with less than the page's whole deadline a search would
     // have less time than the page's check gives it, and could be cut off and still paid for (#26): it isn't started.
-    const response = await admitted({ real }, null, deadline, deadline - startedAt >= timing.deadlineMs);
+    const response = await admitted({ real }, null, { startedAt, deadline }, deadline - startedAt >= timing.deadlineMs);
     if (!response.ok) return { ok: false, status: response.status };
     const body = (await response.json()) as { answer?: { kind?: unknown }; route?: { line?: unknown } };
     const kind = body.answer?.kind;
@@ -420,7 +434,7 @@ export function makeCommuteCheck(deps: CommuteDeps) {
   async function admitted(
     check: { demo: DemoRequest } | { real: RealRequest },
     ip: string | null,
-    deadline: number,
+    { startedAt, deadline }: { startedAt: number; deadline: number },
     canSearch: boolean,
   ): Promise<Response> {
     const settleBy = deadline + timing.storeCallMs;
@@ -464,6 +478,14 @@ export function makeCommuteCheck(deps: CommuteDeps) {
       modelOff: museDeps.enabled ? undefined : "Muse Spark is off",
       meter: admission.run.meter,
       deadline,
+      budget: checkBudget(startedAt, deadline, {
+        searchMs: timing.deadlineMs - timing.routeWorstMs - timing.modelRoomMs,
+        firstTurnMs: 0,
+        laterTurnMs: 0,
+        ...timing.steps,
+        routeWorstMs: timing.routeWorstMs,
+        modelRoomMs: timing.modelRoomMs,
+      }),
       searched: false,
     };
     let answered = false;
@@ -548,8 +570,6 @@ export function makeCommuteCheck(deps: CommuteDeps) {
     if (reports === "late") return fail(503, OUT_OF_TIME);
     const gathered: CheckedReport[] = reports;
 
-    // The search ends early enough to leave a way around and the model's pick their time.
-    const searchDeadline = run.deadline - timing.routeWorstMs - timing.modelRoomMs;
     run.searched = true;
     // A demo shows its sample reports only, so the sweep's real-world items are left out of it.
     const sweepStore = check.demo ? null : (deps.alertStore ?? alertStoreFromEnv)();
@@ -557,7 +577,7 @@ export function makeCommuteCheck(deps: CommuteDeps) {
     const [advisory, routed, webParts] = await Promise.all([
       beforeDeadline(advisoryAt(at, run.deadline), run.deadline),
       check.plain(),
-      runWebSearches(run.plans, { store: run.store, now: at, deadline: run.deadline, searchBy: searchDeadline, meter: run.meter }),
+      runWebSearches(run.plans, { store: run.store, now: at, deadline: run.deadline, searchBy: run.budget.searchBy, meter: run.meter }),
     ]);
     const web = mergeWebEvidence(webParts);
     if (advisory === "late") return fail(503, OUT_OF_TIME);
@@ -575,6 +595,7 @@ export function makeCommuteCheck(deps: CommuteDeps) {
       rainingHere: check.rainingHere,
       now: at,
       deadline: run.deadline,
+      pickBy: run.budget.pickBy,
       meter: run.meter,
       web,
       modelOff: run.modelOff,
@@ -582,7 +603,7 @@ export function makeCommuteCheck(deps: CommuteDeps) {
         // Every report this check gathered, for every route: the rules keep the ones within each route's corridor.
         reportsAlong: async () => ({ ok: true, reports: gathered }),
         async routeAround(spots) {
-          if (run.deadline - Date.now() < timing.routeWorstMs) {
+          if (Date.now() > run.budget.aroundBy) {
             routingFailure = "out_of_time";
             return { ok: false, reason: "failed" };
           }
@@ -696,6 +717,8 @@ interface CheckRun {
   modelOff?: string;
   meter: Meter;
   deadline: number;
+  /** Each step's cut-off, from the check's start (#44). */
+  budget: CheckBudget;
   /** Set once runWebSearches has the plans; until then the handler gives them back itself. */
   searched: boolean;
 }

@@ -175,7 +175,8 @@ function handlerAt(
     budget: () => budget,
     reports: () => reports,
     muse,
-    timing: timing && { ...COMMUTE_TIMING, ...timing },
+    // A shortened deadline would leave no room for the full check's step sizes, so it gets none unless it names its own.
+    timing: timing && { ...COMMUTE_TIMING, steps: undefined, ...timing },
     alertStore: () => alerts,
   });
   return { handler, checkTrip, ...net };

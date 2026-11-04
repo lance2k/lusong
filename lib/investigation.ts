@@ -124,6 +124,8 @@ export interface InvestigationInput {
   now: Date;
   /** Epoch ms by which every model call must have finished. */
   deadline: number;
+  /** Epoch ms after which model turn `turn` (1 first) isn't started; it ends as a timed-out turn does. */
+  pickBy?: (turn: number) => number;
   meter: Meter;
   web: WebEvidence;
   sources: InvestigationSources;
@@ -541,6 +543,8 @@ async function explain(input: InvestigationInput, evidence: Evidence, runTool: (
   let previousResponseId: string | undefined;
   let callsSoFar = 0;
   for (let turn = 1; ; turn++) {
+    // Too little left for even the fastest measured turn: it would be cut off and paid for, so it isn't asked (#44).
+    if (input.pickBy && Date.now() > input.pickBy(turn)) return { unavailable: "timed out", turn, error: "not started: too little time left" };
     let reply: SparkReply;
     try {
       reply = await respond({

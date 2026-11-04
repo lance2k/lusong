@@ -21,10 +21,11 @@ import {
   EVIDENCE_MAX_PICKS,
   type AroundResult, type InvestigationSources, type WebEvidence } from "./investigation";
 import { admit } from "./admission";
-import { COMMUTE_DEADLINE_MS } from "./commute-handler";
+import { checkBudget, FIRST_TURN_FASTEST_MS, LATER_TURN_FASTEST_MS, STEP_SIZES } from "./check-budget";
+import { COMMUTE_DEADLINE_MS, MODEL_ROOM_MS } from "./commute-handler";
 import { createBudget, MemoryBudgetStore, type BudgetStore } from "./budget";
 import { Meter } from "./meta";
-import { decodePolyline6 } from "./router";
+import { decodePolyline6, ROUTE_WORST_MS } from "./router";
 import { DEMO_TRIPS } from "./samples";
 import { MemoryKvStore, planWebSearch, runWebSearch, SEARCH_RESERVE_MICROS, WEB_SEARCH_CACHE_MS, type WebFinding, type WebPlan } from "./web-search";
 import { callsReply, fakeMeta, hangs, searchReply, textReply, type Scripted } from "../test/muse-derived";
@@ -538,6 +539,71 @@ describe("each model turn's time cap", () => {
 
     expect(await pickWhenTurnTwoTakes(LOOP_ATTEMPT_MS + 1_000)).toEqual({ shown: false, why: "timed out", unavailable: true });
     expect(warn).toHaveBeenCalledWith("Muse Spark's pick not shown: timed out (turn 2: Meta API /responses timed out)");
+  });
+});
+
+describe("a model turn too late for its fastest measured time (#44)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  /** Turn 1 asks for the reports and takes `turnOneMs`; turn 2 would pick at once. */
+  async function runWithTurnOneTaking(turnOneMs: number) {
+    const { sources } = sourcesOf({ reports: [voice("v1", BLOCKED_SPOT, "not_passable")] });
+    const meta = fakeMeta({
+      turns: [
+        () => new Promise((resolve) => setTimeout(() => resolve(callsReply("resp_1", [{ name: "reports_near_route", args: { route: "plain" } }])), turnOneMs)),
+        textReply("resp_2", pickOf("go_another_way", ["v1", "detour"])),
+      ],
+    });
+    const deadline = Date.now() + 40_000;
+    const budget = checkBudget(deadline - COMMUTE_DEADLINE_MS, deadline, { ...STEP_SIZES, routeWorstMs: ROUTE_WORST_MS, modelRoomMs: MODEL_ROOM_MS });
+    const running = investigate(inputOf(sources, { deadline, pickBy: budget.pickBy }));
+    await vi.advanceTimersByTimeAsync(40_000);
+    const result = await running;
+    if (!result.ok) throw new Error("expected an answer");
+    return { result, turnsAsked: meta.requests.length, deadline };
+  }
+
+  it("doesn't ask turn 2 with less left than the fastest later turn measured, and ends as a timed-out turn does", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { result, turnsAsked } = await runWithTurnOneTaking(40_000 - LATER_TURN_FASTEST_MS + 1);
+    expect(turnsAsked).toBe(1);
+    expect(result.pick).toEqual({ shown: false, why: "timed out", unavailable: true });
+    expect(warn).toHaveBeenCalledWith("Muse Spark's pick not shown: timed out (turn 2: not started: too little time left)");
+  });
+
+  it("gives the rules' answer either way: the turn not asked changes no answer", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const late = await runWithTurnOneTaking(40_000 - LATER_TURN_FASTEST_MS + 1);
+    const inTime = await runWithTurnOneTaking(40_000 - LATER_TURN_FASTEST_MS - 1);
+    expect(inTime.turnsAsked).toBe(2);
+    const atTheBoundary = await runWithTurnOneTaking(40_000 - LATER_TURN_FASTEST_MS);
+    expect(atTheBoundary.turnsAsked).toBe(2);
+    expect(inTime.result.pick).toEqual({ shown: true, evidence: ["v1", "detour"] });
+    expect(late.result.answer).toEqual(inTime.result.answer);
+    expect(late.result.answer.answer).not.toBe("go");
+  });
+
+  it("asks turn 1 with the first turn's fastest time left, and not with less", async () => {
+    const { sources } = sourcesOf({ reports: [] });
+    const meta = fakeMeta({ turns: [textReply("resp_1", pickOf("go", []))] });
+    const deadline = Date.now() + FIRST_TURN_FASTEST_MS - 1;
+    const budget = checkBudget(deadline - COMMUTE_DEADLINE_MS, deadline, { ...STEP_SIZES, routeWorstMs: ROUTE_WORST_MS, modelRoomMs: MODEL_ROOM_MS });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const result = await investigate(inputOf(sources, { deadline, pickBy: budget.pickBy }));
+    if (!result.ok) throw new Error("expected an answer");
+    expect(meta.requests.length).toBe(0);
+    expect(result.pick).toEqual({ shown: false, why: "timed out", unavailable: true });
+
+    const boundary = Date.now() + FIRST_TURN_FASTEST_MS;
+    const control = await investigate(inputOf(sources, { deadline: boundary, pickBy: checkBudget(0, boundary, { ...STEP_SIZES, routeWorstMs: ROUTE_WORST_MS, modelRoomMs: MODEL_ROOM_MS }).pickBy }));
+    expect(meta.requests.length).toBe(1);
+    if (!control.ok) throw new Error("expected an answer");
   });
 });
 
