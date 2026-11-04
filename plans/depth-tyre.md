@@ -132,3 +132,33 @@ Ship criteria on held-out flood scenes (16 × 2 = 32 draws), unchanged from 3349
 (b) too deep rises by ≤ half that fall; (c) matched does not fall; (d) no errors beyond v1's. The result is labelled
 exploratory (🔴 T1). If it passes, one fresh live held-out run (cap $1.60) must pass the same criteria before a PR;
 an incomplete fresh run is inconclusive and nothing ships. If it fails, nothing ships and no PR is opened.
+
+## Held-out result (offline replay of run 2026-11-04T14-56-37-720Z, 2026-11-04 17:14 UTC, 2026-11-05 01:14 PHT): not shipped
+Exploratory (🔴 T1: this split already decided the head candidate). All 23 photos × 2 draws accounted for, 0 missing;
+every v1 arm reproduced the verdict the run recorded (46 of 46). Per-draw rows: `tyre-offline.txt` beside the run.
+$0: no network calls.
+
+| Held-out flood scenes (16 photos × 2 draws) | too shallow | matched | too deep | can't measure | error |
+|---|---|---|---|---|---|
+| v1 (shipped tyre geometry, today's baseline) | 13 | 17 | 0 | 2 | 0 |
+| v2 (frozen candidate) | 13 | 17 | 0 | 2 | 0 |
+
+Wading (7 photos × 2): 7 / 4 / 0 / 3 / 0 in both arms. Criteria: (a) too shallow fell by 0 (needs ≥ 4): fail. (b), (c),
+(d) hold. So v2 does not ship, `TYRE_GEOMETRY` stays "v1", no fresh live run was made, and no PR is opened.
+
+How many held-out flood photos have a usable tyre at all: **3 of 16** under v2 (statelibqld-1-79551, knee;
+texas-national-guard-…-1, thigh; 2016-…-015, thigh), 1 of 16 under v1 (79551). On tuning, 1 of 16 under v2, 0 under v1.
+v2 changed one deciding interval in 46 draws (texas-national-guard d1: ankle 5–10 → tyre 14–23 cm, still too shallow
+against thigh) and no outcome.
+
+What it shows:
+- The too-shallow draws are not where the tyres are. The 13 too-shallow held-out flood draws sit on 6 photos; 4 of them
+  have no tyre mask at all (people only: paddock, knee-deep, 1910 Paris, 109124).
+- Where tyres exist, they read shallower than the caption: the vehicles stand in shallower water than the people the
+  caption measures. By eye on texas-national-guard-…-1 (one look): the army truck is parked where its wheels are about a
+  quarter under, while the guardsmen wade thigh-deep in the foreground. Its tyres are also larger than the 45–70 cm
+  assumed for a vehicle of unknown kind (a truck tyre about 1 m across, UNVERIFIED), so the cm reads low too.
+- On cars in knee-deep water (tuning: banks-street, cavite) SAM returns no `tire` mask, so the geometry cannot reach
+  the depths where it would matter most for NPLV/NPATV. The tyre path helps only shallow water on side-on vehicles.
+- The v2 guards are real but cost a little: on the recorded Shah Alam fixture v2 drops the one tyre v1 measured, because
+  water touches only 3 of its 14 cut columns.

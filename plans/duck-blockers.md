@@ -9,6 +9,8 @@ Critic: `rubber-duck-gpt`, model `gpt-6-astra` via Codex CLI (session rollout-20
 | T2 | Replay loads the shared SAM cache, so it can pair new Muse readings with other masks | Both arms come from the masks the run used | Replay reads the run's own SAM replies when saved, and refuses a record whose v1 arm does not reproduce the recorded verdict | `test/depth-tyre-arms.test.ts` "refuses a record whose v1 replay differs from the verdict the run recorded" |
 | T3 | Replay drops error records and never checks the 32 expected draws | The frozen sample size and "no errors beyond v1's" | Every split photo × draw expected exactly once; missing or duplicate aborts; errors count in both arms | `test/depth-tyre-arms.test.ts` "refuses a run missing a photo-draw or holding one twice" and "counts an error record as an error in both arms" |
 
+No diff duck: the held-out replay failed the frozen criteria, nothing ships, and no PR was opened. Final review skipped.
+
 # Duck blockers: feat/vehicle-blur
 
 Critic: `rubber-duck-gpt`, model `gpt-6-astra` via Codex CLI (session rollout-2026-11-05T00-14-03-01a1a756), plan round,

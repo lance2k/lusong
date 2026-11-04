@@ -1,0 +1,12 @@
+f knee   statelibqld-1-79551-floodwater d1 ankle 5-10             -> ankle 5-10             v1 tyres [{"label":"C1","interval":{"low":5,"high":7}}] v2 tyres [{"label":"C1","interval":{"low":5,"high":7}}]
+f knee   statelibqld-1-79551-floodwater d2 tyre_quarter 13-20     -> tyre_quarter 13-20     v1 tyres [{"label":"C1","interval":{"low":5,"high":7}}] v2 tyres [{"label":"C1","interval":{"low":5,"high":7}}]
+f thigh  texas-national-guard-responds- d1 ankle 5-10             -> tyre_geometry 14-23    v1 tyres [] v2 tyres [{"label":"T1","interval":{"low":14,"high":23}},{"label":"T2","interval":{"low":11,"high":18}},{"label":"T3","interval":{"low":13,"high":22}}]
+f thigh  texas-national-guard-responds- d2 below_knee 30-45       -> below_knee 30-45       v1 tyres [] v2 tyres [{"label":"T1","interval":{"low":14,"high":23}},{"label":"T2","interval":{"low":11,"high":18}},{"label":"T3","interval":{"low":13,"high":22}}]
+f thigh  2016-southeastern-texas-floods d2 mid_thigh 50-72        -> mid_thigh 50-72        v1 tyres [] v2 tyres [{"label":"T2","interval":{"low":4,"high":8}},{"label":"T3","interval":{"low":9,"high":16}},{"label":"T4","interval":{"low":2,"high":4}},{"label":"T5","interval":{"low":4,"high":7}}]
+f thigh  2016-southeastern-texas-floods d1 mid_thigh 50-72        -> mid_thigh 50-72        v1 tyres [] v2 tyres [{"label":"T2","interval":{"low":4,"high":8}},{"label":"T3","interval":{"low":9,"high":16}},{"label":"T4","interval":{"low":2,"high":4}},{"label":"T5","interval":{"low":4,"high":7}}]
+split heldout (exploratory: this split already decided the head-height candidate's held-out run 2026-11-04T14-56-37-720Z (plans/depth-accuracy.md), which it failed); reader landmark; draws 2; missing 0
+flood v1 {"draws":32,"too_shallow":13,"matched":17,"too_deep":0,"cannot_measure":2,"no_flood":0,"error":0} 
+ flood v2 {"draws":32,"too_shallow":13,"matched":17,"too_deep":0,"cannot_measure":2,"no_flood":0,"error":0}
+wading v1 {"draws":14,"too_shallow":7,"matched":4,"too_deep":0,"cannot_measure":3,"no_flood":0,"error":0} 
+ wading v2 {"draws":14,"too_shallow":7,"matched":4,"too_deep":0,"cannot_measure":3,"no_flood":0,"error":0}
+photos with a v2 tyre estimate: {"flood":["2016-southeastern-texas-floods-160421-z-zz999-015.jpg","statelibqld-1-79551-floodwaters-outside-the-hotel-shakespear.jpg","texas-national-guard-responds-to-floods-in-southeast-texas-1.jpg"]}

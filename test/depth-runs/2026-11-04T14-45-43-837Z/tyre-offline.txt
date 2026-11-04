@@ -1,0 +1,8 @@
+f thigh  2016-southeastern-texas-floods d1 hip 65-86              -> hip 65-86              v1 tyres [] v2 tyres [{"label":"T3","interval":{"low":12,"high":19}},{"label":"T4","interval":{"low":4,"high":7}}]
+f thigh  2016-southeastern-texas-floods d2 hip 65-86              -> hip 65-86              v1 tyres [] v2 tyres [{"label":"T3","interval":{"low":12,"high":19}},{"label":"T4","interval":{"low":4,"high":7}}]
+split tuning (first use); reader landmark; draws 2; missing 11
+flood v1 {"draws":30,"too_shallow":8,"matched":10,"too_deep":3,"cannot_measure":8,"no_flood":0,"error":1} 
+ flood v2 {"draws":30,"too_shallow":8,"matched":10,"too_deep":3,"cannot_measure":8,"no_flood":0,"error":1}
+wading v1 {"draws":3,"too_shallow":0,"matched":1,"too_deep":2,"cannot_measure":0,"no_flood":0,"error":0} 
+ wading v2 {"draws":3,"too_shallow":0,"matched":1,"too_deep":2,"cannot_measure":0,"no_flood":0,"error":0}
+photos with a v2 tyre estimate: {"flood":["2016-southeastern-texas-floods-160421-z-zz999-002.jpg"]}
