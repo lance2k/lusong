@@ -419,6 +419,12 @@ describe("a feed request that times out (#59)", () => {
     expect(outcome).toMatchObject({ outcome: "published", snapshot: { complete: false } });
   });
 
+  it("isn't asked again by a check's inline refresh, however long its deadline: the check's time is the rider's", async () => {
+    const net = pagasa(flaky([DAVAO_GFA1_UPDATE], 1));
+    await snapshotForCheck({ store: new MemoryAdvisoryStore(), fetch: net.fetch, now: at("2026-10-30T21:30:00+08:00"), deadline: Date.now() + 60_000 });
+    expect(net.calls).toEqual([FEED_URL]);
+  });
+
   it("a check whose stored snapshot went stale isn't handed a kept one: it reads the incomplete refresh", async () => {
     const store = new MemoryAdvisoryStore();
     await snapshotAt("2026-10-30T20:59:00+08:00", listing([DAVAO_GFA1_UPDATE]), store);

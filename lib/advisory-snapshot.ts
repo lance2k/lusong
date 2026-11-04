@@ -428,6 +428,8 @@ interface BuildDeps {
   limits: SnapshotLimits;
   /** Epoch ms by which the snapshot must be built. */
   deadline: number;
+  /** Whether a failed feed request may be made once more (#59): the schedule's runs only. */
+  feedRetry: boolean;
 }
 
 /**
@@ -454,9 +456,9 @@ async function buildSnapshot(deps: BuildDeps, generation: number): Promise<{ sna
     feedXml = await fetchText(FEED_URL, deps, limits, signal);
   } catch (first) {
     // From Vercel the feed request timed out on 4 of 66 scheduled runs (#59) while it answered at once from Manila. One
-    // more try, only while two requests' time is left: one for it and one for the records, so a check's short inline
-    // refresh never spends its time here.
-    if (deps.deadline - Date.now() < 2 * limits.timeoutMs) return { snapshot: failed(first), feedFetched: false };
+    // more try on a scheduled run, never a check's inline refresh (the rider is waiting), and only while two requests'
+    // time is left: one for it and one for the records.
+    if (!deps.feedRetry || deps.deadline - Date.now() < 2 * limits.timeoutMs) return { snapshot: failed(first), feedFetched: false };
     try {
       feedXml = await fetchText(FEED_URL, deps, limits, signal);
     } catch (second) {
@@ -539,6 +541,8 @@ export interface RefreshDeps {
   limits?: Partial<SnapshotLimits>;
   /** Epoch ms the refresh must end by, if sooner than its own deadline. */
   deadline?: number;
+  /** False for a check's inline refresh: a failed feed request isn't made again. */
+  feedRetry?: boolean;
 }
 
 /**
@@ -558,7 +562,7 @@ export async function refreshSnapshot(deps: RefreshDeps): Promise<RefreshOutcome
   const generation = now.getTime();
   try {
     const deadline = Math.min(Date.now() + limits.deadlineMs, deps.deadline ?? Infinity);
-    const { snapshot, feedFetched } = await buildSnapshot({ store: deps.store, fetch: deps.fetch, now, limits, deadline }, generation);
+    const { snapshot, feedFetched } = await buildSnapshot({ store: deps.store, fetch: deps.fetch, now, limits, deadline, feedRetry: deps.feedRetry ?? true }, generation);
     if (!feedFetched) {
       // Lean safe still: a kept snapshot is one a check would rely on anyway (incompleteWhy is null), and it goes stale on
       // its own STALE_AFTER_MS after it was fetched, so missed runs end in an incomplete read as before.
@@ -626,7 +630,7 @@ export async function snapshotForCheck(deps: { store: AdvisoryStore; fetch: type
     return { snapshot: null, why: `store: ${err instanceof Error ? err.message : String(err)}` };
   }
   if (settled(stored, deps.now)) return { snapshot: stored };
-  const refreshed = await refreshSnapshot({ store: deps.store, fetch: deps.fetch, now: () => deps.now, limits: deps.limits, deadline: deps.deadline });
+  const refreshed = await refreshSnapshot({ store: deps.store, fetch: deps.fetch, now: () => deps.now, limits: deps.limits, deadline: deps.deadline, feedRetry: false });
   if (refreshed.outcome === "published" || refreshed.outcome === "kept") return { snapshot: refreshed.snapshot };
   if (refreshed.outcome === "busy") {
     while (Date.now() + POLL_MS < deps.deadline) {
