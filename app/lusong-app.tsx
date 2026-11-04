@@ -250,7 +250,7 @@ function Shell() {
         </button>
       )}
 
-      <Sheet detent={desktop ? "full" : detent} onDetent={setDetent} labelledBy={sheetView ? VIEW_HEADING : WHERE_HEADING}>
+      <Sheet detent={desktop ? "full" : detent} onDetent={setDetent} labelledBy={sheetView ? VIEW_HEADING : WHERE_HEADING} onEscape={sheetView ? closeView : undefined}>
         <SheetBody ref={body}>
           {sheetView && (
             <div>
