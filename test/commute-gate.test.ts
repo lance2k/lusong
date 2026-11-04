@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { decideAnswer, routeLengthM, type Point, type Report } from "../lib/answer";
 import { decodePolyline6 } from "../lib/router";
@@ -11,14 +11,14 @@ import type { Verdict } from "../lib/verdict";
 
 const NOW = new Date("2026-10-30T07:00:00+08:00");
 const ROUTE = decodePolyline6(JSON.parse(readFileSync("test/fixtures/valhalla/banilad-itpark-plain.json", "utf8")).trip.legs[0].shape);
-const RUNS = readdirSync("test/depth-runs").map((stamp) => `test/depth-runs/${stamp}/results.json`);
+const RUNS = readdirSync("test/depth-runs")
+  .map((stamp) => `test/depth-runs/${stamp}/results.json`)
+  .filter((run) => existsSync(run));
+/** A run's SAM-only and failed records carry no result, so no verdict. */
 const VERDICTS: { file: string; draw: number; run: string; verdict: Verdict }[] = RUNS.flatMap((run) =>
-  (JSON.parse(readFileSync(run, "utf8")).records as { file: string; draw: number; result: { verdict: Verdict } }[]).map((r) => ({
-    file: r.file,
-    draw: r.draw,
-    run,
-    verdict: r.result.verdict,
-  })),
+  (JSON.parse(readFileSync(run, "utf8")).records as { file: string; draw: number; result?: { verdict: Verdict } }[]).flatMap((r) =>
+    r.result ? [{ file: r.file, draw: r.draw, run, verdict: r.result.verdict }] : [],
+  ),
 );
 
 function pointAlong(line: Point[], d: number): Point {
@@ -52,9 +52,9 @@ const check = (reports: Report[], advisory: "active" | "none") =>
   decideAnswer({ plain: { id: "plain", line: ROUTE }, detours: [], reports, advisory, rainingHere: false, now: NOW }).answer;
 
 describe("every recorded depth-set verdict, as reports on the Banilad → IT Park route", () => {
-  it("covers both 90-draw runs", () => {
-    expect(RUNS).toHaveLength(2);
-    expect(VERDICTS).toHaveLength(180);
+  it("covers every recorded run: the two 90-draw runs of 2026-10-28 and the two reader runs of 2026-11-04", () => {
+    expect(RUNS).toHaveLength(4);
+    expect(VERDICTS).toHaveLength(90 + 90 + 89 + 46);
     expect(VERDICTS.filter((v) => v.verdict.kind === "no_flood")).toHaveLength(0);
   });
 

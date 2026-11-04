@@ -1,11 +1,11 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { pickObjects } from "../../lib/check";
-import { headEstimates } from "../../lib/head";
-import { parseSamText, placeRaster, type SamReply } from "../../lib/sam";
-import { tyreEstimates } from "../../lib/tyre";
-import { decideVerdict, type Reading } from "../../lib/verdict";
-import { judgeDepthDraw, type DepthPhoto } from "../depth-report";
+import { pickObjects } from "../lib/check";
+import { headEstimates } from "../lib/head";
+import { parseSamText, placeRaster, type SamReply } from "../lib/sam";
+import { tyreEstimates } from "../lib/tyre";
+import { decideVerdict, type Reading } from "../lib/verdict";
+import { judgeDepthDraw, type DepthPhoto } from "./depth-report";
 
 const [runDir, reader = "landmark"] = process.argv.slice(2);
 const labels = new Map((JSON.parse(readFileSync("test/fixtures/depth-set/labels.json", "utf8")) as DepthPhoto[]).map((p) => [p.file, p]));

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { sanitizeJpeg } from "../../lib/jpeg";
-import { Meter, segmentReply } from "../../lib/meta";
+import { sanitizeJpeg } from "../lib/jpeg";
+import { Meter, segmentReply } from "../lib/meta";
 
 const phrase = process.argv[2] ?? "head";
 const split = JSON.parse(readFileSync("test/fixtures/depth-set/split.json", "utf8")).split as Record<string, string>;

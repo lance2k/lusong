@@ -104,7 +104,7 @@ including `head`, 2 Muse draws, both arms computed from the same Muse readings),
 
 ## Held-out result (run 2026-11-04T14-56-37-720Z, analysed 2026-11-04 15:04 UTC, 23:04 PHT): not shipped
 One SAM pass per held-out photo (4 phrases + `head`), landmark reader × 2 draws, 46 of 46 draws, 0 errors, $0.9071
-metered. Both arms come from the same Muse readings (`test/depth-runs/head-offline.mts`; per-draw rows in
+metered. Both arms come from the same Muse readings (`test/depth-head-offline.mts`; per-draw rows in
 `head-offline.txt` beside the run).
 
 | Held-out flood scenes (16 photos × 2 draws) | too shallow | matched | too deep | can't measure |
