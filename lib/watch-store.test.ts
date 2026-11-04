@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { watchStores } from "../test/watch-stores";
-import { WATCH_TTL_MS, type NewWatcher } from "./watch-store";
+import { WATCH_TTL_MS, type NewWatcher, type WatchStore } from "./watch-store";
 
 const BANILAD = { lat: 10.346, lon: 123.911 };
 const IT_PARK = { lat: 10.3307, lon: 123.9058 };
@@ -10,6 +10,13 @@ function watcher(overrides: Partial<NewWatcher> = {}): NewWatcher {
 }
 
 const T = Date.parse("2026-10-29T22:00:00Z");
+
+/** A send attempt as a tick makes one: it holds the watcher's send lease, and the lease's token is the attempt's id. */
+async function attempt(store: WatchStore, id: string): Promise<string> {
+  const token = await store.takeSendLease(id, 60_000);
+  if (!token) throw new Error("the send lease is held");
+  return token;
+}
 
 describe.each(watchStores)("the watch %s", (_name, make) => {
   it("keeps a new watcher unlinked until its one-time code is redeemed, once", async () => {
@@ -54,8 +61,10 @@ describe.each(watchStores)("the watch %s", (_name, make) => {
     expect(ttls["lusong:watch-code:code1"]).toBeLessThanOrEqual(15 * 60_000);
     await store.redeem("code1", "4242");
     await store.claimRun("a".repeat(64), "g1", T, 9 * 60_000);
-    await store.markSending("a".repeat(64), "g1", { kind: "go", day: "2026-10-30" }, "t1");
-    await store.commit("a".repeat(64), "g1", { kind: "go", day: "2026-10-30" }, "t1");
+    const t1 = await attempt(store, "a".repeat(64));
+    await store.markSending("a".repeat(64), "g1", { kind: "go", day: "2026-10-30" }, t1);
+    await store.commit("a".repeat(64), "g1", { kind: "go", day: "2026-10-30" }, t1);
+    await store.releaseSendLease("a".repeat(64), t1);
     for (const ttl of Object.values(await held())) expect(ttl).toBeGreaterThan(0);
   });
 
@@ -64,8 +73,9 @@ describe.each(watchStores)("the watch %s", (_name, make) => {
     await store.create(watcher(), "code1");
     await store.create(watcher({ id: "b".repeat(64) }), "code2");
     await store.redeem("code2", "4242");
-    await store.markSending("b".repeat(64), "g1", { kind: "wait", day: "2026-10-30" }, "t1");
-    await store.commit("b".repeat(64), "g1", { kind: "wait", day: "2026-10-30" }, "t1");
+    const t1 = await attempt(store, "b".repeat(64));
+    await store.markSending("b".repeat(64), "g1", { kind: "wait", day: "2026-10-30" }, t1);
+    await store.commit("b".repeat(64), "g1", { kind: "wait", day: "2026-10-30" }, t1);
     await store.remove("a".repeat(64));
     await store.remove("b".repeat(64));
     expect(await held()).toEqual({});
@@ -115,17 +125,20 @@ describe.each(watchStores)("the watch %s", (_name, make) => {
     const { store } = make();
     const id = "a".repeat(64);
     await store.create(watcher(), "code1");
-    expect(await store.markSending(id, "g2", { kind: "go", day: "2026-10-30" }, "t1")).toBe(false);
+    const t1 = await attempt(store, id);
+    expect(await store.markSending(id, "g2", { kind: "go", day: "2026-10-30" }, t1)).toBe(false);
     expect((await store.get(id))?.sending).toBeNull();
-    expect(await store.markSending(id, "g1", { kind: "go", day: "2026-10-30" }, "t1")).toBe(true);
+    expect(await store.markSending(id, "g1", { kind: "go", day: "2026-10-30" }, t1)).toBe(true);
     expect((await store.list())[0]).toMatchObject({ sending: { kind: "go", day: "2026-10-30" }, lastKind: null });
-    expect(await store.commit(id, "g1", { kind: "go", day: "2026-10-30" }, "t1")).toBe(true);
+    expect(await store.commit(id, "g1", { kind: "go", day: "2026-10-30" }, t1)).toBe(true);
     expect(await store.get(id)).toMatchObject({ sending: null, lastKind: "go", lastDay: "2026-10-30" });
-    expect(await store.markSending(id, "g1", { kind: "wait", day: "2026-10-30" }, "t2")).toBe(true);
-    await store.dropSending(id, "g1", "t2");
+    await store.releaseSendLease(id, t1);
+    const t2 = await attempt(store, id);
+    expect(await store.markSending(id, "g1", { kind: "wait", day: "2026-10-30" }, t2)).toBe(true);
+    await store.dropSending(id, "g1", t2);
     expect(await store.get(id)).toMatchObject({ sending: null, lastKind: "go" });
     await store.remove(id);
-    expect(await store.markSending(id, "g1", { kind: "go", day: "2026-10-30" }, "t3")).toBe(false);
+    expect(await store.markSending(id, "g1", { kind: "go", day: "2026-10-30" }, t2)).toBe(false);
     expect(await store.get(id)).toBeNull();
   });
 
@@ -133,13 +146,18 @@ describe.each(watchStores)("the watch %s", (_name, make) => {
     const { store } = make();
     const id = "a".repeat(64);
     await store.create(watcher(), "code1");
-    await store.markSending(id, "g1", { kind: "go", day: "2026-10-30" }, "t1");
-    await store.commit(id, "g1", { kind: "go", day: "2026-10-30" }, "t1");
+    const t1 = await attempt(store, id);
+    await store.markSending(id, "g1", { kind: "go", day: "2026-10-30" }, t1);
+    await store.commit(id, "g1", { kind: "go", day: "2026-10-30" }, t1);
+    await store.releaseSendLease(id, t1);
     // Wait was handed to Telegram and never recorded as sent: its delivery is uncertain.
-    await store.markSending(id, "g1", { kind: "wait", day: "2026-10-30" }, "t2");
-    expect(await store.markSending(id, "g1", { kind: "go", day: "2026-10-30" }, "t3")).toBe(true);
+    const t2 = await attempt(store, id);
+    await store.markSending(id, "g1", { kind: "wait", day: "2026-10-30" }, t2);
+    await store.releaseSendLease(id, t2);
+    const t3 = await attempt(store, id);
+    expect(await store.markSending(id, "g1", { kind: "go", day: "2026-10-30" }, t3)).toBe(true);
     expect(await store.get(id)).toMatchObject({ sending: { kind: "go", day: "2026-10-30" }, lastKind: "wait", lastDay: "2026-10-30" });
-    await store.dropSending(id, "g1", "t3");
+    await store.dropSending(id, "g1", t3);
     expect(await store.get(id)).toMatchObject({ sending: null, lastKind: "wait", lastDay: "2026-10-30" });
   });
 
@@ -147,16 +165,19 @@ describe.each(watchStores)("the watch %s", (_name, make) => {
     const { store } = make();
     const id = "a".repeat(64);
     await store.create(watcher(), "code1");
-    // Attempt t1's mark landed, and its commit or drop is still in flight when t2 marks.
-    await store.markSending(id, "g1", { kind: "wait", day: "2026-10-30" }, "t1");
-    expect(await store.markSending(id, "g1", { kind: "go", day: "2026-10-30" }, "t2")).toBe(true);
-    expect(await store.commit(id, "g1", { kind: "wait", day: "2026-10-30" }, "t1")).toBe(false);
-    await store.dropSending(id, "g1", "t1");
+    // Attempt t1's mark landed, and its commit or drop is still in flight when its lease ends and t2 marks.
+    const t1 = await attempt(store, id);
+    await store.markSending(id, "g1", { kind: "wait", day: "2026-10-30" }, t1);
+    await store.releaseSendLease(id, t1);
+    const t2 = await attempt(store, id);
+    expect(await store.markSending(id, "g1", { kind: "go", day: "2026-10-30" }, t2)).toBe(true);
+    expect(await store.commit(id, "g1", { kind: "wait", day: "2026-10-30" }, t1)).toBe(false);
+    await store.dropSending(id, "g1", t1);
     expect(await store.get(id)).toMatchObject({ sending: { kind: "go", day: "2026-10-30" }, lastKind: "wait", lastDay: "2026-10-30" });
     // t2's own commit still lands; t1's arriving after it changes nothing.
-    expect(await store.commit(id, "g1", { kind: "go", day: "2026-10-30" }, "t2")).toBe(true);
-    expect(await store.commit(id, "g1", { kind: "wait", day: "2026-10-30" }, "t1")).toBe(false);
-    await store.dropSending(id, "g1", "t1");
+    expect(await store.commit(id, "g1", { kind: "go", day: "2026-10-30" }, t2)).toBe(true);
+    expect(await store.commit(id, "g1", { kind: "wait", day: "2026-10-30" }, t1)).toBe(false);
+    await store.dropSending(id, "g1", t1);
     expect(await store.get(id)).toMatchObject({ sending: null, lastKind: "go", lastDay: "2026-10-30" });
   });
 
@@ -166,6 +187,39 @@ describe.each(watchStores)("the watch %s", (_name, make) => {
     await store.create(watcher(), "code1");
     expect(await store.commit(id, "g1", { kind: "go", day: "2026-10-30" }, "t1")).toBe(false);
     expect(await store.get(id)).toMatchObject({ sending: null, lastKind: null, lastDay: null });
+  });
+
+  it("a mark that lands after its attempt's lease ended is refused, whether the newer attempt's send is uncertain or committed (duck 🔴1)", async () => {
+    const { store } = make();
+    const id = "a".repeat(64);
+    await store.create(watcher(), "code1");
+    // t1's mark of go timed out on the client and is still on its way; t1 gave up and its lease ended.
+    const t1 = await attempt(store, id);
+    await store.releaseSendLease(id, t1);
+    const t2 = await attempt(store, id);
+    expect(await store.markSending(id, "g1", { kind: "wait", day: "2026-10-30" }, t2)).toBe(true);
+    // t2's send is uncertain: its mark stays. t1's late mark mustn't replace it.
+    expect(await store.markSending(id, "g1", { kind: "go", day: "2026-10-30" }, t1)).toBe(false);
+    expect(await store.get(id)).toMatchObject({ sending: { kind: "wait", day: "2026-10-30" }, lastKind: null });
+    expect(await store.commit(id, "g1", { kind: "wait", day: "2026-10-30" }, t2)).toBe(true);
+    await store.releaseSendLease(id, t2);
+    // After t2 committed, with no lease held at all.
+    expect(await store.markSending(id, "g1", { kind: "go", day: "2026-10-30" }, t1)).toBe(false);
+    expect(await store.get(id)).toMatchObject({ sending: null, lastKind: "wait", lastDay: "2026-10-30" });
+  });
+
+  it("a mark stored before attempt ids (kind|day) still counts as sent, matches no commit or drop, and is promoted by the next mark (#45)", async () => {
+    const { store, setSending } = make();
+    const id = "a".repeat(64);
+    await store.create(watcher(), "code1");
+    await setSending(id, "wait|2026-10-30");
+    expect(await store.get(id)).toMatchObject({ sending: { kind: "wait", day: "2026-10-30" } });
+    const t1 = await attempt(store, id);
+    expect(await store.commit(id, "g1", { kind: "wait", day: "2026-10-30" }, t1)).toBe(false);
+    await store.dropSending(id, "g1", t1);
+    expect(await store.get(id)).toMatchObject({ sending: { kind: "wait", day: "2026-10-30" } });
+    expect(await store.markSending(id, "g1", { kind: "go", day: "2026-10-30" }, t1)).toBe(true);
+    expect(await store.get(id)).toMatchObject({ sending: { kind: "go", day: "2026-10-30" }, lastKind: "wait", lastDay: "2026-10-30" });
   });
 
   it("lends a watcher's send lease to one holder at a time, frees it only for that holder's token, and lets it expire", async () => {
@@ -195,12 +249,13 @@ describe.each(watchStores)("the watch %s", (_name, make) => {
     await store.create(watcher(), "code1");
     expect(await store.isCurrent("a".repeat(64), "g1")).toBe(true);
     expect(await store.isCurrent("a".repeat(64), "g2")).toBe(false);
-    await store.markSending("a".repeat(64), "g1", { kind: "go_another_way", day: "2026-10-30" }, "t1");
-    expect(await store.commit("a".repeat(64), "g2", { kind: "go", day: "2026-10-30" }, "t1")).toBe(false);
-    expect(await store.commit("a".repeat(64), "g1", { kind: "go_another_way", day: "2026-10-30" }, "t1")).toBe(true);
+    const t1 = await attempt(store, "a".repeat(64));
+    await store.markSending("a".repeat(64), "g1", { kind: "go_another_way", day: "2026-10-30" }, t1);
+    expect(await store.commit("a".repeat(64), "g2", { kind: "go", day: "2026-10-30" }, t1)).toBe(false);
+    expect(await store.commit("a".repeat(64), "g1", { kind: "go_another_way", day: "2026-10-30" }, t1)).toBe(true);
     expect(await store.get("a".repeat(64))).toMatchObject({ lastKind: "go_another_way", lastDay: "2026-10-30" });
     await store.remove("a".repeat(64));
-    expect(await store.commit("a".repeat(64), "g1", { kind: "go", day: "2026-10-30" }, "t1")).toBe(false);
+    expect(await store.commit("a".repeat(64), "g1", { kind: "go", day: "2026-10-30" }, t1)).toBe(false);
     expect(await store.isCurrent("a".repeat(64), "g1")).toBe(false);
   });
 });

@@ -19,6 +19,8 @@ export interface StoreUnderTest {
   held(): Promise<Record<string, number>>;
   /** Passes `ms` of the store's own time: the memory store's clock, or real time for Upstash. */
   wait(ms: number): Promise<void>;
+  /** Writes a watcher's raw `sending` field, as a record stored by an earlier release holds it. */
+  setSending(id: string, raw: string): Promise<void>;
 }
 
 export type StoreOptions = { codeTtlMs?: number; ttlMs?: number; maxWatchers?: number };
@@ -34,6 +36,9 @@ export const watchStores: [string, (opts?: StoreOptions) => StoreUnderTest][] = 
         held: async () => store.ttls(),
         wait: async (ms) => {
           t += ms;
+        },
+        setSending: async (id, raw) => {
+          (store as unknown as { live(id: string): Record<string, string> | null }).live(id)!.sending = raw;
         },
       };
     },
@@ -57,6 +62,9 @@ export const watchStores: [string, (opts?: StoreOptions) => StoreUnderTest][] = 
                 return out;
               },
               wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+              setSending: async (id, raw) => {
+                await upstash(["HSET", `${prefix}:watch:w:${id}`, "sending", raw]);
+              },
             } satisfies StoreUnderTest;
           },
         ] as [string, (opts?: StoreOptions) => StoreUnderTest],

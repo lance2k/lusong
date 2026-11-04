@@ -391,6 +391,15 @@ describe("a feed request that times out (#59)", () => {
     expect(judgeRoute({ snapshot: await readStoredSnapshot(store) }, DAVAO_CITY_ROUTE, at("2026-10-30T21:30:00+08:00")).state).toBe("unreadable");
   });
 
+  it("publishes incomplete over a fresh complete snapshot whose pending record has come due", async () => {
+    const store = new MemoryAdvisoryStore();
+    // Built at 21:10, before the Update it lists was sent (21:11): its pendingAt is due by 21:30.
+    await snapshotAt("2026-10-30T21:10:00+08:00", listing([DAVAO_GFA1_UPDATE]), store);
+    expect((await readStoredSnapshot(store))!.pendingAt).not.toBeNull();
+    const outcome = await refreshSnapshot({ store, fetch: pagasa(flaky([DAVAO_GFA1_UPDATE], 2)).fetch, now: () => at("2026-10-30T21:30:00+08:00") });
+    expect(outcome).toMatchObject({ outcome: "published", snapshot: { complete: false } });
+  });
+
   it("publishes incomplete over a fresh complete snapshot when the feed was read but a record wasn't: only the feed's failure keeps one", async () => {
     const store = new MemoryAdvisoryStore();
     await snapshotAt("2026-10-30T21:10:00+08:00", listing([DAVAO_GFA1_ALERT]), store);

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { AnswerKind } from "./answer";
 import { SEND_TIMEOUT_MS, type Channel } from "./channel";
 import { COMMUTE_DEADLINE_MS, COMMUTE_TIMING, TITLES, type ScheduledCheck } from "./commute-handler";
@@ -185,7 +184,8 @@ async function runOne(
 /**
  * Every store call here ends by `end`, the tick's: one still running then is left to settle on its own. Each is safe to
  * land late: a lease lapses in SEND_LEASE_MS, a mark that lands counts as sent (a missed message, never a second one),
- * and a commit or a drop is made only for the watcher's generation and the attempt's own mark.
+ * and a commit or a drop is made only for the watcher's generation and the attempt's own mark. The attempt's id is its
+ * send lease's token: a mark is made only while that lease is held, so a late one can't replace a newer attempt's (#45).
  */
 async function sendAnswer(deps: TickDeps, w: WatchRecord, kind: AnswerKind, end: number): Promise<"sent" | "quiet" | "failed"> {
   // With less than a lease left of the tick, the send couldn't end inside it. Nothing is marked, so the next check sends it.
@@ -203,7 +203,7 @@ async function sendAnswer(deps: TickDeps, w: WatchRecord, kind: AnswerKind, end:
   if (!lease) return "quiet";
   const held = lease;
   try {
-    return await sendUnderLease(deps, w, kind, leaseAsked, end);
+    return await sendUnderLease(deps, w, kind, held, leaseAsked, end);
   } finally {
     const releasing = deps.store.releaseSendLease(w.id, held).catch((err) => {
       console.error("watch store failed releasing the send lease:", err instanceof Error ? err.message : err);
@@ -226,7 +226,7 @@ async function by<T>(deps: TickDeps, call: Promise<T>, end: number): Promise<T> 
   return result;
 }
 
-async function sendUnderLease(deps: TickDeps, w: WatchRecord, kind: AnswerKind, leaseAsked: number, end: number): Promise<"sent" | "quiet" | "failed"> {
+async function sendUnderLease(deps: TickDeps, w: WatchRecord, kind: AnswerKind, attempt: string, leaseAsked: number, end: number): Promise<"sent" | "quiet" | "failed"> {
   // The check can outlast the window: what is sent is decided on the clock as it is now.
   const at = deps.now();
   if (!inWindow(w.window, at)) return "quiet";
@@ -236,8 +236,6 @@ async function sendUnderLease(deps: TickDeps, w: WatchRecord, kind: AnswerKind, 
   const opening = last.day !== day;
   if (!opening && kind === last.kind) return "quiet";
   const answer = { kind, day };
-  // Its own id on the mark, the commit and the drop, so a late one from an earlier attempt can't undo this one's (#45).
-  const attempt = randomUUID();
   let sendAt: Date;
   try {
     // Recorded before the send, so a send whose outcome is unknown, or whose commit fails, is never sent again.

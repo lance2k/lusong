@@ -73,7 +73,9 @@ export interface WatchStore {
   /**
    * Before a send: records the answer about to go, if the generation still matches. False means don't send. Atomic: an
    * answer still marked as sending from an earlier send is first recorded as the last sent, since its delivery is
-   * uncertain, so dropping the new one falls back to it rather than to an older answer.
+   * uncertain, so dropping the new one falls back to it rather than to an older answer. `attempt` is the token of the
+   * send lease the attempt holds, and the mark is refused unless that lease is still held, so a mark that lands after its
+   * attempt gave up can't replace a newer attempt's (#45).
    */
   markSending(id: string, gen: string, answer: SentAnswer, attempt: string): Promise<boolean>;
   /** When the message wasn't sent (refused, or called off before sending): the next check may send it again. */
@@ -285,6 +287,8 @@ export class MemoryWatchStore implements WatchStore {
   async markSending(id: string, gen: string, answer: SentAnswer, attempt: string) {
     const fields = this.live(id);
     if (!fields || fields.gen !== gen || fields.stopping) return false;
+    const lease = this.leases.get(id);
+    if (!lease || lease.token !== attempt || lease.expiresAt <= this.now()) return false;
     const uncertain = fromFields(id, fields)?.sending;
     if (uncertain) {
       fields.lastKind = uncertain.kind;
@@ -471,6 +475,7 @@ return 0
 const MARK_SENDING_SCRIPT = `
 if redis.call('HGET', KEYS[1], 'gen') ~= ARGV[1] then return 0 end
 if redis.call('HEXISTS', KEYS[1], 'stopping') == 1 then return 0 end
+if redis.call('GET', KEYS[2]) ~= ARGV[3] then return 0 end
 local uncertain = redis.call('HGET', KEYS[1], 'sending')
 if uncertain then
   local kind, day = string.match(uncertain, '^([^|]+)|([^|]+)')
@@ -683,7 +688,7 @@ export class UpstashWatchStore implements WatchStore {
   }
 
   async markSending(id: string, gen: string, answer: SentAnswer, attempt: string) {
-    return (await this.evalScript(MARK_SENDING_SCRIPT, [this.record(id)], [gen, sendingField(answer, attempt)])) === 1;
+    return (await this.evalScript(MARK_SENDING_SCRIPT, [this.record(id), this.lease(id)], [gen, sendingField(answer, attempt), attempt])) === 1;
   }
 
   async dropSending(id: string, gen: string, attempt: string) {
