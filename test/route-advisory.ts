@@ -18,11 +18,12 @@ export function productView(overrides: Partial<ProductView> = {}): ProductView {
   };
 }
 
-export const NO_ROUTE_ADVISORY: RouteAdvisory = { state: "none", covering: [], warnings: [], incomplete: null };
-export const UNREADABLE_ROUTE_ADVISORY: RouteAdvisory = { state: "unreadable", covering: [], warnings: [], incomplete: "no snapshot of PAGASA's feed" };
+export const NO_ROUTE_ADVISORY: RouteAdvisory = { state: "none", covering: [], warnings: [], incomplete: null, readAt: null };
+export const UNREADABLE_ROUTE_ADVISORY: RouteAdvisory = { state: "unreadable", covering: [], warnings: [], incomplete: "no snapshot of PAGASA's feed", readAt: null };
 export const activeRouteAdvisory = (...covering: ProductView[]): RouteAdvisory => ({
   state: "active",
   covering: covering.length > 0 ? covering : [productView()],
   warnings: [],
   incomplete: null,
+  readAt: null,
 });

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { FEED_URL } from "./advisory";
 import {
   capKey,
+  incompleteWhy,
   judgeRoute,
   kindOf,
   MemoryAdvisoryStore,
@@ -337,6 +338,83 @@ describe("a snapshot that can't be relied on reads as incomplete", () => {
     served[CV_GFA5] = (served[CV_GFA5] as string).replace(/<expires>[^<]*<\/expires>/, "");
     const { snapshot } = await snapshotAt("2026-10-25T20:00:00+08:00", served);
     expect(snapshot).toMatchObject({ complete: false, why: `${CV_GFA5}: ${CV_GFA5} has no expires` });
+  });
+});
+
+describe("a feed request that times out (#59)", () => {
+  const timedOut = () => Promise.reject(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+  /** The feed fails the first `failures` times it is asked, then serves the listing. */
+  function flaky(links: string[], failures: number): Served {
+    const served = listing(links);
+    const feed = served[FEED_URL] as string;
+    let asked = 0;
+    served[FEED_URL] = async () => (asked++ < failures ? timedOut() : new Response(feed, { status: 200 }));
+    return served;
+  }
+
+  it("is asked once more while the run has time, and the snapshot is complete", async () => {
+    const { snapshot, net } = await snapshotAt("2026-10-30T21:30:00+08:00", flaky([DAVAO_GFA1_UPDATE], 1));
+    expect(net.calls).toEqual([FEED_URL, FEED_URL, DAVAO_GFA1_UPDATE]);
+    expect(snapshot).toMatchObject({ complete: true, why: null });
+  });
+
+  it("is asked only once more: two timeouts publish the snapshot incomplete when nothing complete is stored", async () => {
+    const { snapshot, net } = await snapshotAt("2026-10-30T21:30:00+08:00", flaky([DAVAO_GFA1_UPDATE], 2));
+    expect(net.calls).toEqual([FEED_URL, FEED_URL]);
+    expect(snapshot).toMatchObject({ complete: false, why: "feed: The operation was aborted due to timeout" });
+  });
+
+  it("isn't asked again when less than two requests' time is left, so a check's short refresh isn't spent on it", async () => {
+    const net = pagasa(flaky([DAVAO_GFA1_UPDATE], 1));
+    const store = new MemoryAdvisoryStore();
+    const outcome = await refreshSnapshot({ store, fetch: net.fetch, now: () => at("2026-10-30T21:30:00+08:00"), deadline: Date.now() + 15_000 });
+    expect(net.calls).toEqual([FEED_URL]);
+    expect(outcome).toMatchObject({ outcome: "published", snapshot: { complete: false } });
+  });
+
+  it("keeps the last complete snapshot while it is fresh, says how old it is, and publishes nothing", async () => {
+    const store = new MemoryAdvisoryStore();
+    await snapshotAt("2026-10-30T21:15:00+08:00", listing([DAVAO_GFA1_UPDATE]), store);
+    const net = pagasa(flaky([DAVAO_GFA1_UPDATE], 2));
+    const outcome = await refreshSnapshot({ store, fetch: net.fetch, now: () => at("2026-10-30T21:30:00+08:00") });
+    expect(outcome).toMatchObject({ outcome: "kept", why: "feed: The operation was aborted due to timeout", ageMs: 15 * 60_000 });
+    const stored = await readStoredSnapshot(store);
+    expect(stored).toMatchObject({ complete: true, fetchedAt: "2026-10-30T13:15:00.000Z" });
+    expect(judgeRoute({ snapshot: stored }, DAVAO_CITY_ROUTE, at("2026-10-30T21:30:00+08:00"))).toMatchObject({ state: "active", incomplete: null });
+  });
+
+  it("publishes incomplete over a complete snapshot that would be stale by now: lean safe", async () => {
+    const store = new MemoryAdvisoryStore();
+    await snapshotAt("2026-10-30T20:59:00+08:00", listing([DAVAO_GFA1_UPDATE]), store);
+    const outcome = await refreshSnapshot({ store, fetch: pagasa(flaky([DAVAO_GFA1_UPDATE], 2)).fetch, now: () => at("2026-10-30T21:30:00+08:00") });
+    expect(outcome).toMatchObject({ outcome: "published", snapshot: { complete: false } });
+    expect(judgeRoute({ snapshot: await readStoredSnapshot(store) }, DAVAO_CITY_ROUTE, at("2026-10-30T21:30:00+08:00")).state).toBe("unreadable");
+  });
+
+  it("publishes incomplete over a fresh complete snapshot when the feed was read but a record wasn't: only the feed's failure keeps one", async () => {
+    const store = new MemoryAdvisoryStore();
+    await snapshotAt("2026-10-30T21:10:00+08:00", listing([DAVAO_GFA1_ALERT]), store);
+    // The control: what is stored is one a refresh whose feed failed would have kept.
+    expect(incompleteWhy(await readStoredSnapshot(store), at("2026-10-30T21:30:00+08:00"))).toBeNull();
+    const served = listing([DAVAO_GFA1_ALERT, DAVAO_GFA1_UPDATE]);
+    delete served[DAVAO_GFA1_UPDATE];
+    const outcome = await refreshSnapshot({ store, fetch: pagasa(served).fetch, now: () => at("2026-10-30T21:30:00+08:00") });
+    expect(outcome).toMatchObject({ outcome: "published", snapshot: { complete: false } });
+  });
+
+  it("publishes incomplete over a fresh complete snapshot when the feed answered but couldn't be read as a feed", async () => {
+    const store = new MemoryAdvisoryStore();
+    await snapshotAt("2026-10-30T21:15:00+08:00", listing([DAVAO_GFA1_UPDATE]), store);
+    expect(incompleteWhy(await readStoredSnapshot(store), at("2026-10-30T21:30:00+08:00"))).toBeNull();
+    const outcome = await refreshSnapshot({ store, fetch: pagasa({ [FEED_URL]: "<html>maintenance</html>" }).fetch, now: () => at("2026-10-30T21:30:00+08:00") });
+    expect(outcome).toMatchObject({ outcome: "published", snapshot: { complete: false } });
+  });
+
+  it("a check whose stored snapshot went stale isn't handed a kept one: it reads the incomplete refresh", async () => {
+    const store = new MemoryAdvisoryStore();
+    await snapshotAt("2026-10-30T20:59:00+08:00", listing([DAVAO_GFA1_UPDATE]), store);
+    const reading = await snapshotForCheck({ store, fetch: pagasa({}).fetch, now: at("2026-10-30T21:30:00+08:00"), deadline: Date.now() + 2_000 });
+    expect(judgeRoute(reading, DAVAO_CITY_ROUTE, at("2026-10-30T21:30:00+08:00")).state).toBe("unreadable");
   });
 });
 

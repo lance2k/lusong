@@ -410,6 +410,51 @@ describe.each(alertStores)("the %s", (_name, make) => {
   });
 });
 
+describe.skipIf(!upstashUrl)("the Upstash alert store's expiry delete (#40)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("a rebuild that rewrites an expired alert between all()'s read and its delete keeps its new version", async () => {
+    const prefix = `lusong-test-${randomUUID()}`;
+    const store = new UpstashAlertStore(upstashUrl!, upstashToken, prefix);
+    const rebuilder = new UpstashAlertStore(upstashUrl!, upstashToken, prefix);
+    const now = Date.parse(AFTERNOON);
+    await store.rebuildPagasa(1, [alert("pagasa:x", { expiresAt: "2026-11-04T13:00:00+08:00" })], now - 3 * 3_600_000);
+    const renewed = alert("pagasa:x", { version: 2, expiresAt: "2026-11-04T20:00:00+08:00" });
+    const realFetch = globalThis.fetch;
+    let raced = false;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const res = await realFetch(input, init);
+      if (!raced && typeof init?.body === "string" && init.body.startsWith('["HGETALL"')) {
+        raced = true;
+        await rebuilder.rebuildPagasa(2, [renewed], now);
+      }
+      return res;
+    });
+    expect(await store.all(now)).toEqual([]);
+    expect(raced).toBe(true);
+    vi.restoreAllMocks();
+    expect(await store.isActive("pagasa:x", 2, now)).toBe(true);
+    expect(await store.all(now)).toEqual([renewed]);
+  });
+
+  it("still deletes what stayed expired, and a field whose value it can't read", async () => {
+    const prefix = `lusong-test-${randomUUID()}`;
+    const store = new UpstashAlertStore(upstashUrl!, upstashToken, prefix);
+    const now = Date.parse(AFTERNOON);
+    await store.addIfAbsent([alert("sweep:old", { origin: "sweep", expiresAt: "2026-11-04T13:00:00+08:00" }), alert("sweep:new", { origin: "sweep" })]);
+    const hash = `${prefix}:alerts:v1`;
+    const raw = async (args: string[]) =>
+      (
+        (await (
+          await fetch(upstashUrl!, { method: "POST", headers: { Authorization: `Bearer ${upstashToken}`, "Content-Type": "application/json" }, body: JSON.stringify(args) })
+        ).json()) as { result: unknown }
+      ).result;
+    await raw(["HSET", hash, "sweep:garbled", "not json"]);
+    expect((await store.all(now)).map((a) => a.id)).toEqual(["sweep:new"]);
+    expect(((await raw(["HKEYS", hash])) as string[]).sort()).toEqual(["sweep:new"]);
+  });
+});
+
 describe("the seen record is bounded (S4D-6)", () => {
   it("a week after it was first seen, the same id is new again", async () => {
     let t = Date.parse(AFTERNOON);
