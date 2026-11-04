@@ -455,9 +455,11 @@ against 6 on the previous run. The tyre estimate appeared on 4 of the 30 draws a
   start in a big lot snaps further: Jaro plaza 51 m, SM City Baguio 67.7 m, SM City Iloilo 79.1 m, Ayala Center Cebu
   114.8 m (Valhalla `/locate`, 1 draw each). Before #41 the limit was 50 m, and the Jaro trip was refused with 503 on
   production. Past 50 m Lusong doesn't know the way from your point to the road (a wall, a gate elsewhere), so the
-  page says how far from your point the route starts or ends and that the answer is for the route from the road. The
-  straight gap is still judged with the route, so a blocked spot on it blocks. A route whose end is further than
-  150 m from the pick is still refused.
+  whole disc around your point out to the road, plus the 30 m corridor, is judged as part of every route, plain or
+  the other way: a report, a web closure, an advisory or a sweep post anywhere in it counts as on the route, on the
+  page and for a watched trip. The page says how far from your point the route meets the road and how wide that disc
+  is. Up to 50 m the straight gap is judged, as before. A route whose end is further than 150 m from the pick is
+  still refused.
 - Place search gives Photon 6 seconds (4 until #42). On 2026-11-03 production answered `down` for two Iloilo names at
   about 22:47 PHT and `ok` for six names at 23:32 PHT, 2.2 to 3.8 s each (1 draw each), so a slow Photon minute could
   show as `down`; this is inferred from timings, and Photon's own latency at 22:47 was not measured. The top candidate

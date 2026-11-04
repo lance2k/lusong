@@ -63,9 +63,9 @@ describe("where the route meets the road (#41)", () => {
   const render = (r: CommuteResult) =>
     renderToStaticMarkup(<Evidence result={r} onShowReport={() => {}} onReport={() => {}} />).replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/\s+/g, " ");
 
-  it("says the answer is for the route from the road when the route starts away from the pick, and nothing otherwise", () => {
+  it("says where the route meets the road, and that reports near the pick count, when it starts away from the pick", () => {
     expect(render({ ...reply, route: { ...reply.route, roadGap: { fromM: 115, toM: null } } })).toContain(
-      "This route starts on the road 115 m from your start; the answer is for the route from there.",
+      "This route starts on the road 115 m from your start. Lusong doesn't know your way between the road and your point, so every report within 145 m of your start counts as on this route.",
     );
     expect(render(reply)).not.toContain("on the road");
   });

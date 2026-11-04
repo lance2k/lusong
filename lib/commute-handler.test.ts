@@ -749,6 +749,44 @@ describe("a real commute check (#6)", () => {
     expect(body.reports.every((r: { photoUrl: unknown }) => r.photoUrl === null)).toBe(true);
   });
 
+  it("a blocker at the lot's gate, 80 m off the straight pin-to-road line and inside 150 m, gives no Go (#41, duck 🔴1)", async () => {
+    // Valhalla's routes end on the road 117 m short of IT Park, as from a pick inside a big lot.
+    const short = derivedReply(ROUTES["10.346,123.911"], (l) => cutEnd(l, 400));
+    const road = decodePolyline6(JSON.parse(short).trip.legs[0].shape);
+    const meets = road[road.length - 1];
+    const gap = distanceM(meets, IT_PARK);
+    expect(gap).toBeGreaterThan(100);
+    expect(gap).toBeLessThan(150);
+    // The gate: 80 m to one side of the straight line's midpoint, on whichever side is clear of the road.
+    const mid = { lat: (meets.lat + IT_PARK.lat) / 2, lon: (meets.lon + IT_PARK.lon) / 2 };
+    const kx = Math.cos((mid.lat * Math.PI) / 180);
+    const dx = (IT_PARK.lon - meets.lon) * kx;
+    const dy = IT_PARK.lat - meets.lat;
+    const unit = 80 / 111_195 / Math.hypot(dx, dy);
+    const sides = [1, -1].map((s) => ({ lat: mid.lat + s * dx * unit, lon: mid.lon - (s * dy * unit) / kx }));
+    const gate = sides.sort((a, b) => placeOnRoute(b, road).offM - placeOnRoute(a, road).offM)[0];
+    expect(placeOnRoute(gate, [meets, IT_PARK]).offM).toBeCloseTo(80, -1);
+    expect(placeOnRoute(gate, road).offM).toBeGreaterThan(ROUTE_CORRIDOR_M);
+    expect(distanceM(gate, IT_PARK)).toBeLessThan(150);
+
+    const store = new MemoryReportStore();
+    const atGate = storedReport(NO_ADVISORY, { at: gate, place: "the lot's gate" });
+    await seedReport(store, atGate);
+    const { handler } = handlerAt(NO_ADVISORY, { plainReply: short, detourReply: short }, new MemorySlotStore(), openBudget(), store);
+    const res = await handler(real());
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.answer.kind).not.toBe("go");
+    expect(body.answer.kind).not.toBe("go_another_way");
+    expect(body.reports).toEqual([expect.objectContaining({ id: atGate.id, role: "block", onRoute: true })]);
+    expect(body.route.roadGap).toEqual({ fromM: null, toM: Math.round(gap) });
+
+    // The watcher's check of the same stored trip is the same check, so it gives no Go either.
+    const watcher = handlerAt(NO_ADVISORY, { plainReply: short, detourReply: short }, new MemorySlotStore(), openBudget(), store);
+    const scheduled = await watcher.checkTrip({ from: BANILAD, to: IT_PARK }, { deadline: Date.now() + 60_000 });
+    expect(scheduled).toMatchObject({ ok: true, kind: body.answer.kind });
+  });
+
   it("with no stored reports, the same trip is Go: no sample stands in for a report", async () => {
     const { handler } = handlerAt(NO_ADVISORY);
     const body = await (await handler(real())).json();
