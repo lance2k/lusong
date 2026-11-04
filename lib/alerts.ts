@@ -259,6 +259,23 @@ end
 return added
 `;
 
+/**
+ * KEYS: alerts hash. ARGV: now ms, then the ids all() read as expired. Each is deleted only if what the field holds now is
+ * still expired or unreadable, so a rebuild that rewrote it after the read keeps its new value (#40).
+ */
+const PRUNE_SCRIPT = `
+local now = tonumber(ARGV[1])
+local deleted = 0
+for i = 2, #ARGV do
+  local value = redis.call('HGET', KEYS[1], ARGV[i])
+  if value then
+    local expires = tonumber(string.match(value, '"expiresMs":(%d+)'))
+    if not expires or expires <= now then deleted = deleted + redis.call('HDEL', KEYS[1], ARGV[i]) end
+  end
+end
+return deleted
+`;
+
 /** Stored with its expiry in ms first, so the rebuild script can read it without a JSON parser. */
 function storedForm(a: Alert): string {
   return JSON.stringify({ expiresMs: Date.parse(a.expiresAt), ...a });
@@ -312,7 +329,7 @@ export class UpstashAlertStore implements AlertStore {
       if (!a || Date.parse(a.expiresAt) <= nowMs) expired.push(id);
       else out.push(stripStored(a));
     }
-    if (expired.length > 0) await this.command(["HDEL", this.key(ALERTS_KEY), ...expired]);
+    if (expired.length > 0) await this.command(["EVAL", PRUNE_SCRIPT, 1, this.key(ALERTS_KEY), nowMs, ...expired]);
     return out;
   }
 

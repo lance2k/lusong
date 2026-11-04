@@ -289,7 +289,11 @@ function advisoryForPage(advisory: RouteAdvisory, routeId: string) {
     products: advisory.covering.map(productForPage),
     warnings: advisory.warnings.map(productForPage),
     incomplete: advisory.incomplete !== null,
-    note: ADVISORY_NOTES[advisory.state],
+    readAt: advisory.readAt ? phtTime(advisory.readAt) : null,
+    note:
+      advisory.state === "none" && advisory.readAt
+        ? `No PAGASA advisory covered this way when Lusong last read its feed, at ${phtTime(advisory.readAt)}.`
+        : ADVISORY_NOTES[advisory.state],
   };
 }
 

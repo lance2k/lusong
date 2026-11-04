@@ -474,16 +474,14 @@ against 6 on the previous run. The tyre estimate appeared on 4 of the 30 draws a
   seen. Sweep items warn and never clear or block an answer.
 - Rain now is a model's estimate from Open-Meteo, not a measurement, and is never part of a verdict. With no budget
   store the layer is paused and makes no call.
-- A Telegram report needs a location sent within 2 minutes of the photo or voice note. The web Report sheet sends a
-  picked photo at once, with no preview or confirm step yet (#48).
+- A Telegram report needs a location sent within 2 minutes of the photo or voice note. The web Report sheet shows a
+  picked photo first and sends it, with the phone's location, only on "Send report"; the location is the phone's at
+  that tap, not where the photo was taken (#48).
 - Video reports read by SAM 3.1 did not ship. The plan required at least 5 openly licensed clips with a stated depth
   to measure it on, and a search on 2026-11-03 found none (about 650 Wikimedia Commons videos scanned, plus the
   Internet Archive and two web searches). Not tried: DVIDS, YouTube CC BY. Follow-up: #46.
-- Unfixed follow-ups from this release: alert delivery's read of the alert store can race a PAGASA rebuild (#40); a late store write
-  could overwrite a newer attempt (#45); the bot's old description was not saved before it was replaced (#47);
-  the page does not yet open on the rider's own saved trip (#43), move focus after "Use this trip" (#49) or after From
-  (#50), close a sheet with Escape (#51), show the watcher's times in 24 hours (#52), or fit the typed-trip
-  placeholder at 390 px (#53).
+- Unfixed follow-ups from this release: a commute check's 80 s isn't yet split into per-step budgets (#44); the bot's old
+  description was not saved before it was replaced, so a rollback would use wording rebuilt from the Cebu-era README (#47).
 
 - It measures only where a person or car stands in the water. The deepest part of the street may be
   elsewhere, which is why it never says "passable to all vehicles".

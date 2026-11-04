@@ -4,7 +4,7 @@ import type { Place } from "../lib/built-in-places";
 import { parseWindow } from "../lib/watch-window";
 import { TO_THE_BOXES, TRIP_TEXT_LINES, TRIP_TEXT_REASONS, type TripTextReply } from "../lib/trip-text-words";
 import { createTripStore, pickBothTrip, pickTrip, startTrip, type TripStorage } from "./trip";
-import { PICK_BOTH_LINE, TypedTripView, USE_THIS_TRIP } from "./typed-trip-box";
+import { PICK_BOTH_LINE, TYPED_TRIP_EXAMPLE, TypedTripView, USE_THIS_TRIP } from "./typed-trip-box";
 import {
   chosenTrip,
   initialTypedTrip,
@@ -191,5 +191,19 @@ describe("the typed box as drawn", () => {
 
   it("always says where the typed words go", () => {
     expect(render(initialTypedTrip)).toContain("sent to Lusong&#x27;s server and to Meta&#x27;s Model API to read the place names");
+  });
+});
+
+describe("the typed box's example (#53)", () => {
+  it("is a visible line the box points to, not a placeholder a 390 px box cuts off", () => {
+    const html = render(initialTypedTrip, "");
+    expect(html).not.toContain(`placeholder="${TYPED_TRIP_EXAMPLE}"`);
+    const described = /<input[^>]*aria-describedby="([^"]+)"/.exec(html)?.[1];
+    expect(described).toBeTruthy();
+    expect(html).toMatch(new RegExp(`<p id="${described}"[^>]*>[^<]*${TYPED_TRIP_EXAMPLE}`));
+  });
+
+  it("keeps the example S5 measured", () => {
+    expect(TYPED_TRIP_EXAMPLE).toBe("Talamban to IT Park, leaving around 7");
   });
 });

@@ -428,13 +428,15 @@ interface BuildDeps {
   limits: SnapshotLimits;
   /** Epoch ms by which the snapshot must be built. */
   deadline: number;
+  /** Whether a failed feed request may be made once more (#59): the schedule's runs only. */
+  feedRetry: boolean;
 }
 
 /**
  * The feed and every record it lists, newest first. A record is fetched only when the store doesn't hold it at the
  * feed's current `updated`, so PAGASA sees a request only for what is new.
  */
-async function buildSnapshot(deps: BuildDeps, generation: number): Promise<AdvisorySnapshot> {
+async function buildSnapshot(deps: BuildDeps, generation: number): Promise<{ snapshot: AdvisorySnapshot; feedFetched: boolean }> {
   const now = deps.now.getTime();
   const { limits } = deps;
   const signal = AbortSignal.timeout(Math.max(1, deps.deadline - Date.now()));
@@ -448,11 +450,26 @@ async function buildSnapshot(deps: BuildDeps, generation: number): Promise<Advis
     pendingAt: pendingAtOf(records, now),
   });
 
+  const failed = (err: unknown) => snapshot(false, `feed: ${err instanceof Error ? err.message : String(err)}`, [], []);
+  let feedXml: string;
+  try {
+    feedXml = await fetchText(FEED_URL, deps, limits, signal);
+  } catch (first) {
+    // From Vercel the feed request timed out on 4 of 66 scheduled runs (#59) while it answered at once from Manila. One
+    // more try on a scheduled run, never a check's inline refresh (the rider is waiting), and only while two requests'
+    // time is left: one for it and one for the records.
+    if (!deps.feedRetry || deps.deadline - Date.now() < 2 * limits.timeoutMs) return { snapshot: failed(first), feedFetched: false };
+    try {
+      feedXml = await fetchText(FEED_URL, deps, limits, signal);
+    } catch (second) {
+      return { snapshot: failed(second), feedFetched: false };
+    }
+  }
   let feed: ReturnType<typeof readFeed>;
   try {
-    feed = readFeed(await fetchText(FEED_URL, deps, limits, signal));
+    feed = readFeed(feedXml);
   } catch (err) {
-    return snapshot(false, `feed: ${err instanceof Error ? err.message : String(err)}`, [], []);
+    return { snapshot: failed(err), feedFetched: true };
   }
   let failure: string | null = feed.unlinked.length > 0 ? `feed entry "${feed.unlinked[0]}" has no CAP link` : null;
   // Every listed entry is read, even one dated ahead of this clock: a record not yet sent is read and simply not live.
@@ -501,13 +518,18 @@ async function buildSnapshot(deps: BuildDeps, generation: number): Promise<Advis
     }
   };
   await Promise.all(Array.from({ length: Math.min(limits.concurrency, entries.length) }, worker));
-  return snapshot(failure === null, failure, entries, records);
+  return { snapshot: snapshot(failure === null, failure, entries, records), feedFetched: true };
 }
 
 export type RefreshOutcome =
   | { outcome: "published"; snapshot: AdvisorySnapshot }
   /** A newer snapshot was published while this one was being built, so this one was dropped. */
   | { outcome: "superseded"; snapshot: AdvisorySnapshot }
+  /**
+   * The feed couldn't be fetched, so the stored snapshot, complete and not yet stale, was left in place rather than
+   * replaced by an empty incomplete one (#59). `why` is this refresh's failure; `ageMs` is the kept snapshot's age.
+   */
+  | { outcome: "kept"; snapshot: AdvisorySnapshot; why: string; ageMs: number }
   /** Another refresh holds the lease. */
   | { outcome: "busy" }
   | { outcome: "store_failed"; why: string };
@@ -519,6 +541,8 @@ export interface RefreshDeps {
   limits?: Partial<SnapshotLimits>;
   /** Epoch ms the refresh must end by, if sooner than its own deadline. */
   deadline?: number;
+  /** False for a check's inline refresh: a failed feed request isn't made again. */
+  feedRetry?: boolean;
 }
 
 /**
@@ -538,7 +562,16 @@ export async function refreshSnapshot(deps: RefreshDeps): Promise<RefreshOutcome
   const generation = now.getTime();
   try {
     const deadline = Math.min(Date.now() + limits.deadlineMs, deps.deadline ?? Infinity);
-    const snapshot = await buildSnapshot({ store: deps.store, fetch: deps.fetch, now, limits, deadline }, generation);
+    const { snapshot, feedFetched } = await buildSnapshot({ store: deps.store, fetch: deps.fetch, now, limits, deadline, feedRetry: deps.feedRetry ?? true }, generation);
+    if (!feedFetched) {
+      // Lean safe still: a kept snapshot is one a check would rely on anyway (incompleteWhy is null), and it goes stale on
+      // its own STALE_AFTER_MS after it was fetched, so missed runs end in an incomplete read as before.
+      const kept = await readStoredSnapshot(deps.store).catch(() => null);
+      const at = deps.now();
+      if (kept && incompleteWhy(kept, at) === null) {
+        return { outcome: "kept", snapshot: kept, why: snapshot.why ?? "feed: not read", ageMs: at.getTime() - Date.parse(kept.fetchedAt) };
+      }
+    }
     const published = await deps.store.publishIfNewer(SNAPSHOT_KEY, generation, JSON.stringify(snapshot), SNAPSHOT_TTL_MS);
     return published ? { outcome: "published", snapshot } : { outcome: "superseded", snapshot };
   } catch (err) {
@@ -597,8 +630,8 @@ export async function snapshotForCheck(deps: { store: AdvisoryStore; fetch: type
     return { snapshot: null, why: `store: ${err instanceof Error ? err.message : String(err)}` };
   }
   if (settled(stored, deps.now)) return { snapshot: stored };
-  const refreshed = await refreshSnapshot({ store: deps.store, fetch: deps.fetch, now: () => deps.now, limits: deps.limits, deadline: deps.deadline });
-  if (refreshed.outcome === "published") return { snapshot: refreshed.snapshot };
+  const refreshed = await refreshSnapshot({ store: deps.store, fetch: deps.fetch, now: () => deps.now, limits: deps.limits, deadline: deps.deadline, feedRetry: false });
+  if (refreshed.outcome === "published" || refreshed.outcome === "kept") return { snapshot: refreshed.snapshot };
   if (refreshed.outcome === "busy") {
     while (Date.now() + POLL_MS < deps.deadline) {
       await new Promise((resolve) => setTimeout(resolve, POLL_MS));
@@ -636,6 +669,8 @@ export interface RouteAdvisory {
   warnings: ProductView[];
   /** Why the snapshot can't be relied on, or null. */
   incomplete: string | null;
+  /** When the snapshot read PAGASA's feed, or null with no snapshot: a kept one can be up to STALE_AFTER_MS old (#59). */
+  readAt: string | null;
 }
 
 function view(product: AdvisoryProduct, infos: ProductInfo[], areas: CapArea[]): ProductView {
@@ -676,5 +711,5 @@ export function judgeRoute(reading: SnapshotReading, line: readonly Point[], now
   covering.sort(bySent);
   warnings.sort(bySent);
   const state: AdvisoryState = incomplete ? "unreadable" : covering.some((p) => p.counts) ? "active" : "none";
-  return { state, covering, warnings, incomplete };
+  return { state, covering, warnings, incomplete, readAt: snapshot?.fetchedAt ?? null };
 }

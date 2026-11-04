@@ -32,4 +32,27 @@ describe("POST /api/advisory/snapshot", () => {
     expect(await res.json()).toEqual({ outcome: "published", complete: true, why: null, entries: 2, products: 1, fetchedAt: "2026-10-30T13:30:00.000Z" });
     expect((await readStoredSnapshot(store))!.products.map((p) => p.link)).toEqual([DAVAO_GFA1_UPDATE]);
   });
+
+  it("when PAGASA's feed times out twice, keeps the fresh complete snapshot and answers 503 with how old the kept one is (#59)", async () => {
+    const { handler, store } = setup();
+    expect((await handler(post(`Bearer ${SECRET}`))).status).toBe(200);
+    const failing = makeSnapshotHandler({
+      secret: () => SECRET,
+      store: () => store,
+      fetch: (async () => Promise.reject(new DOMException("The operation was aborted due to timeout", "TimeoutError"))) as unknown as typeof fetch,
+      now: () => new Date("2026-10-30T21:40:00+08:00"),
+    });
+    const res = await failing(post(`Bearer ${SECRET}`));
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({
+      outcome: "kept",
+      complete: true,
+      why: "feed: The operation was aborted due to timeout",
+      entries: 2,
+      products: 1,
+      fetchedAt: "2026-10-30T13:30:00.000Z",
+      keptMinutes: 10,
+    });
+    expect((await readStoredSnapshot(store))!.fetchedAt).toBe("2026-10-30T13:30:00.000Z");
+  });
 });

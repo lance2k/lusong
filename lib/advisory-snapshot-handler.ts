@@ -31,6 +31,14 @@ export function makeSnapshotHandler(deps: {
     const result = await refreshSnapshot({ store, fetch: deps.fetch ?? fetch, now: deps.now ?? (() => new Date()) });
     if (result.outcome === "busy") return Response.json({ outcome: "busy" }, { status: 200 });
     if (result.outcome === "store_failed") return Response.json({ outcome: "store_failed" }, { status: 503 });
+    if (result.outcome === "kept") {
+      // 503 still: this run didn't read PAGASA, and the schedule's log is where a run like this is noticed (#59).
+      const kept = result.snapshot;
+      return Response.json(
+        { outcome: "kept", complete: kept.complete, why: result.why, entries: kept.entries.length, products: kept.products.length, fetchedAt: kept.fetchedAt, keptMinutes: Math.round(result.ageMs / 60_000) },
+        { status: 503 },
+      );
+    }
     const { snapshot } = result;
     const alerts = deps.alerts?.();
     if (alerts && result.outcome === "published" && incompleteWhy(snapshot, new Date(snapshot.fetchedAt)) === null) {

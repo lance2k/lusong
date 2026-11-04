@@ -237,6 +237,7 @@ describe("the demo commute check", () => {
       ],
       warnings: [],
       incomplete: false,
+      readAt: "25 Oct, 8:00 p.m. PHT",
       note: null,
     });
     expect(body.route).toMatchObject({ lengthKm: 2.552, timeMin: 11 });
@@ -305,6 +306,16 @@ describe("the demo commute check", () => {
     const body = await (await handler(demo("mabolo-cbp", "flooded"))).json();
     expect(body.answer.kind).toBe("go_another_way");
     expect(body.advisory).toMatchObject({ state: "none", about: "the other way", products: [], incomplete: false });
+  });
+
+  it("says when PAGASA's feed was read, since a snapshot kept through a failed read can be up to 30 minutes old (#59)", async () => {
+    const { handler } = handlerAt(NO_ADVISORY);
+    const body = await (await handler(demo("mabolo-cbp", "none"))).json();
+    expect(body.advisory).toMatchObject({
+      state: "none",
+      readAt: "29 Oct, 12:00 p.m. PHT",
+      note: "No PAGASA advisory covered this way when Lusong last read its feed, at 29 Oct, 12:00 p.m. PHT.",
+    });
   });
 
   it.each(CAP_EDITS.map((e) => [e.name, e.edit] as const))(
@@ -2243,8 +2254,11 @@ describe("advisory areas for the map (S1, for S3a's layer)", () => {
   it("adds advisoryAreas from PAGASA's own record and leaves every other field of the reply as it was", async () => {
     const { handler } = handlerAt(ADVISORY_ACTIVE);
     const { advisoryAreas, sweepWarnings, ...rest } = await (await handler(demo("mabolo-cbp", "flooded"))).json();
-    // The whole reply, saved from the merge commit before advisoryAreas existed; S4's sweepWarnings are empty on a demo.
+    // The whole reply, saved from the merge commit before advisoryAreas existed; S4's sweepWarnings are empty on a demo,
+    // and #59 added the advisory's readAt.
     expect(sweepWarnings).toEqual([]);
+    expect(rest.advisory.readAt).toBe("25 Oct, 8:00 p.m. PHT");
+    delete rest.advisory.readAt;
     expect(rest).toEqual(JSON.parse(read("test/fixtures/commute/mabolo-flooded-advisory-active.reply-f52f847.json")));
     expect(advisoryAreas).toEqual(JSON.parse(read("test/fixtures/commute/mabolo-flooded-advisory-active.advisory-areas.json")));
     expect(advisoryAreas[0]).toMatchObject({ kind: "General Flood Advisory (Moderate)", headline: "General Flood Advisory", sent: "2026-10-25T17:27:04+08:00" });

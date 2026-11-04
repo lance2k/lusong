@@ -2,11 +2,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { MapLegend } from "./map-legend";
 import { DEFAULT_LAYERS, legendRows } from "./map-layers";
-import ReportStreet, { REPORT_SENDS_LINE } from "./report";
+import ReportStreet, { REPORT_PICK_LINE } from "./report";
 
 describe("S9 UX polish", () => {
-  it("says at the report button that picking a photo sends it", () => {
-    expect(renderToStaticMarkup(<ReportStreet />)).toContain(REPORT_SENDS_LINE);
+  it("says at the report button that the photo is shown before anything is sent (#48 replaced the pick-sends line)", () => {
+    expect(renderToStaticMarkup(<ReportStreet />)).toContain(REPORT_PICK_LINE.replace(/'/g, "&#x27;"));
   });
 
   it("makes each whole legend row the switch's label, named by its title and described by its lines", () => {

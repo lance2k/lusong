@@ -184,7 +184,8 @@ async function runOne(
 /**
  * Every store call here ends by `end`, the tick's: one still running then is left to settle on its own. Each is safe to
  * land late: a lease lapses in SEND_LEASE_MS, a mark that lands counts as sent (a missed message, never a second one),
- * and a commit or a drop is made for the watcher's generation only.
+ * and a commit or a drop is made only for the watcher's generation and the attempt's own mark. The attempt's id is its
+ * send lease's token: a mark is made only while that lease is held, so a late one can't replace a newer attempt's (#45).
  */
 async function sendAnswer(deps: TickDeps, w: WatchRecord, kind: AnswerKind, end: number): Promise<"sent" | "quiet" | "failed"> {
   // With less than a lease left of the tick, the send couldn't end inside it. Nothing is marked, so the next check sends it.
@@ -202,7 +203,7 @@ async function sendAnswer(deps: TickDeps, w: WatchRecord, kind: AnswerKind, end:
   if (!lease) return "quiet";
   const held = lease;
   try {
-    return await sendUnderLease(deps, w, kind, leaseAsked, end);
+    return await sendUnderLease(deps, w, kind, held, leaseAsked, end);
   } finally {
     const releasing = deps.store.releaseSendLease(w.id, held).catch((err) => {
       console.error("watch store failed releasing the send lease:", err instanceof Error ? err.message : err);
@@ -225,7 +226,7 @@ async function by<T>(deps: TickDeps, call: Promise<T>, end: number): Promise<T> 
   return result;
 }
 
-async function sendUnderLease(deps: TickDeps, w: WatchRecord, kind: AnswerKind, leaseAsked: number, end: number): Promise<"sent" | "quiet" | "failed"> {
+async function sendUnderLease(deps: TickDeps, w: WatchRecord, kind: AnswerKind, attempt: string, leaseAsked: number, end: number): Promise<"sent" | "quiet" | "failed"> {
   // The check can outlast the window: what is sent is decided on the clock as it is now.
   const at = deps.now();
   if (!inWindow(w.window, at)) return "quiet";
@@ -239,17 +240,17 @@ async function sendUnderLease(deps: TickDeps, w: WatchRecord, kind: AnswerKind, 
   try {
     // Recorded before the send, so a send whose outcome is unknown, or whose commit fails, is never sent again.
     // False when switched off (or switched on again) while the check ran: this run speaks for no one.
-    if (!(await by(deps, deps.store.markSending(w.id, w.gen, answer), end))) return "quiet";
+    if (!(await by(deps, deps.store.markSending(w.id, w.gen, answer, attempt), end))) return "quiet";
     // The lease was asked for with at least its own length left of the tick, so a send that ends inside it ends in time.
     if (Date.now() - leaseAsked > SEND_LEASE_MS - SEND_TIMEOUT_MS - LEASE_MARGIN_MS) {
       // Too little of the lease is left for the send to end inside it, where a switch-off waits for it.
-      await by(deps, deps.store.dropSending(w.id, w.gen), end);
+      await by(deps, deps.store.dropSending(w.id, w.gen, attempt), end);
       return "failed";
     }
     // Recording the answer takes time too, and the window may close during it; the answer was recorded for `day`.
     sendAt = deps.now();
     if (!inWindow(w.window, sendAt) || phtDay(sendAt) !== day) {
-      await by(deps, deps.store.dropSending(w.id, w.gen), end);
+      await by(deps, deps.store.dropSending(w.id, w.gen, attempt), end);
       return "quiet";
     }
   } catch (err) {
@@ -263,10 +264,10 @@ async function sendUnderLease(deps: TickDeps, w: WatchRecord, kind: AnswerKind, 
   if (sent === "late") return "failed";
   try {
     if (sent.ok) {
-      await by(deps, deps.store.commit(w.id, w.gen, answer), end);
+      await by(deps, deps.store.commit(w.id, w.gen, answer, attempt), end);
     } else if (sent.rejected) {
       if (sent.permanent) await by(deps, deps.store.remove(w.id), end);
-      else await by(deps, deps.store.dropSending(w.id, w.gen), end);
+      else await by(deps, deps.store.dropSending(w.id, w.gen, attempt), end);
     }
   } catch (err) {
     // The mark stays, so the answer counts as sent: after a refusal that means one missed message, never a duplicate.
