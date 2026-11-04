@@ -1,5 +1,5 @@
 import { waterlineY } from "./overlay";
-import { placeRaster, type Box, type PlacedRaster, type SamObject } from "./sam";
+import type { Box, PlacedRaster, SamObject } from "./sam";
 import type { Interval } from "./verdict";
 
 /** UNVERIFIED: an adult stands 7 to 8 head-heights tall (crown to chin), the usual figure-drawing canon. */
