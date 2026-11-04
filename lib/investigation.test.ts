@@ -582,6 +582,8 @@ describe("a model turn too late for its fastest measured time (#44)", () => {
     const late = await runWithTurnOneTaking(40_000 - LATER_TURN_FASTEST_MS + 1);
     const inTime = await runWithTurnOneTaking(40_000 - LATER_TURN_FASTEST_MS - 1);
     expect(inTime.turnsAsked).toBe(2);
+    const atTheBoundary = await runWithTurnOneTaking(40_000 - LATER_TURN_FASTEST_MS);
+    expect(atTheBoundary.turnsAsked).toBe(2);
     expect(inTime.result.pick).toEqual({ shown: true, evidence: ["v1", "detour"] });
     expect(late.result.answer).toEqual(inTime.result.answer);
     expect(late.result.answer.answer).not.toBe("go");
@@ -598,7 +600,8 @@ describe("a model turn too late for its fastest measured time (#44)", () => {
     expect(meta.requests.length).toBe(0);
     expect(result.pick).toEqual({ shown: false, why: "timed out", unavailable: true });
 
-    const control = await investigate(inputOf(sources, { deadline: Date.now() + FIRST_TURN_FASTEST_MS + 1, pickBy: checkBudget(0, Date.now() + FIRST_TURN_FASTEST_MS + 1, { ...STEP_SIZES, routeWorstMs: ROUTE_WORST_MS, modelRoomMs: MODEL_ROOM_MS }).pickBy }));
+    const boundary = Date.now() + FIRST_TURN_FASTEST_MS;
+    const control = await investigate(inputOf(sources, { deadline: boundary, pickBy: checkBudget(0, boundary, { ...STEP_SIZES, routeWorstMs: ROUTE_WORST_MS, modelRoomMs: MODEL_ROOM_MS }).pickBy }));
     expect(meta.requests.length).toBe(1);
     if (!control.ok) throw new Error("expected an answer");
   });

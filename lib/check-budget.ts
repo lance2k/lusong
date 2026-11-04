@@ -11,8 +11,11 @@ export const SEARCH_STEP_MS = 37_000;
  * turn with less would be cut off by the deadline and still paid for (inferred: the call's input is billed).
  */
 export const FIRST_TURN_FASTEST_MS = 2_600;
-/** A later turn reads the tool results: 13.8–18.0 s live (3 draws, 2026-11-03). Not started with less than the fastest. */
-export const LATER_TURN_FASTEST_MS = 13_800;
+/**
+ * A later turn reads the tool results: 13.8–18.0 s live (3 draws, 2026-11-03), then 12.9 and 18.9 s (1 draw,
+ * 2026-11-04). Not started with less than the fastest.
+ */
+export const LATER_TURN_FASTEST_MS = 12_800;
 
 export interface CheckBudget {
   /** Epoch ms of the check's first byte. */
