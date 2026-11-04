@@ -113,6 +113,23 @@ describe("scoreBlurProbe", () => {
     expect(score.result.negatives).toMatchObject({ publishable: 1, publishableWithFace: 0 });
   });
 
+  it("leaves the face prompt's masks out of the union, which is what publishPhoto blurs", () => {
+    const score = scoreBlurProbe(labels, sizes, {
+      "p.jpg": [call("license plate", []), call("person", [personMask]), call("face", [plateMask])],
+      "n.jpg": [call("license plate", []), call("person", [])],
+    }, reader);
+    expect(score.photos[0].plates[0]).toMatchObject({ byPrompt: 0, union: 0 });
+  });
+
+  it("names a required call that was never recorded, and keeps each failure's reason", () => {
+    const score = scoreBlurProbe(labels, sizes, {
+      "p.jpg": [call("person", [personMask])],
+      "n.jpg": [call("license plate", "fail"), { prompt: "person", ok: true, status: "completed", text: "fail" }],
+    }, reader);
+    expect(score.photos[0]).toMatchObject({ publishable: false, failedCalls: ["license plate"], failures: [{ prompt: "license plate", problem: "not recorded" }] });
+    expect(score.photos[1].failures).toEqual([{ prompt: "license plate", problem: "HTTP 500" }, { prompt: "person", problem: "parse_error" }]);
+  });
+
   it("holds the bar against unsure labels too, and reports the sure-only bar beside it", () => {
     const withUnsure: BlurLabels = {
       ...labels,

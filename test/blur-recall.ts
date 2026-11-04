@@ -45,7 +45,7 @@ interface Scored {
   sure: boolean;
   /** Plates: under the grown plate masks. Faces: under the grown person masks. What the bar is judged on. */
   byPrompt: number;
-  /** Under every grown mask the blur gets (plate, person and, when run, face): reported beside the bar, never as it. */
+  /** Under every grown mask publishPhoto blurs (plate and person, never the experimental face prompt): reported beside the bar, never as it. */
   union: number;
 }
 
@@ -77,13 +77,15 @@ export function scoreBlurProbe(
       return r?.ok ? r.masks : [];
     };
     const succeeded = (prompt: string) => readings.get(prompt)?.ok === true;
-    const failedCalls = [...readings.entries()].filter(([, r]) => !r.ok).map(([prompt]) => prompt);
+    for (const prompt of [PLATE_PROMPT, PERSON_PROMPT]) if (!readings.has(prompt)) readings.set(prompt, { ok: false, problem: "not recorded" });
+    const failures = [...readings.entries()].flatMap(([prompt, r]) => (r.ok ? [] : [{ prompt, problem: r.problem }]));
+    const failedCalls = failures.map((f) => f.prompt);
     const faceRun = readings.has(FACE_PROMPT);
 
     const plateCover = blurCoverage(width, height, masksOf(PLATE_PROMPT));
     const personCover = blurCoverage(width, height, masksOf(PERSON_PROMPT));
     const withFaceCover = blurCoverage(width, height, [...masksOf(PERSON_PROMPT), ...masksOf(FACE_PROMPT)]);
-    const unionCover = blurCoverage(width, height, [...readings.keys()].flatMap(masksOf));
+    const unionCover = blurCoverage(width, height, [...masksOf(PLATE_PROMPT), ...masksOf(PERSON_PROMPT)]);
 
     const score = (things: LabelledBox[], own: Uint8Array): Scored[] =>
       things.map(({ box, sure, where }) => ({ where, sure, byPrompt: boxCoverage(box, own, width), union: boxCoverage(box, unionCover, width) }));
@@ -101,6 +103,7 @@ export function scoreBlurProbe(
       kind: photo.kind,
       publishable,
       failedCalls,
+      failures,
       masks: Object.fromEntries([...readings.entries()].map(([prompt, r]) => [prompt, r.ok ? r.masks.length : null])),
       plates,
       faces,

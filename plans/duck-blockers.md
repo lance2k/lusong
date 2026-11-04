@@ -19,3 +19,15 @@ whose required call failed or was refused by the strict reader is not covered, a
 Disposition: per-prompt is the primary bar; the union is reported beside it; a failed required call makes the photo
 fail the bar, negatives included.
 Closed by: `test/blur-recall.test.ts` "fails a photo whose plate call failed even when person masks cover every plate".
+
+## Diff round
+
+Critic: `rubber-duck-gpt`, model `gpt-6-astra` via Codex CLI (session rollout-2026-11-04T23-21-12-01a1a726), range
+origin/main..820421b, 2026-11-04 15:22 UTC (23:22 PHT). No 🔴. Its review found the `grown()` extraction
+behaviour-identical, that required-call failures and unsure labels fail the bar, and that the flag stays false.
+
+- 🟡 The union included the experimental `face` masks, which publishPhoto never blurs. Fixed. Test: "leaves the face
+  prompt's masks out of the union, which is what publishPhoto blurs".
+- 🟡 A required call that was never recorded was missing from `failedCalls`, and strict-reader reasons were dropped.
+  Fixed (`failures` keeps each prompt's reason). Test: "names a required call that was never recorded, and keeps each
+  failure's reason". Both draws re-scored offline after the fix: unchanged.
