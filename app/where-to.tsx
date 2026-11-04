@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { DEMO_TRIPS, SCENARIOS, scenariosFor, type DemoTripId } from "../lib/samples";
 import { OWN_TRIP, type CommuteInputs } from "./commute-state";
 import { SAMPLES_LINE } from "./credits";
@@ -15,7 +16,11 @@ const TRIP_IDS = Object.keys(DEMO_TRIPS) as DemoTripId[];
 /** The saved trip, home to work: the one the watcher watches. There is no reverse. */
 export const MY_TRIP_LABEL = "My trip";
 
-export function TripChips({ value, onChange }: { value: CommuteInputs["trip"]; onChange: (id: CommuteInputs["trip"]) => void }) {
+/** The check button's id: "Use this trip" moves focus to it, the next step once the trip is filled in (#49). */
+export const CHECK_BUTTON_ID = "check-trip";
+
+/** `value` is null while the page hasn't yet read whether this phone has a saved trip: no chip is pressed then. */
+export function TripChips({ value, onChange }: { value: CommuteInputs["trip"] | null; onChange: (id: CommuteInputs["trip"]) => void }) {
   return (
     <ChipGroup legend="Trip">
       <Chip pressed={value === OWN_TRIP} onClick={() => onChange(OWN_TRIP)}>
@@ -30,9 +35,10 @@ export function TripChips({ value, onChange }: { value: CommuteInputs["trip"]; o
   );
 }
 
-export function inputWords(inputs: CommuteInputs): string {
+/** `labels` are the own trip's names as its boxes show them; they last only while the page is open, so without both the line says "Your trip". */
+export function inputWords(inputs: CommuteInputs, labels?: { from: string | null; to: string | null }): string {
   const rain = inputs.rainingHere ? "raining here" : "no rain tap";
-  if (inputs.trip === OWN_TRIP) return `Your trip · ${rain}`;
+  if (inputs.trip === OWN_TRIP) return labels?.from && labels.to ? `Your trip: ${labels.from} → ${labels.to} · ${rain}` : `Your trip · ${rain}`;
   const scenario = SCENARIOS.find((s) => s.id === inputs.scenario)!.label;
   return `Demo: ${DEMO_TRIPS[inputs.trip].label} · ${scenario} · ${rain}`;
 }
@@ -58,13 +64,25 @@ export interface WhereToProps {
   onUseTypedTrip: (trip: ChosenTrip) => boolean;
   /** The typed trip's leaving time, while the trip is still the one it came with. */
   leaveAt: string | null;
+  /**
+   * False until the page has read whether this phone has a saved trip, which the server can't know. Until then no trip
+   * is shown as chosen, so a phone with a saved trip never opens on the demo (#43). Defaults to true.
+   */
+  tripKnown?: boolean;
 }
 
 export const LEAVE_AT_WATCHER_LINE = "If you switch on the watcher, its window starts an hour before.";
 
 export function WhereTo(p: WhereToProps) {
   const { inputs, own } = p;
+  const known = p.tripKnown ?? true;
   const ownTrip = inputs.trip === OWN_TRIP;
+  // "Use this trip" unmounts with the typed box's choices; focus goes on to the check, not back to the text box,
+  // which would open the phone keyboard (#49). It runs after the render that enabled the button.
+  const [focusCheck, setFocusCheck] = useState(0);
+  useEffect(() => {
+    if (focusCheck > 0) document.getElementById(CHECK_BUTTON_ID)?.focus();
+  }, [focusCheck]);
   return (
     <section aria-labelledby={p.headingId} className="space-y-4">
       <h2 id={p.headingId} tabIndex={-1} className="text-title outline-none">
@@ -80,15 +98,22 @@ export function WhereTo(p: WhereToProps) {
       ) : (
         <>
           <TripChips
-            value={inputs.trip}
+            value={known ? inputs.trip : null}
             onChange={(id) => {
               p.change({ trip: id });
               if (id === OWN_TRIP) p.onPickMyTrip();
             }}
           />
-          {ownTrip && (
+          {known && ownTrip && (
             <>
-              <TypedTripBox onUse={p.onUseTypedTrip} onFocusBox={p.onFocusBox} />
+              <TypedTripBox
+                onUse={(trip) => {
+                  const used = p.onUseTypedTrip(trip);
+                  if (used) setFocusCheck((n) => n + 1);
+                  return used;
+                }}
+                onFocusBox={p.onFocusBox}
+              />
               <OwnTripPanel own={own} onFocusBox={p.onFocusBox} focusSignal={p.focusSignal} />
               {own.draft.step === "set" && p.leaveAt && (
                 <p className="text-[15px]">
@@ -102,7 +127,7 @@ export function WhereTo(p: WhereToProps) {
               )}
             </>
           )}
-          {inputs.trip !== OWN_TRIP && (
+          {known && inputs.trip !== OWN_TRIP && (
             <div className="space-y-2">
               <ChipGroup legend="Sample reports">
                 {scenariosFor(inputs.trip).map((s) => (
@@ -120,7 +145,7 @@ export function WhereTo(p: WhereToProps) {
               Raining here
             </Chip>
           </div>
-          <Button size="lg" className="w-full justify-center" onClick={p.onCheck} disabled={p.checking || !p.canCheck}>
+          <Button id={CHECK_BUTTON_ID} size="lg" className="w-full justify-center" onClick={p.onCheck} disabled={!known || p.checking || !p.canCheck}>
             {ownTrip ? "Check my trip" : "Check this commute"}
           </Button>
         </>
