@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { DEMO_TRIPS } from "../lib/samples";
 import { initialCommuteState, OWN_TRIP } from "./commute-state";
 import type { OwnTrip } from "./own-trip";
-import { TripChips, WhereTo } from "./where-to";
+import { CHECK_BUTTON_ID, inputWords, TripChips, WhereTo, type WhereToProps } from "./where-to";
 
 const HOME = { lat: 10.2551, lon: 123.8001 };
 const WORK = { lat: 10.2612, lon: 123.8405 };
@@ -14,7 +14,7 @@ const own: OwnTrip = {
   labels: { from: null, to: null },
   bias: null,
   setBias: () => {},
-  pick: () => {},
+  pick: () => false,
   pickBoth: () => false,
   kept: true,
   clearFailed: false,
@@ -143,5 +143,67 @@ describe("the trip chips (S3P-1)", () => {
     );
     expect(html).toContain("Samples are labelled test photos from elsewhere, pinned on these streets for the demo. Real checks never use them.");
     expect(html).toContain("Check this commute");
+  });
+});
+
+function whereTo(over: Partial<WhereToProps> = {}) {
+  return renderToStaticMarkup(
+    <WhereTo
+      headingId="h"
+      inputs={initialCommuteState.inputs}
+      change={noop}
+      own={own}
+      checking={false}
+      canCheck
+      onCheck={noop}
+      onFocusBox={noop}
+      focusSignal={0}
+      onPickMyTrip={noop}
+      onOpenWatcher={noop}
+      collapsed={false}
+      onExpand={noop}
+      summary={null}
+      onUseTypedTrip={() => false}
+      leaveAt={null}
+      {...over}
+    />,
+  );
+}
+
+describe("follow-ups to S9 (group C)", () => {
+  it("before the phone's saved trip is read, no trip is pressed and nothing is checkable (#43)", () => {
+    const html = whereTo({ tripKnown: false });
+    const tripChips = /<legend[^>]*>Trip<\/legend>([\s\S]*?)<\/fieldset>/.exec(html)![1];
+    expect(tripChips).toContain('aria-pressed="false"');
+    expect(tripChips).not.toContain('aria-pressed="true"');
+    expect(chipLabels(html)[0]).toBe("My trip");
+    expect(html).not.toContain("Sample reports");
+    expect(html).not.toContain("Or type your trip");
+    expect(html).toMatch(new RegExp(`<button[^>]*id="${CHECK_BUTTON_ID}"[^>]*disabled=""`));
+  });
+
+  it("once it is read, the chosen trip is pressed as before (#43)", () => {
+    expect(whereTo({ tripKnown: true })).toMatch(/aria-pressed="true"[^>]*>Banilad → IT Park/);
+    expect(whereTo()).toMatch(/aria-pressed="true"[^>]*>Banilad → IT Park/);
+  });
+
+  it("the check button carries the id that Use this trip moves focus to (#49)", () => {
+    const html = whereTo({ inputs: { ...initialCommuteState.inputs, trip: OWN_TRIP } });
+    expect(html).toMatch(new RegExp(`<button[^>]*id="${CHECK_BUTTON_ID}"[^>]*>Check my trip</button>`));
+  });
+
+  it("an own trip's summary names its picked places, and says only Your trip without them (#56)", () => {
+    const inputs = { ...initialCommuteState.inputs, trip: OWN_TRIP } as const;
+    expect(inputWords(inputs, { from: "Baguio City Hall, Baguio", to: "Wright Park, Baguio" })).toBe(
+      "Your trip: Baguio City Hall, Baguio → Wright Park, Baguio · no rain tap",
+    );
+    expect(inputWords({ ...inputs, rainingHere: true }, { from: "A", to: "B" })).toBe("Your trip: A → B · raining here");
+    expect(inputWords(inputs, { from: null, to: null })).toBe("Your trip · no rain tap");
+    expect(inputWords(inputs, { from: "A", to: null })).toBe("Your trip · no rain tap");
+    expect(inputWords(inputs)).toBe("Your trip · no rain tap");
+  });
+
+  it("a demo's summary is unchanged by the own trip's labels (#56)", () => {
+    expect(inputWords(initialCommuteState.inputs, { from: "A", to: "B" })).toBe("Demo: Banilad → IT Park · No reports · no rain tap");
   });
 });
