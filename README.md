@@ -480,8 +480,8 @@ against 6 on the previous run. The tyre estimate appeared on 4 of the 30 draws a
 - Video reports read by SAM 3.1 did not ship. The plan required at least 5 openly licensed clips with a stated depth
   to measure it on, and a search on 2026-11-03 found none (about 650 Wikimedia Commons videos scanned, plus the
   Internet Archive and two web searches). Not tried: DVIDS, YouTube CC BY. Follow-up: #46.
-- Unfixed follow-ups from this release: a commute check's 80 s isn't yet split into per-step budgets (#44); the bot's old
-  description was not saved before it was replaced, so a rollback would use wording rebuilt from the Cebu-era README (#47).
+- Unfixed follow-up from this release: the bot's old description was not saved before it was replaced, so a rollback
+  would use wording rebuilt from the Cebu-era README (#47).
 
 - It measures only where a person or car stands in the water. The deepest part of the street may be
   elsewhere, which is why it never says "passable to all vehicles".
