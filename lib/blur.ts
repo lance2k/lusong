@@ -51,18 +51,43 @@ function dilate(grid: Uint8Array, width: number, height: number, r: number): Uin
   return pass(across, height, width, (x, y) => y * width + x);
 }
 
-function pixelate(pixels: Buffer, width: number, height: number, channels: number, mask: PlacedRaster): void {
+const longerSide = ({ bounds }: PlacedRaster) => Math.max(bounds.right - bounds.left, bounds.bottom - bounds.top);
+
+/** The pixels one mask pixelates in a width × height photo: its raster grown by its margin, over the region [x0, x1) × [y0, y1). */
+function grown(mask: PlacedRaster, width: number, height: number) {
   const { bounds } = mask;
-  const side = Math.max(bounds.right - bounds.left, bounds.bottom - bounds.top);
-  const margin = Math.max(MIN_MARGIN_PX, Math.ceil(MARGIN_SHARE * side));
-  const block = Math.max(MIN_BLOCK_PX, Math.ceil(side / BLOCKS_ACROSS));
+  const margin = Math.max(MIN_MARGIN_PX, Math.ceil(MARGIN_SHARE * longerSide(mask)));
   const x0 = Math.max(0, Math.floor(bounds.left) - margin);
   const y0 = Math.max(0, Math.floor(bounds.top) - margin);
   const x1 = Math.min(width, Math.ceil(bounds.right) + margin);
   const y1 = Math.min(height, Math.ceil(bounds.bottom) + margin);
-  if (x0 >= x1 || y0 >= y1) return;
+  if (x0 >= x1 || y0 >= y1) return null;
+  return { x0, y0, x1, y1, covered: dilate(rasterise(mask, x0, y0, x1, y1), x1 - x0, y1 - y0, margin) };
+}
+
+/**
+ * Which pixels of a width × height photo blurMasked would pixelate for these masks, row-major, 1 where pixelated:
+ * the same grown regions it blurs, so a measurement of what the blur covers cannot drift from the blur itself.
+ */
+export function blurCoverage(width: number, height: number, masks: readonly PlacedRaster[]): Uint8Array {
+  const all = new Uint8Array(width * height);
+  for (const mask of masks) {
+    const region = grown(mask, width, height);
+    if (!region) continue;
+    const { x0, y0, x1, y1, covered } = region;
+    for (let y = y0; y < y1; y++) {
+      for (let x = x0; x < x1; x++) if (covered[(y - y0) * (x1 - x0) + (x - x0)]) all[y * width + x] = 1;
+    }
+  }
+  return all;
+}
+
+function pixelate(pixels: Buffer, width: number, height: number, channels: number, mask: PlacedRaster): void {
+  const region = grown(mask, width, height);
+  if (!region) return;
+  const { x0, y0, x1, y1, covered } = region;
+  const block = Math.max(MIN_BLOCK_PX, Math.ceil(longerSide(mask) / BLOCKS_ACROSS));
   const regionWidth = x1 - x0;
-  const covered = dilate(rasterise(mask, x0, y0, x1, y1), regionWidth, y1 - y0, margin);
 
   const mean = new Float64Array(channels);
   for (let by = y0; by < y1; by += block) {

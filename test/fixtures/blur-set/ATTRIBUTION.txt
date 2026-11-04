@@ -1,0 +1,46 @@
+Photos in this folder come from Wikimedia Commons, fetched 2026-11-04 from its /wiki/ file pages and upload.wikimedia.org
+(Commons' robots.txt disallows /w/api.php for general agents, so the API was not used). Each was downscaled with sharp
+to at most 1600 px on its longer side (the size Lusong sends SAM) and re-encoded as JPEG, which drops its metadata.
+Attribution and, for CC BY-SA files, share-alike apply wherever they are shown.
+
+file: "Commons title" by author, licence, source page
+jeepneys-in-metro-manila-01.jpg: "File:Jeepneys in Metro Manila 01.jpg" by Aliceinthealice, CC0, https://commons.wikimedia.org/wiki/File:Jeepneys_in_Metro_Manila_01.jpg
+jeepneys-in-metro-manila-03.jpg: "File:Jeepneys in Metro Manila 03.jpg" by Aliceinthealice, CC0, https://commons.wikimedia.org/wiki/File:Jeepneys_in_Metro_Manila_03.jpg
+jeepneys-in-metro-manila-05.jpg: "File:Jeepneys in Metro Manila 05.jpg" by Aliceinthealice, CC0, https://commons.wikimedia.org/wiki/File:Jeepneys_in_Metro_Manila_05.jpg
+jeepney-in-metro-manila-2025-01.jpg: "File:Jeepney in Metro Manila 2025 01.jpg" by Aliceinthealice, CC0, https://commons.wikimedia.org/wiki/File:Jeepney_in_Metro_Manila_2025_01.jpg
+philippines-manila-7032596049.jpg: "File:Philippines, Manila (7032596049).jpg" by M M from Switzerland, CC BY-SA 2.0, https://commons.wikimedia.org/wiki/File:Philippines%2C_Manila_%287032596049%29.jpg
+fairview-cubao-jeepney.jpg: "File:Fairview Cubao Jeepney.jpg" by Ganmatthew, CC BY 4.0, https://commons.wikimedia.org/wiki/File:Fairview_Cubao_Jeepney.jpg
+7907coronavirus-pandemic-in-bustos-bulacan-10.jpg: "File:7907Coronavirus pandemic in Bustos, Bulacan 10.jpg" by Judgefloro, CC0, https://commons.wikimedia.org/wiki/File:7907Coronavirus_pandemic_in_Bustos%2C_Bulacan_10.jpg
+mactan-tricycle-3e3.jpg: "File:Mactan tricycle 3e3.jpg" by Øyvind Holmstad, CC BY-SA 4.0, https://commons.wikimedia.org/wiki/File:Mactan_tricycle_3e3.jpg
+tricycles-in-tagbilaran-city.jpg: "File:Tricycles in Tagbilaran City.jpg" by Howdy.carabao, CC0, https://commons.wikimedia.org/wiki/File:Tricycles_in_Tagbilaran_City.jpg
+traffic-laoag-ilocos-norte-philippines-154422286.jpg: "File:Traffic Laoag. Ilocos Norte. Philippines. (15442228693).jpg" by Bernard Spragg. NZ from Christchurch, New Zealand, CC0, https://commons.wikimedia.org/wiki/File:Traffic_Laoag._Ilocos_Norte._Philippines._%2815442228693%29.jpg
+a-tricycle-on-the-streets-of-talisay-cebu.jpg: "File:A tricycle on the streets of Talisay, Cebu.jpg" by Øyvind Holmstad, CC BY-SA 4.0, https://commons.wikimedia.org/wiki/File:A_tricycle_on_the_streets_of_Talisay%2C_Cebu.jpg
+tricycle-row-stcessc.jpg: "File:Tricycle Row STCESSC.jpg" by DJ Baguio, CC BY-SA 3.0, https://commons.wikimedia.org/wiki/File:Tricycle_Row_STCESSC.jpg
+motorized-tricycles-philippines-51141724598.jpg: "File:Motorized tricycles, Philippines (51141724598).jpg" by Bernard Spragg. NZ from Christchurch, New Zealand, Public domain, https://commons.wikimedia.org/wiki/File:Motorized_tricycles%2C_Philippines_%2851141724598%29.jpg
+calabarzon-motorcycles-with-different-license-pl.jpg: "File:Calabarzon motorcycles with different license plate color strips.jpg" by HueMan1, CC BY-SA 4.0, https://commons.wikimedia.org/wiki/File:Calabarzon_motorcycles_with_different_license_plate_color_strips.jpg
+motorcycles-at-mandaue-city-01-09-2023.jpg: "File:Motorcycles at Mandaue City (01-09-2023).jpg" by PaulGorduiz106, CC BY-SA 4.0, https://commons.wikimedia.org/wiki/File:Motorcycles_at_Mandaue_City_%2801-09-2023%29.jpg
+motorcycles-at-the-mandaue-city-public-market-20.jpg: "File:Motorcycles at the Mandaue City Public Market (2023-08-01).jpg" by PaulGorduiz106, CC BY-SA 4.0, https://commons.wikimedia.org/wiki/File:Motorcycles_at_the_Mandaue_City_Public_Market_%282023-08-01%29.jpg
+motorcycle-parked-on-the-side-of-the-street.jpg: "File:Motorcycle parked on the side of the street.jpg" by mycurrency.com, CC BY-SA 4.0, https://commons.wikimedia.org/wiki/File:Motorcycle_parked_on_the_side_of_the_street.jpg
+motorcycle-riders.jpg: "File:Motorcycle Riders.jpeg" by JC John Sese Cuneta, CC BY-SA 4.0, https://commons.wikimedia.org/wiki/File:Motorcycle_Riders.jpeg
+motors-09-09-2022.jpg: "File:Motors (09-09-2022).jpg" by PaulGorduiz106, CC BY-SA 4.0, https://commons.wikimedia.org/wiki/File:Motors_%2809-09-2022%29.jpg
+0327jfortigas-avenue-streets-landmarks-greenhill.jpg: "File:0327jfOrtigas Avenue Streets Landmarks Greenhills San Juanfvf 09.jpg" by Judgefloro, Public domain, https://commons.wikimedia.org/wiki/File:0327jfOrtigas_Avenue_Streets_Landmarks_Greenhills_San_Juanfvf_09.jpg
+07947jfdr-sixto-antonio-avenue-mabini-street-pas.jpg: "File:07947jfDr. Sixto Antonio Avenue Mabini Street Pasig City Canioganfvf 12.jpg" by Judgefloro, CC0, https://commons.wikimedia.org/wiki/File:07947jfDr._Sixto_Antonio_Avenue_Mabini_Street_Pasig_City_Canioganfvf_12.jpg
+01793jfquirino-highway-santa-monica-novaliches-p.jpg: "File:01793jfQuirino Highway Santa Monica Novaliches Proper Quezon Cityfvf 04.jpg" by Judgefloro, Public domain, https://commons.wikimedia.org/wiki/File:01793jfQuirino_Highway_Santa_Monica_Novaliches_Proper_Quezon_Cityfvf_04.jpg
+0041jfpedestrian-footbridge-ama-aclc-puregold-ta.jpg: "File:0041jfPedestrian footbridge AMA ACLC Puregold Tayuman Juan Luna Bridge Estero de la Reina C-39 Capulong Pritil Tondo Manilafvf.jpg" by Judgefloro, CC0, https://commons.wikimedia.org/wiki/File:0041jfPedestrian_footbridge_AMA_ACLC_Puregold_Tayuman_Juan_Luna_Bridge_Estero_de_la_Reina_C-39_Capulong_Pritil_Tondo_Manilafvf.jpg
+9785photos-taken-during-2020-coronavirus-pandemi.jpg: "File:9785Photos taken during 2020 coronavirus pandemic in Baliuag 45.jpg" by Judgefloro, CC0, https://commons.wikimedia.org/wiki/File:9785Photos_taken_during_2020_coronavirus_pandemic_in_Baliuag_45.jpg
+not-the-safest-way-to-travel-15854195460.jpg: "File:Not the safest way to travel.... (15854195460).jpg" by Bernard Spragg. NZ from Christchurch, New Zealand, CC0, https://commons.wikimedia.org/wiki/File:Not_the_safest_way_to_travel...._%2815854195460%29.jpg
+ride-with-me-4716987056.jpg: "File:Ride with Me (4716987056).jpg" by Leland Francisco from Dededo, Guam, CC BY 2.0, https://commons.wikimedia.org/wiki/File:Ride_with_Me_%284716987056%29.jpg
+calabanga-public-market-cam-sur-dec-2025.jpg: "File:Calabanga Public Market, Cam Sur, Dec 2025.jpg" by Ralff Nestor Nacor, CC BY-SA 4.0, https://commons.wikimedia.org/wiki/File:Calabanga_Public_Market%2C_Cam_Sur%2C_Dec_2025.jpg
+basement-motorcycle-parking-at-sm-j-mall-and-j-t.jpg: "File:Basement motorcycle parking at SM J Mall and J Tower Residences (2024-10-25).jpg" by Wide Awake!, CC BY 4.0, https://commons.wikimedia.org/wiki/File:Basement_motorcycle_parking_at_SM_J_Mall_and_J_Tower_Residences_%282024-10-25%29.jpg
+wading-in-floodwater.jpg: "File:Wading in floodwater.jpg" by Bagoto, CC BY-SA 4.0, https://commons.wikimedia.org/wiki/File:Wading_in_floodwater.jpg
+children-watching-7414532130.jpg: "File:Children watching (7414532130).jpg" by SuSanA Secretariat, CC BY 2.0, https://commons.wikimedia.org/wiki/File:Children_watching_%287414532130%29.jpg
+rescue-operation-tropical-storm-nalgae-524615031.jpg: "File:Rescue Operation - Tropical Storm Nalgae (52461503146).jpg" by Bro. Jeffrey Pioquinto, SJ from Dublin, Ireland, Philippines, CC BY 2.0, https://commons.wikimedia.org/wiki/File:Rescue_Operation_-_Tropical_Storm_Nalgae_%2852461503146%29.jpg
+typhoon-khanun-2023-itcz-southwest-monsoon-guigu.jpg: "File:Typhoon Khanun (2023) ITCZ southwest monsoon (Guiguinto, Bulacan Province; 2023-08-01) E911a 13.jpg" by E911a, CC BY-SA 4.0, https://commons.wikimedia.org/wiki/File:Typhoon_Khanun_%282023%29_ITCZ_southwest_monsoon_%28Guiguinto%2C_Bulacan_Province%3B_2023-08-01%29_E911a_13.jpg
+flood-in-the-philippines.jpg: "File:Flood in the Philippines.jpg" by Julan Shirwod Nueva, CC BY-SA 4.0, https://commons.wikimedia.org/wiki/File:Flood_in_the_Philippines.jpg
+milenyo-hits-cavite-eric-james-sarmiento-flickr.jpg: "File:Milenyo hits Cavite (Eric James Sarmiento) - Flickr.jpg" by Eric James Sarmiento, CC BY 2.0, https://commons.wikimedia.org/wiki/File:Milenyo_hits_Cavite_%28Eric_James_Sarmiento%29_-_Flickr.jpg
+a-flood-in-a-barangay-in-tanay-rizal.jpg: "File:A Flood in a barangay in tanay rizal.jpg" by Handhule90, CC BY 4.0, https://commons.wikimedia.org/wiki/File:A_Flood_in_a_barangay_in_tanay_rizal.jpg
+mananga-river-02.jpg: "File:Mananga River 02.jpg" by LadyPinayForever, CC0, https://commons.wikimedia.org/wiki/File:Mananga_River_02.jpg
+vayang-rolling-hills.jpg: "File:Vayang Rolling Hills.jpg" by CharMel Creations, CC BY-SA 4.0, https://commons.wikimedia.org/wiki/File:Vayang_Rolling_Hills.jpg
+wikilovesearthphil-01.jpg: "File:WikiLovesEarthPhil 01.jpg" by Tphen26, CC BY-SA 4.0, https://commons.wikimedia.org/wiki/File:WikiLovesEarthPhil_01.jpg
+panay-railway-tracks-in-santa-barbara-iloilo.jpg: "File:Panay Railway tracks in Santa Barbara Iloilo.jpg" by Iloilo Wanderer, CC BY-SA 3.0, https://commons.wikimedia.org/wiki/File:Panay_Railway_tracks_in_Santa_Barbara_Iloilo.jpg
+mananga-river-in-talisay-01.jpg: "File:Mananga River in Talisay 01.jpg" by LadyPinayForever, CC0, https://commons.wikimedia.org/wiki/File:Mananga_River_in_Talisay_01.jpg

@@ -79,8 +79,25 @@ until you switch it on, and never part of a verdict.
 - **Reported photos stay hidden.** A report shows its pin and its reading, never the photo. The code to show a photo
   only after SAM 3.1 has found and pixelated every person and licence plate in it is written but switched off:
   `PLATE_DETECTION_TRUSTED` is `false` in `lib/photo-publish.ts`, and production has no blob store to keep a photo
-  in. SAM found all 9 plates labelled on the 5 test photos that show plates, on both of 2 runs. That is too few
-  photos to show strangers' pictures on.
+  in. It stays off: on 2026-11-04 (2 draws, 144 SAM calls each, $0.36 a draw) the blur missed part of a plate or a
+  face on 31 of 43 labelled photos, and the bar is every labelled plate and face fully covered on every photo. The
+  set is 48 photos (`test/fixtures/sam/blur-labels.json`): 40 openly licensed Commons street scenes (jeepneys,
+  tricycles, motorbikes, floods, crowds; credits in `test/fixtures/blur-set/ATTRIBUTION.txt`), 7 earlier test photos
+  and 1 negative. The labels are a Claude model's, not a person's. A box counts only when every one of its pixels lies
+  under the masks as `lib/blur.ts` grows them (`test/probe-sam-blur.test.ts`). Both draws gave the same result, and counting
+  sure labels only, 31 of the 43 photos were fully covered:
+  - Faces: the `person` masks covered all 129 sure faces. They missed 49 of 145 unsure ones: tiny, dark or turned
+    away, and some of those stay visible after the blur. A separate `face` prompt closed none of the 49, so it is not
+    used.
+  - Plates: the `license plate` masks fully covered 46 of 60 sure plates. Four got no mask: two small, distant plates
+    that can be partly read when zoomed, one far away and one seen edge-on. The other 10 were 87–99.9 % covered; the
+    rendered blurs of those looked unreadable (checked by eye on draw 1), but a box not fully covered fails the bar. Of 27 unsure plates, 6
+    were covered.
+  - The 5 photos with no plate or face got no plate or face mask (two got a person mask, on a body with no face in
+    view).
+
+  This replaces the earlier "all 9 plates on 5 photos", which counted a plate as found when half of a loose box was
+  masked.
 - **A watcher** re-runs the check every 10 minutes during a window you pick (6–8 a.m., say) and sends a Telegram
   message when the window opens and whenever the answer changes. Switching it off deletes the trip and its history.
   It is deployed on Telegram through `@lusong_cebu_bot`, and one message has gone out on production (2026-10-31, from
