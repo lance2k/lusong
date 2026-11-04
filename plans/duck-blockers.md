@@ -27,6 +27,19 @@ whole reservation while a call is unsettled, and carries the total across a rest
 - The bar is labelled-identifier coverage, not whole-object coverage; PR #67's per-prompt bar is the empty set's row.
 - Pairing with PR #67's runs is by file name and size (those runs kept no hashes); the new runs record sha256.
 
+## Diff round
+
+Critic: `rubber-duck-gpt`, model `gpt-6-astra` via Codex CLI (session rollout-2026-11-05T00-45-01-01a1a773), range
+origin/main..be6f663, 2026-11-04 16:45 UTC (2026-11-05 00:45 PHT). No 🔴. It checked the README table and figures
+against the comparison file and found they match.
+
+- 🟡 README said today's blur already pixelates the waterline on people: reworded to "some of the waterline can go".
+- 🟡 "adding the others changed nothing": now "covered no more" labelled plates or faces (the unblurred share moves
+  by 0.06 points).
+- 🟡 PR #67's runs are paired by file name alone (they kept no size or hash): the provenance line and README say so.
+- 🟡 Label kind was read from the label's display text. Fixed in 2930eb7. Test: "tallies a label by its kind, not by
+  words in its description". The 2-draw comparison re-run after the fix: every set identical.
+
 # Duck blockers: feat/blur-evidence (PR #67)
 
 Critic: `rubber-duck-gpt`, model `gpt-6-astra` via Codex CLI (session rollout-2026-11-04T22-35-05-01a1a6fc), plan round,
