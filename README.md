@@ -39,7 +39,8 @@ Pick a trip and tap Check. There are three ways to pick one:
   you share it, is rounded to about 10 km before it is used. Photon is given 4 seconds; when it is slower, the box
   says place search can't be reached and offers the built-in places and the map.
 - **The whole trip in plain words.** Type 3 to 160 characters ("Talamban to IT Park, leaving around 7"). Muse Spark
-  1.3 reads two place strings and a time, copied from your words, and the place search names the candidates.
+  1.3 reads two place strings, each kept only if its words appear in order in what you typed, and reads the leaving
+  time if you gave one. The place search names the candidates, and you confirm the places and the time.
   Nothing is checked or saved until you tap **Use this trip**, and the text is not kept.
 - **Two taps on the map**, or one of the three demo trips.
 
@@ -86,9 +87,11 @@ until you switch it on, and never part of a verdict.
   GitHub Actions schedule stays on as a backup, though GitHub started it only every 3 to 7 hours.
   `docs/watcher-setup.md` has the setup.
 - **Alerts** go to a watcher outside its window too. A PAGASA advisory, a road closure or a disaster-office post
-  that touches a watched trip is sent once for each version of the alert, whatever the window. "Touches" means the
-  alert's area or spot lies within 1,000 m of the last route the watcher checked (before one is stored, near the
-  trip's two ends). An alert for the whole country goes to every watcher. A separate schedule
+  that touches a watched trip is sent once for each version of the alert, whatever the window. "Touches" leans wide.
+  An alert's area, or its spot plus the spot's own radius, comes within 1,000 m of the last route the watcher checked.
+  Before a route is stored, the box around the trip's two ends grown by 20 km stands in for it. An area without bounds
+  counts as touching, and so does any Metro Manila district for a Metro Manila trip. An alert for the whole country
+  goes to every watcher. A separate schedule
   (`lusong-alert-deliver`, every 10 minutes) sends them, and a watcher gets at most one alert a second. In the
   QStash log read 2026-11-04 11:53 PHT, 67 of 67 deliveries got 200. Whether any alert has reached a rider is not
   known, because those replies aren't logged. At that time the sweep's closure store held 0 items, and PAGASA's feed
@@ -385,10 +388,13 @@ track). Everything in this repository was written during the event; the commit h
 - **Muse Spark 1.3 reads.** Where the water sits on a body or a tyre is a visual judgement. A JSON schema holds it
   to a fixed list of landmarks, so it never writes centimetres, a verdict or any text that reaches the page.
 - **Muse Spark 1.3 also reads a typed trip.** "Talamban to IT Park, leaving around 7" becomes two place strings and
-  a time, in a JSON schema, copied from the rider's words. The place search turns each string into candidates the
-  rider picks from. In a development measurement (1 draw per text, 10 texts, 2026-11-03 about 23:30 PHT, $0.037),
-  10 of 10 texts were read with both ends and the time; the expected place came first for 8 of 10, and 1 of 10 got
-  no candidates because place search answered `down`. That is 10 draws, not an accuracy figure.
+  a time, in a JSON schema. A place string is kept only if its words appear in order in the rider's text; the time is
+  the model's reading, shown for the rider to confirm. The place search turns each string into candidates the rider
+  picks from. In a development measurement (1 draw per text, 10 texts, 2026-11-03 about 23:30 PHT, $0.037), both ends
+  were read for 10 of 10 texts, and the time for 10 of 10 (one text gave no time, and none was read). The expected
+  place came first for 8 of 10, and 1 of 10 got no candidates because place search answered `down`. That is 10 draws,
+  not an accuracy figure. The run's measurements in this README come from its local probe files, which aren't in the
+  repository.
 - **Muse Wonder 1.0 sweeps the web.** It is the one model here that searches by itself, so it is boxed in: web
   search capped at 4 tool calls (the provider enforced the cap in 2 of 2 draws on 2026-11-03), a reply that is only
   a list of pages, and admission rules in plain code that read each page. It cannot put its own words on the page,
@@ -517,14 +523,15 @@ checks, so the daily total can pass the budget only by that overrun on the check
 The Muse Wonder sweep draws on the same daily budget, with two guards of its own (`lib/sweep.ts`). It reserves
 $0.30 (two attempts at 4 web searches, a 20,000-token input bound and a 3,000-token output cap at Wonder's listed
 rates; the rates are UNVERIFIED against Meta's pricing page, no quotecheck run). It is refused when that reserve
-would take the day's total spend past the budget less $7.00, so riders keep at least $7.00 of a $10 day, and
-when it would take the sweeps' own spend past $1.50 a day. Both checks run in one atomic step in the ledger. A sweep
+would take the day's total spend past the budget less $7.00, and when it would take the sweeps' own spend past $1.50
+a day. So at admission riders keep at least $7.00 of a $10 day, as long as the sweep stays inside its reservation. A
+sweep that uses more than it reserved is charged in full, and that overrun can eat into the $7.00. Both checks run in one atomic step in the ledger. A sweep
 is also limited to 4 a UTC day, 3 hours apart. One full sweep on the local store charged $0.1009 (development, 1 draw,
 2026-11-03 23:54 PHT); at that rate 4 a day is about $0.40, which is an estimate, not a production bill.
 
-A typed trip reserves its own worst case: two attempts at the measured input bound and the 2,000-token output cap set in
-`lib/trip-text.ts`. All 10 texts of the live measurement were read within that cap, and they cost $0.037 in total (1 draw
-each).
+A typed trip reserves its own worst case: two attempts at a calculated input bound (the prompt's UTF-8 bytes × 1.5,
+`lib/trip-text.ts`) and a 2,000-token output cap, which is UNVERIFIED for this prompt. All 10 texts of the live
+measurement were read within that cap, which is an observation from 10 draws, not a bound. They cost $0.037 in total.
 
 The Rain now layer calls Open-Meteo, not Meta, and costs no dollars. Lusong makes at most 300 Open-Meteo calls an
 hour across every server process, counted in the budget's database with one key per UTC hour. With no store the
