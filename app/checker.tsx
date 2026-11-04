@@ -474,6 +474,9 @@ export default function Checker() {
       blob = await shrinkToJpeg(file);
     } catch {
       if (latestPick.current === thisPick && !inFlight.current) {
+        // The earlier preview is no longer shown, so its photo is let go now rather than at the next pick.
+        if (shownUrl.current) URL.revokeObjectURL(shownUrl.current);
+        shownUrl.current = null;
         setState({ step: "failed", previewUrl: null, message: "This browser couldn't open that photo. Try a JPEG or PNG." });
       }
       return;
