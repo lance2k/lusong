@@ -108,3 +108,27 @@ Three 🔴, dispositions in `plans/duck-blockers.md`:
   made, the fresh run must pass the same criteria too; an incomplete fresh run is inconclusive and nothing ships.
 - Simplification: for a cap under half (h < W/2) the chord is measured from the mask's bottom-edge columns (never wider
   than the box), so a ragged bottom reads a narrower chord, a smaller circle and a shallower depth.
+
+## Tuning result (offline replay of run 2026-11-04T14-45-43-837Z, landmark reader, cached SAM; free)
+`npx tsx test/depth-tyre-offline.mts test/depth-runs/2026-11-04T14-45-43-837Z tuning`: every replayed record's v1 arm
+reproduced the verdict the run recorded. Flood scenes, 30 reader-draws (11 photo-draws were refused by that run's cap):
+
+| Tuning flood (30 draws) | too shallow | matched | too deep | can't measure | error |
+|---|---|---|---|---|---|
+| v1 (shipped) | 8 | 10 | 3 | 8 | 1 |
+| v2 (candidate) | 8 | 10 | 3 | 8 | 1 |
+
+One tuning flood photo has a v2 tyre estimate (texas-…-002, thigh: two tyres outside any car box, 12–19 and 4–7 cm),
+and both read shallower than the model's own `hip`, so nothing changes. v1 finds none on tuning. Nothing was tuned:
+there is no signal on the tuning split to tune against. On the recorded fixtures v2 keeps Manila's tyre (27–34 cm, as
+v1) and drops Shah Alam's (water under 3 of its 14 cut columns; v1 read 21–26 cm).
+
+## Candidate and criteria, frozen before any held-out replay
+Frozen at the commit that adds this section (candidate code at b2a32a9): `tyreEstimates(..., { geometry: "v2" })`
+against `{ geometry: "v1" }`, combined through `decideVerdict` unchanged.
+Held-out evaluation: `test/depth-tyre-offline.mts test/depth-runs/2026-11-04T14-56-37-720Z heldout`, which must account
+for all 23 photos × 2 draws and reproduce every recorded verdict in its v1 arm, or the result is void.
+Ship criteria on held-out flood scenes (16 × 2 = 32 draws), unchanged from 3349e15: (a) too shallow falls by ≥ 4;
+(b) too deep rises by ≤ half that fall; (c) matched does not fall; (d) no errors beyond v1's. The result is labelled
+exploratory (🔴 T1). If it passes, one fresh live held-out run (cap $1.60) must pass the same criteria before a PR;
+an incomplete fresh run is inconclusive and nothing ships. If it fails, nothing ships and no PR is opened.
