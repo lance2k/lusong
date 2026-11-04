@@ -74,7 +74,7 @@ export function forPage(result: CheckResult): PageResult {
   };
 }
 
-function pickObjects(
+export function pickObjects(
   found: { kind: ObjectKind; object: SamObject }[],
   image: { width: number; height: number },
 ): (LabelledObject & { object: SamObject })[] {

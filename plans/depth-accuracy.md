@@ -76,3 +76,28 @@ On held-out flood scenes, paired (same SAM replies, 2 draws × 16 photos = 32 dr
 only if all hold: (a) too shallow falls by at least 4 draws; (b) too deep rises by at most half that fall; (c) matched
 does not fall; (d) no reader errors beyond the old reader's. Otherwise the result is reported as not shipped (or
 inconclusive), with what was learned. The candidate and this rule are not changed after the final run starts.
+
+## Tuning results (tuning split only; SAM from one cached pass per photo; run 2026-11-04T14-45-43-837Z)
+Flood scenes, reader-draws that ran (the harness's cap refused 37 of 132 reader-draws, so counts are uneven):
+
+| Reader | draws | too shallow | matched | too deep | can't measure | error |
+|---|---|---|---|---|---|---|
+| landmark (frozen 2026-10-29 prompt) | 30 | 8 | 10 | 3 | 8 | 1 |
+| guided (prompt-only) | 30 | 8 | 9 | 2 | 10 | 1 |
+| hidden (hidden-part floor) | 29 | 8 | 5 | 3 | 9 | 4 |
+
+Neither prompt candidate beats the frozen reader. On the photos read too shallow, the hidden reader answers that the
+*feet* are what the water hides (defense-gov, okinawa, miami, west-street): the model sees the bottom of the visible
+body as the feet, so asking it differently does not change what it sees. Both are dropped.
+
+Offline on the same records, a head-height estimate from SAM 3.1's `head` masks (`lib/head.ts`: visible
+crown-to-waterline height in the person's own head-heights, 7–8 heads to an adult, 145–180 cm), allowed to deepen any
+usable person reading: too shallow 8 → 6, too deep 5 → 8, matched 11 → 10 (32 landmark draws, flood and wading). Every
+new too-deep draw came from a person the model had read at below_knee or deeper; the draws it fixed had been read at
+ankle or half_knee.
+
+## Final candidate, frozen 2026-11-04 14:56 UTC (22:56 PHT), before any held-out run
+`landmark` reader unchanged, plus the head-height estimate, which may deepen the verdict only through a usable adult
+person reading the model put at `ankle` or `half_knee` (the failure the tuning split shows), and like the tyre
+estimate is never counted as a reading. Measured on held-out with the same design as tuning (one SAM pass per photo
+including `head`, 2 Muse draws, both arms computed from the same Muse readings), against the ship criteria above.
