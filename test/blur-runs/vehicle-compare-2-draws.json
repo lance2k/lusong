@@ -1,5 +1,5 @@
 {
- "comparedAt": "2026-11-04T16:39:36.897Z",
+ "comparedAt": "2026-11-04T16:50:58.538Z",
  "draws": [
   {
    "old": "test/blur-runs/2026-11-04T15-10-54Z-draw1.json",
@@ -14,7 +14,7 @@
    "newRecordedAt": "2026-11-04T16:30:45.974Z"
   }
  ],
- "provenance": "new runs' sanitized photos match today's by size and sha256; PR #67's runs recorded no hashes, so their pairing is by file name and size",
+ "provenance": "new runs' sanitized photos match today's by size and sha256; PR #67's runs recorded neither, so their replies are paired by file name alone, on the assumption that the fixtures are unchanged since",
  "sets": [
   {
    "set": [],

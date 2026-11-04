@@ -82,7 +82,7 @@ it.skipIf(!env.LUSONG_VBLUR_OLD || !env.LUSONG_VBLUR_NEW || !env.LUSONG_VBLUR_OU
   const out = {
     comparedAt: new Date().toISOString(),
     draws: old.map((o, i) => ({ old: o.path, oldRecordedAt: o.run.recordedAt, new: fresh[i].path, newRecordedAt: fresh[i].run.recordedAt })),
-    provenance: "new runs' sanitized photos match today's by size and sha256; PR #67's runs recorded no hashes, so their pairing is by file name and size",
+    provenance: "new runs' sanitized photos match today's by size and sha256; PR #67's runs recorded neither, so their replies are paired by file name alone, on the assumption that the fixtures are unchanged since",
     sets,
   };
   writeFileSync(env.LUSONG_VBLUR_OUT!, JSON.stringify(out, null, 1));

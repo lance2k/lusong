@@ -233,8 +233,8 @@ export function compareSets(
   const idOf = (file: string, kind: "plate" | "face", i: number, where?: string) => `${file} ${kind} ${i}${where ? ` (${where})` : ""}`;
   const labelsOf = (photos: ScoredPhoto[]) =>
     photos.flatMap((p) => [
-      ...p.plates.map((x, i) => ({ id: idOf(p.file, "plate", i, x.where), covered: p.publishable && x.assigned === 1, sure: x.sure })),
-      ...p.faces.map((x, i) => ({ id: idOf(p.file, "face", i, x.where), covered: p.publishable && x.assigned === 1, sure: x.sure })),
+      ...p.plates.map((x, i) => ({ id: idOf(p.file, "plate", i, x.where), kind: "plate" as const, covered: p.publishable && x.assigned === 1, sure: x.sure })),
+      ...p.faces.map((x, i) => ({ id: idOf(p.file, "face", i, x.where), kind: "face" as const, covered: p.publishable && x.assigned === 1, sure: x.sure })),
     ]);
   const todayMissed = new Set(scored[0].flatMap((photos) => labelsOf(photos).filter((l) => !l.covered).map((l) => l.id)));
   const cohort = new Set(
@@ -249,7 +249,7 @@ export function compareSets(
     const labelRows = perDraw.map((photos) => labelsOf(photos.filter((p) => p.kind === "positive")));
     const coveredEveryDraw = new Set(labelRows[0].filter((l) => labelRows.every((rows) => rows.find((r) => r.id === l.id)!.covered)).map((l) => l.id));
     const tally = (rows: (typeof labelRows)[0], kind: "plate" | "face") => {
-      const own = rows.filter((r) => r.id.includes(` ${kind} `));
+      const own = rows.filter((r) => r.kind === kind);
       return { all: own.length, covered: own.filter((r) => r.covered).length, sure: own.filter((r) => r.sure).length, sureCovered: own.filter((r) => r.sure && r.covered).length };
     };
     const first = perDraw[0].filter((p) => cohort.has(p.file));

@@ -145,6 +145,14 @@ describe("compareSets", () => {
     expect(mixed).toMatchObject({ photosMeetingBar: [1, 0], photosMeetingBarEveryDraw: 0, closesEveryDraw: [] });
   });
 
+  it("tallies a label by its kind, not by words in its description", () => {
+    const tricky: BlurLabels = { ...labels, positives: [{ ...labels.positives[0], faces: [{ ...labels.positives[0].faces[0], where: "rider above the plate holder" }] }] };
+    const recorded = { "p.jpg": [call("license plate", []), call("person", [personMask])], ...negatives };
+    const today = compareSets(tricky, sizes, [recorded], [], reader)[0];
+    expect(today.plates[0]).toMatchObject({ all: 1, covered: 0 });
+    expect(today.faces[0]).toMatchObject({ all: 1, covered: 1 });
+  });
+
   it("charges car nothing extra, since the photo check already calls it, and every other phrase one image", () => {
     const sets = compareSets(labels, sizes, [negatives], ["car", "motorcycle"], reader);
     expect(sets.map((s) => [s.set.join("+"), s.extraImagesPerReport])).toEqual([["", 0], ["car", 0], ["motorcycle", 1], ["car+motorcycle", 1]]);
